@@ -5,7 +5,7 @@
 <h1 align="center">PaddleOcrNet</h1>
 
 <p align="center">
-  <strong>Production-grade document OCR for .NET — powered by PaddleOCR's PP-OCRv5 models, running natively on ONNX Runtime.</strong><br/>
+  <strong>Native .NET document OCR — powered by PaddleOCR's PP-OCRv5 models, running on ONNX Runtime.</strong><br/>
   No Python. No native PaddlePaddle. No sidecar server. Just a NuGet package.
 </p>
 
@@ -36,7 +36,7 @@ runs in-process, offline-capable, and trim/AOT-friendly.
   HTML, and formulas as LaTeX, and serializes the whole document to **Markdown or JSON**.
 - **PDF in, searchable PDF out** — rasterize and OCR PDFs, or emit a searchable PDF with an invisible
   text layer.
-- **Built for production** — singleton-safe, thread-safe ONNX sessions; DI + health checks; OpenTelemetry
+- **Robust by design** — singleton-safe, thread-safe ONNX sessions; DI + health checks; OpenTelemetry
   metrics; typed exceptions; input/decompression-bomb guards; checksum-verified model downloads.
 - **Deploys anywhere** — pure-managed (no OpenCV), CPU by default, optional CUDA, **Native AOT** and
   single-file publish supported. Mobile models are a few MB each.
