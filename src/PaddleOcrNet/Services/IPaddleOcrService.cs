@@ -1,0 +1,152 @@
+using PaddleOcrNet.Models;
+using PaddleOcrNet.Structure;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.PixelFormats;
+
+namespace PaddleOcrNet.Services;
+
+/// <summary>
+/// Abstraction over <see cref="PaddleOcrService"/> for dependency injection and testing.
+/// Register with <c>services.AddPaddleOcrNet()</c>.
+/// </summary>
+public interface IPaddleOcrService : IAsyncDisposable, IDisposable
+{
+    /// <summary>OCR an image file on disk.</summary>
+    Task<OcrResult> ExtractTextFromImage(
+        string imagePath,
+        IEnumerable<string> languages,
+        RecognitionOptions? options = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>OCR an image from a stream (format auto-detected).</summary>
+    Task<OcrResult> ExtractTextFromImage(
+        Stream imageStream,
+        IEnumerable<string> languages,
+        RecognitionOptions? options = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>OCR an image from an encoded byte array (PNG/JPEG/etc.).</summary>
+    Task<OcrResult> ExtractTextFromImage(
+        byte[] imageBytes,
+        IEnumerable<string> languages,
+        RecognitionOptions? options = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>OCR an image from encoded bytes.</summary>
+    Task<OcrResult> ExtractTextFromImage(
+        ReadOnlyMemory<byte> imageBytes,
+        IEnumerable<string> languages,
+        RecognitionOptions? options = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// OCR an already-decoded ImageSharp image. The caller retains ownership of the image
+    /// (it is not disposed by this method).
+    /// </summary>
+    Task<OcrResult> ExtractTextFromImage(
+        Image<Rgb24> image,
+        IEnumerable<string> languages,
+        RecognitionOptions? options = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Locates text regions without recognizing them (layout analysis / redaction / field cropping).
+    /// Implemented by <see cref="PaddleOcrService"/>; a default-implementing stub throws so custom
+    /// <see cref="IPaddleOcrService"/> implementations and mocks keep compiling unchanged.
+    /// </summary>
+    Task<IReadOnlyList<DetectedRegion>> DetectRegionsAsync(
+        Image<Rgb24> image,
+        RecognitionOptions? options = null,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException(
+            $"{GetType().Name} does not implement DetectRegionsAsync. Use {nameof(PaddleOcrService)}.");
+
+    /// <summary>Locates text regions in an image file without recognizing them.</summary>
+    Task<IReadOnlyList<DetectedRegion>> DetectRegionsAsync(
+        string imagePath,
+        RecognitionOptions? options = null,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException(
+            $"{GetType().Name} does not implement DetectRegionsAsync. Use {nameof(PaddleOcrService)}.");
+
+    /// <summary>
+    /// Recognizes text inside caller-supplied region polygons, skipping detection. Polygons are in the
+    /// image's pixel coordinates.
+    /// </summary>
+    Task<OcrResult> RecognizeRegionsAsync(
+        Image<Rgb24> image,
+        IEnumerable<IReadOnlyList<OcrPoint>> regions,
+        IEnumerable<string> languages,
+        RecognitionOptions? options = null,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException(
+            $"{GetType().Name} does not implement RecognizeRegionsAsync. Use {nameof(PaddleOcrService)}.");
+
+    /// <summary>Recognizes text inside regions located by a prior detection pass.</summary>
+    Task<OcrResult> RecognizeRegionsAsync(
+        Image<Rgb24> image,
+        IEnumerable<DetectedRegion> regions,
+        IEnumerable<string> languages,
+        RecognitionOptions? options = null,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException(
+            $"{GetType().Name} does not implement RecognizeRegionsAsync. Use {nameof(PaddleOcrService)}.");
+
+    /// <summary>
+    /// Optionally preloads the detector, the (optional) text-line classifier, and the recognizer pack(s)
+    /// for the given languages so the first real OCR call doesn't pay model-download + ONNX session
+    /// initialization latency. A no-op by default on custom implementations; <see cref="PaddleOcrService"/>
+    /// performs the warm-up.
+    /// </summary>
+    Task WarmUp(IEnumerable<string> languages, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
+    // ---- document-structure analysis (PP-StructureV3) ----
+
+    /// <summary>
+    /// Analyzes the full structure of a document image file (layout regions, tables, formulas, seals,
+    /// reading order). Implemented by <see cref="PaddleOcrService"/>; a default-implementing stub throws so
+    /// custom <see cref="IPaddleOcrService"/> implementations and mocks keep compiling unchanged.
+    /// </summary>
+    Task<StructureResult> AnalyzeDocumentAsync(
+        string imagePath,
+        StructureOptions? options = null,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException(
+            $"{GetType().Name} does not implement AnalyzeDocumentAsync. Use {nameof(PaddleOcrService)}.");
+
+    /// <summary>Analyzes the structure of a document image from a stream (format auto-detected).</summary>
+    Task<StructureResult> AnalyzeDocumentAsync(
+        Stream imageStream,
+        StructureOptions? options = null,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException(
+            $"{GetType().Name} does not implement AnalyzeDocumentAsync. Use {nameof(PaddleOcrService)}.");
+
+    /// <summary>Analyzes the structure of a document image from an encoded byte array (PNG/JPEG/etc.).</summary>
+    Task<StructureResult> AnalyzeDocumentAsync(
+        byte[] imageBytes,
+        StructureOptions? options = null,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException(
+            $"{GetType().Name} does not implement AnalyzeDocumentAsync. Use {nameof(PaddleOcrService)}.");
+
+    /// <summary>Analyzes the structure of a document image from encoded bytes.</summary>
+    Task<StructureResult> AnalyzeDocumentAsync(
+        ReadOnlyMemory<byte> imageBytes,
+        StructureOptions? options = null,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException(
+            $"{GetType().Name} does not implement AnalyzeDocumentAsync. Use {nameof(PaddleOcrService)}.");
+
+    /// <summary>
+    /// Analyzes the structure of an already-decoded document image. The caller retains ownership of the
+    /// image (it is not disposed by this method).
+    /// </summary>
+    Task<StructureResult> AnalyzeDocumentAsync(
+        Image<Rgb24> image,
+        StructureOptions? options = null,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException(
+            $"{GetType().Name} does not implement AnalyzeDocumentAsync. Use {nameof(PaddleOcrService)}.");
+}

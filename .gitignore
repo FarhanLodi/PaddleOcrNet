@@ -1,0 +1,61 @@
+## .gitignore for PaddleOcrNet (.NET)
+
+# Build results
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+# .NET Core
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# User-specific files
+*.user
+
+# NuGet Packages
+*.nupkg
+*.snupkg
+
+# MSBuild Binary and Structured Log
+*.binlog
+
+# Others
+~$*
+*~
+CodeCoverage/
+
+# Model files and downloaded assets
+onnx_models/
+
+# Local tooling build artifacts (the tools/ SOURCE is committed; only its
+# generated/downloaded/venv output is ignored).
+tools/__pycache__/
+tools/.venv/
+tools/.venv*/
+tools/venv/
+tools/onnx_models/
+tools/paddle_models/
+tools/checksums_snippet.cs
+tools/*.log
+
+# Python virtual environment
+.venv/
+.venv*/
+
+# Visual Studio
+.vs/
+
+# Claude Code
+.claude/

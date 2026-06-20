@@ -1,0 +1,31 @@
+PaddleOcrNet
+============
+
+The PaddleOcrNet source code is licensed under the MIT License (see LICENSE).
+
+------------------------------------------------------------------------------
+Third-party model assets
+------------------------------------------------------------------------------
+
+The ONNX model files that PaddleOcrNet downloads and runs at runtime (text
+detection, text-line orientation classification, and text recognition) are
+derived from the PaddleOCR project.
+
+    PaddleOCR
+    Copyright (c) PaddlePaddle Authors / Baidu, Inc.
+    Licensed under the Apache License, Version 2.0.
+    https://github.com/PaddlePaddle/PaddleOCR
+
+The original PaddleOCR models and code are distributed under the Apache
+License, Version 2.0. A copy of that license is available at:
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+The ONNX exports redistributed for use with PaddleOcrNet retain the terms of
+the Apache-2.0 license that applies to the upstream PaddleOCR weights they are
+derived from. The character dictionaries (ppocr keys) bundled or downloaded for
+recognition are likewise derived from PaddleOCR and are subject to the same
+Apache-2.0 license.
+
+This NOTICE file is provided for attribution and does not modify the MIT
+License that governs the PaddleOcrNet source code itself.
