@@ -89,6 +89,10 @@ internal static class PaddleModelRegistry
     private const string DocLayoutSLabelsFile = "PP-DocLayout-S.yml";
     private const string DocLayoutMLabelsFile = "PP-DocLayout-M.yml";
     private const string DocLayoutPlusLLabelsFile = "PP-DocLayout_plus-L.yml";
+    // The RT-DETR layout model actually published as ONNX is PP-DocLayoutV3 (25-class, 3 inputs / 800x800);
+    // it serves the RtDetrL slot. Its label sidecar is a plain one-label-per-line list.
+    private const string DocLayoutV3File = "PP-DocLayoutV3.onnx";
+    private const string DocLayoutV3LabelsFile = "PP-DocLayoutV3_labels.txt";
 
     // Document pre-processing: PP-LCNet whole-page orientation (0/90/180/270°) + UVDoc unwarp (dewarp).
     private const string DocImageOriFile = "PP-LCNet_x1_0_doc_ori.onnx"; // 4-class document image orientation
@@ -98,6 +102,8 @@ internal static class PaddleModelRegistry
     // (wired vs wireless), the SLANeXt structure models, the shared structure-token dictionary, and the
     // RT-DETR cell detectors (wired vs wireless).
     private const string TableClsFile = "PP-LCNet_x1_0_table_cls.onnx";
+    // The single SLANet_plus structure model published as ONNX (50-class head); serves the table slot.
+    private const string SlanetPlusFile = "SLANet_plus.onnx";
     private const string SlanetPlusWiredFile = "SLANet_plus_wired.onnx";
     private const string SlanetPlusWirelessFile = "SLANet_plus_wireless.onnx";
     private const string SlaNeXtWiredFile = "SLANeXt_wired.onnx";
@@ -170,6 +176,10 @@ internal static class PaddleModelRegistry
             ["latexocr_encoder.onnx"] = "01BF5DC25539CA0CD5B1BD29296EA495977A6BA5F629DC4178277809D26E5E7D",
             ["latexocr_decoder.onnx"] = "BD695497BF1B22279B7626F5916C79226E1E244C84355F8DA7EDFD2D921D0072",
             ["latexocr_tokenizer.json"] = "1DC27B18D6A518D0D5FF3F4BB7BD98521FE80AD39E5B2A246D4109F1BB9D5019",
+            // Structure models (added after the layout/table re-host upload).
+            ["PP-DocLayoutV3.onnx"] = "DC5670EBBB42E2BA4E41395FC55E8217B007134E8B9E35023D592A8FE040A288",
+            ["PP-DocLayoutV3_labels.txt"] = "A04C55C3BB398FE7C5ECE52D279EB26A905F9645CD58C0C812FB9DE3C4790F46",
+            ["SLANet_plus.onnx"] = "D57A942AF6A2F57D6A4A0372573C696A2379BF5857C45E2AC69993F3B334514B",
         }.ToFrozenDictionary(StringComparer.Ordinal);
 
     /// <summary>
@@ -243,6 +253,12 @@ internal static class PaddleModelRegistry
     /// <summary>Label sidecar (.yml: raw-class-id → label name) for <see cref="DocLayoutPlusL"/>.</summary>
     public static readonly ModelAsset DocLayoutPlusLLabels = Asset(DocLayoutPlusLLabelsFile);
 
+    /// <summary>PP-DocLayoutV3 layout detector (RT-DETR, 25-class) ONNX — the RT-DETR layout model actually published.</summary>
+    public static readonly ModelAsset DocLayoutV3 = Asset(DocLayoutV3File);
+
+    /// <summary>PP-DocLayoutV3 label sidecar (one label per line; id = line index).</summary>
+    public static readonly ModelAsset DocLayoutV3Labels = Asset(DocLayoutV3LabelsFile);
+
     // ----- Document pre-processing (orientation + unwarp) -----
 
     /// <summary>
@@ -261,6 +277,9 @@ internal static class PaddleModelRegistry
     public static readonly ModelAsset TableClassifier = Asset(TableClsFile);
 
     /// <summary>SLANet_plus wired-table structure recognizer ONNX network.</summary>
+    /// <summary>The single published SLANet_plus table-structure model (50-class head).</summary>
+    public static readonly ModelAsset SlanetPlus = Asset(SlanetPlusFile);
+
     public static readonly ModelAsset SlanetPlusWired = Asset(SlanetPlusWiredFile);
 
     /// <summary>SLANet_plus wireless-table structure recognizer ONNX network.</summary>

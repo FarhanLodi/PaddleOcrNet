@@ -346,7 +346,7 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
             {
                 LayoutModel.PicoDetS => (PaddleModelRegistry.DocLayoutS, PaddleModelRegistry.DocLayoutSLabels),
                 LayoutModel.PicoDetM => (PaddleModelRegistry.DocLayoutM, PaddleModelRegistry.DocLayoutMLabels),
-                LayoutModel.RtDetrL => (PaddleModelRegistry.DocLayoutPlusL, PaddleModelRegistry.DocLayoutPlusLLabels),
+                LayoutModel.RtDetrL => (PaddleModelRegistry.DocLayoutV3, PaddleModelRegistry.DocLayoutV3Labels),
                 _ => (PaddleModelRegistry.DocLayoutS, PaddleModelRegistry.DocLayoutSLabels),
             };
 
@@ -355,9 +355,9 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
             if (classMap.Count == 0)
             {
                 // Sidecar missing/unparseable: fall back to the model's canonical label vocabulary so
-                // detections still map to real block types. plus-L uses a different 20-class list than S/M/L.
+                // detections still map to real block types. The RT-DETR slot is served by PP-DocLayoutV3 (25-class).
                 classMap = LayoutLabelMap.FromNames(
-                    model == LayoutModel.RtDetrL ? LayoutLabelMap.DocLayoutPlus20 : LayoutLabelMap.DocLayout23);
+                    model == LayoutModel.RtDetrL ? LayoutLabelMap.DocLayoutV325 : LayoutLabelMap.DocLayout23);
             }
             var session = await LoadSessionAsync(modelAsset, ct).ConfigureAwait(false);
 
@@ -383,9 +383,19 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
         {
             if (_tableRecognizer is not null) return _tableRecognizer;
 
-            var dictPath = await EnsureAssetAsync(PaddleModelRegistry.TableStructureDict, ct).ConfigureAwait(false);
-            var vocab = LoadTokenList(dictPath);
-            var session = await LoadSessionAsync(PaddleModelRegistry.SlanetPlusWired, ct).ConfigureAwait(false);
+            // The structure-token dictionary is optional: SlanetTableRecognizer embeds the canonical 48-token
+            // fallback, so if the sidecar isn't hosted we hand it an empty list and it uses the built-in vocab.
+            IReadOnlyList<string> vocab = Array.Empty<string>();
+            try
+            {
+                var dictPath = await EnsureAssetAsync(PaddleModelRegistry.TableStructureDict, ct).ConfigureAwait(false);
+                vocab = LoadTokenList(dictPath);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogInformation(ex, "Table-structure dictionary not hosted; using the embedded vocab.");
+            }
+            var session = await LoadSessionAsync(PaddleModelRegistry.SlanetPlus, ct).ConfigureAwait(false);
 
             _tableRecognizer = new SlanetTableRecognizer(session, vocab);
             _logger?.LogInformation("Table-structure recognizer loaded (SLANet_plus, {Tokens} tokens).", vocab.Count);
