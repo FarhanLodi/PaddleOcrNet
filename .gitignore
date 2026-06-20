@@ -49,13 +49,9 @@ VALIDATION.md
 sample_ocr.png
 *.part
 
-# Maintainer ONNX export/upload toolchain: the SOURCE is committed (the CI export
-# workflow runs it); only its downloaded models, venv, caches and logs are ignored.
-tools/.venv/
-tools/onnx_models/
-tools/paddle_models/
-tools/__pycache__/
-tools/*.log
+# Maintainer ONNX export/upload toolchain: kept LOCAL-ONLY, never committed.
+# The whole directory (scripts, downloaded models, venv, caches, logs) is ignored.
+tools/
 
 # Python virtual environment
 .venv/
