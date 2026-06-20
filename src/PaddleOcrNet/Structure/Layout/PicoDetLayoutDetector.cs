@@ -14,11 +14,18 @@ namespace PaddleOcrNet.Structure.Layout;
 /// and disposes the ONNX session.
 /// <para>
 /// The PaddleX / PaddleOCR layout ONNX exports <b>fuse GFL decode + NMS into the graph</b>: the network's
-/// output is already-decoded, already-NMS'd detections shaped <c>[N, 6]</c> as
+/// output is already-decoded, already-NMS'd detections whose leading columns are
 /// <c>[class_id, score, x1, y1, x2, y2]</c> (plus a <c>boxes_num</c> tensor giving the per-image row
-/// count), batch = 1. This detector therefore performs <i>no</i> anchor decode, distribution-focal-loss
-/// decode, or NMS — it only pre-processes, runs the session, score-thresholds the rows, maps the class id,
-/// and scales the boxes back to source-image pixels.
+/// count), batch = 1. (The detection-row stride is detected by the shared <see cref="LayoutGraph"/> parser,
+/// which handles both the 6-wide PicoDet rows and the 7-wide PP-DocLayoutV3 RT-DETR rows.) This detector
+/// therefore performs <i>no</i> anchor decode, distribution-focal-loss decode, or NMS — it only
+/// pre-processes, runs the session, score-thresholds the rows, maps the class id, and scales the boxes back
+/// to source-image pixels.
+/// <para>
+/// Note: the re-hosted layout model shipped with this package is the RT-DETR PP-DocLayoutV3 driven by
+/// <see cref="RtDetrLayoutDetector"/>; no PicoDet layout ONNX is present, so this detector is currently
+/// unused. It is retained for the PicoDet PP-DocLayout-S/M exports and shares the same output parser.
+/// </para>
 /// </para>
 /// <para>
 /// Pre-processing matches PaddleX's PicoDet layout config: stretch-resize (keep_ratio = <c>false</c>) to

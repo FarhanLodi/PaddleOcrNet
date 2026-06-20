@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="icon.png" alt="PaddleOcrNet Logo" width="160" height="160" />
+</p>
+
 # PaddleOcrNet
 
 High-accuracy, **native .NET OCR** powered by [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR)'s

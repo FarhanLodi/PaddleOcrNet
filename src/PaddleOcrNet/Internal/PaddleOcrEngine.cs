@@ -89,16 +89,30 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
         IReadOnlyList<string> languages,
         RecognitionOptions options,
         CancellationToken cancellationToken)
+        => (await RecognizeWithDetectedLanguagesAsync(image, languages, options, cancellationToken).ConfigureAwait(false)).Lines;
+
+    /// <summary>
+    /// Same as <see cref="RecognizeAsync"/> but also reports the language code(s) inferred when language
+    /// auto-detection is active (see <see cref="RecognitionOptions.AutoDetectLanguage"/> or the <c>"auto"</c>
+    /// language code). When auto-detection did not run, <c>DetectedLanguages</c> is empty.
+    /// </summary>
+    public async Task<(IReadOnlyList<OcrLine> Lines, IReadOnlyList<string> DetectedLanguages)> RecognizeWithDetectedLanguagesAsync(
+        Image<Rgb24> image,
+        IReadOnlyList<string> languages,
+        RecognitionOptions options,
+        CancellationToken cancellationToken)
     {
         var detector = await GetOrLoadDetectorAsync(cancellationToken).ConfigureAwait(false);
         var quads = detector.Detect(image, options.Detection);
         _logger?.LogInformation("DB detector located {Count} text regions", quads.Count);
-        if (quads.Count == 0) return Array.Empty<OcrLine>();
+        if (quads.Count == 0) return (Array.Empty<OcrLine>(), Array.Empty<string>());
 
         // De-duplicate overlapping detections (the detector can emit near-identical boxes) so the same
         // text isn't cropped and recognized twice.
         var polygons = BoxNms.Reduce(quads.Select(q => q.ToOcrPoints()).ToArray(), options.Detection.NmsIouThreshold);
-        return await RecognizePolygonsAsync(image, languages, polygons, options, cancellationToken).ConfigureAwait(false);
+        var detected = new List<string>();
+        var lines = await RecognizePolygonsAsync(image, languages, polygons, options, detected, cancellationToken).ConfigureAwait(false);
+        return (lines, detected);
     }
 
     /// <summary>
@@ -112,7 +126,7 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
         IReadOnlyList<OcrPoint[]> polygons,
         RecognitionOptions options,
         CancellationToken cancellationToken)
-        => RecognizePolygonsAsync(image, languages, polygons, options, cancellationToken);
+        => RecognizePolygonsAsync(image, languages, polygons, options, detectedLanguagesSink: null, cancellationToken);
 
     /// <summary>Runs only the detector (no recognition) and returns the located regions in reading order.</summary>
     public async Task<IReadOnlyList<DetectedRegion>> DetectRegionsAsync(
@@ -144,20 +158,32 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
     /// Shared det-less core: rectify every polygon into an upright crop, optionally flip 180° crops,
     /// recognize the crops in batches, drop low-confidence readings, sort the survivors into reading order
     /// and (when requested) merge them into paragraphs.
+    /// <para>
+    /// When language auto-detection is active (see <see cref="IsAutoDetect"/>) the crops are recognized with
+    /// every candidate pack and the best per-crop reading is kept; the winning language code(s) are appended
+    /// to <paramref name="detectedLanguagesSink"/> when one is supplied.
+    /// </para>
     /// </summary>
     private async Task<IReadOnlyList<OcrLine>> RecognizePolygonsAsync(
         Image<Rgb24> image,
         IReadOnlyList<string> languages,
         IReadOnlyList<OcrPoint[]> polygons,
         RecognitionOptions options,
+        List<string>? detectedLanguagesSink,
         CancellationToken cancellationToken)
     {
         if (polygons.Count == 0) return Array.Empty<OcrLine>();
 
-        var pack = ResolvePacks(languages).FirstOrDefault();
-        if (pack is null) return Array.Empty<OcrLine>();
+        bool auto = IsAutoDetect(languages, options);
 
-        var recognizer = await GetOrLoadRecognizerAsync(pack, cancellationToken).ConfigureAwait(false);
+        // For the normal (non-auto) path, resolve the single requested pack up front so a wholly
+        // unsupported language set short-circuits before any cropping work.
+        RecognizerPack? fixedPack = null;
+        if (!auto)
+        {
+            fixedPack = ResolvePacks(languages).FirstOrDefault();
+            if (fixedPack is null) return Array.Empty<OcrLine>();
+        }
 
         // Honor the per-call orientation flag even when the engine default left the classifier off; the
         // classifier session is loaded on demand and reused thereafter.
@@ -195,7 +221,12 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
             if (crops.Count == 0) return Array.Empty<OcrLine>();
 
             cancellationToken.ThrowIfCancellationRequested();
-            var readings = recognizer.Recognize(crops);
+
+            // Per-crop best reading: either from the single requested pack, or — when auto-detecting — the
+            // highest-confidence reading across all candidate packs.
+            IReadOnlyList<(string Text, float Confidence)> readings = auto
+                ? await RecognizeAutoAsync(crops, options, detectedLanguagesSink, cancellationToken).ConfigureAwait(false)
+                : (await GetOrLoadRecognizerAsync(fixedPack!, cancellationToken).ConfigureAwait(false)).Recognize(crops);
 
             // Drop low-confidence / empty readings (PaddleOCR's drop_score), then keep each surviving
             // line paired with its source polygon.
@@ -224,6 +255,178 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
         {
             foreach (var crop in crops) crop.Dispose();
         }
+    }
+
+    // ---- language auto-detection ----
+
+    /// <summary>The mean default-pack confidence at/above which the Latin/CJK fast path accepts without trying other packs.</summary>
+    private const double AutoFastPathConfidence = 0.85;
+
+    /// <summary>
+    /// The curated cross-script candidate shortlist used when auto-detection is requested without an explicit
+    /// <see cref="RecognitionOptions.AutoDetectCandidates"/>: the default PP-OCRv5 pack ("ch") plus the major
+    /// per-script packs. Kept small so a worst-case run downloads ~11 (not all) recognizers on demand.
+    /// </summary>
+    private static readonly string[] DefaultAutoDetectCandidates =
+    {
+        "ch", "latin", "cyrillic", "arabic", "devanagari", "korean", "japan", "thai", "greek", "telugu", "tamil",
+    };
+
+    /// <summary>
+    /// True when the caller asked for language auto-detection — either by setting
+    /// <see cref="RecognitionOptions.AutoDetectLanguage"/> or by passing the literal language code
+    /// <c>"auto"</c> in <paramref name="languages"/> (case-insensitive).
+    /// </summary>
+    private static bool IsAutoDetect(IReadOnlyList<string> languages, RecognitionOptions options)
+        => options.AutoDetectLanguage
+           || languages.Any(l => string.Equals(l, "auto", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Recognizes every crop with each candidate recognizer pack and keeps, per crop, the highest-confidence
+    /// reading across packs. The pack that wins the most crops (weighted by confidence) is the detected
+    /// language; its representative code (plus any runners-up that won crops) is appended to
+    /// <paramref name="detectedLanguagesSink"/>. Each pack is loaded — and auto-downloaded if missing — via
+    /// <see cref="GetOrLoadRecognizerAsync"/>.
+    /// <para>
+    /// Fast path: the default PP-OCRv5 pack is tried first; if its mean confidence over all crops is at least
+    /// <see cref="AutoFastPathConfidence"/> and the recognized text is dominantly Latin/CJK, that result is
+    /// accepted and the remaining candidates are skipped — so a clean English page never downloads ten extra
+    /// models.
+    /// </para>
+    /// </summary>
+    private async Task<IReadOnlyList<(string Text, float Confidence)>> RecognizeAutoAsync(
+        IReadOnlyList<Image<Rgb24>> crops,
+        RecognitionOptions options,
+        List<string>? detectedLanguagesSink,
+        CancellationToken cancellationToken)
+    {
+        // Resolve candidate codes → distinct packs, preserving order (default pack first so the fast path
+        // can short-circuit on it).
+        var candidateCodes = options.AutoDetectCandidates is { Count: > 0 }
+            ? options.AutoDetectCandidates
+            : DefaultAutoDetectCandidates;
+        var candidatePacks = ResolveOrderedPacks(candidateCodes);
+        if (candidatePacks.Count == 0)
+        {
+            // No candidate resolved: fall back to the default recognizer so we still return readings.
+            var fallback = await GetOrLoadRecognizerAsync(PaddleModelRegistry.MobileRecognizer, cancellationToken).ConfigureAwait(false);
+            return fallback.Recognize(crops);
+        }
+
+        int n = crops.Count;
+        var best = new (string Text, float Confidence)[n];
+        var bestPack = new RecognizerPack?[n];
+        // Per-pack tally of crops won, weighted by the winning confidence — the detection vote.
+        var packScore = new Dictionary<string, double>(StringComparer.Ordinal);
+
+        for (int p = 0; p < candidatePacks.Count; p++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var pack = candidatePacks[p];
+            var recognizer = await GetOrLoadRecognizerAsync(pack, cancellationToken).ConfigureAwait(false);
+            var readings = recognizer.Recognize(crops);
+
+            double confSum = 0;
+            for (int i = 0; i < n && i < readings.Count; i++)
+            {
+                var reading = readings[i];
+                confSum += reading.Confidence;
+                // Keep this pack's reading for crop i if it beats the best so far (or is the first reading).
+                if (bestPack[i] is null || reading.Confidence > best[i].Confidence)
+                {
+                    best[i] = reading;
+                    bestPack[i] = pack;
+                }
+            }
+
+            // Fast path: after the very first (default) pack, accept immediately when it is already confident
+            // and the page is dominantly Latin/CJK — avoids downloading the remaining candidate models.
+            if (p == 0 && pack.Name == PaddleModelRegistry.MobileRecognizer.Name && n > 0)
+            {
+                double meanConf = confSum / n;
+                string combined = string.Concat(readings.Take(n).Select(r => r.Text));
+                var script = ScriptDetection.DominantScript(combined);
+                bool latinOrCjk = script is DetectedScript.Latin or DetectedScript.Han
+                    or DetectedScript.Kana or DetectedScript.Hangul;
+                if (meanConf >= AutoFastPathConfidence && latinOrCjk)
+                {
+                    // Report the script the default pack actually read (latin/ch/japan/korean), which is more
+                    // informative than the pack's first registered code.
+                    if (detectedLanguagesSink is not null)
+                    {
+                        var code = ScriptDetection.ToLanguageCode(script) ?? pack.Languages.FirstOrDefault() ?? pack.Name;
+                        if (!detectedLanguagesSink.Contains(code, StringComparer.OrdinalIgnoreCase))
+                            detectedLanguagesSink.Add(code);
+                    }
+                    _logger?.LogInformation(
+                        "Auto-detect fast path: default pack mean confidence {Conf:F2} on {Script} text; skipping {Remaining} other candidates.",
+                        meanConf, script, candidatePacks.Count - 1);
+                    return best;
+                }
+            }
+        }
+
+        // Tally the vote: each crop's winning pack gets its winning confidence added to its running score.
+        for (int i = 0; i < n; i++)
+        {
+            var pack = bestPack[i];
+            if (pack is null) continue;
+            packScore[pack.Name] = packScore.GetValueOrDefault(pack.Name) + best[i].Confidence;
+        }
+
+        // Report the winning language(s): packs that actually won crops, ordered by weighted score (most
+        // first). Map each back to its representative language code.
+        var ranked = candidatePacks
+            .Where(pk => packScore.ContainsKey(pk.Name))
+            .OrderByDescending(pk => packScore[pk.Name])
+            .Select(pk => (pk, packScore[pk.Name]))
+            .ToArray();
+        AppendDetectedLanguages(detectedLanguagesSink, ranked);
+
+        if (ranked.Length > 0)
+        {
+            _logger?.LogInformation("Auto-detect chose '{Lang}' (won the weighted crop vote across {Packs} packs).",
+                ranked[0].pk.Languages.FirstOrDefault() ?? ranked[0].pk.Name, candidatePacks.Count);
+        }
+
+        return best;
+    }
+
+    /// <summary>
+    /// Appends the representative language code of each scored pack (highest score first) to
+    /// <paramref name="sink"/>, de-duplicating. No-op when <paramref name="sink"/> is null.
+    /// </summary>
+    private static void AppendDetectedLanguages(List<string>? sink, IReadOnlyList<(RecognizerPack Pack, double Score)> ranked)
+    {
+        if (sink is null) return;
+        foreach (var (pack, _) in ranked)
+        {
+            var code = pack.Languages.FirstOrDefault() ?? pack.Name;
+            if (!sink.Contains(code, StringComparer.OrdinalIgnoreCase)) sink.Add(code);
+        }
+    }
+
+    /// <summary>
+    /// Resolves language codes to their recognizer packs, preserving the input order and dropping duplicate
+    /// packs (two codes can map to the same pack) and unsupported codes. Unlike <see cref="ResolvePacks"/>
+    /// this keeps the caller's ordering, which the auto-detect fast path relies on (default pack first).
+    /// </summary>
+    private IReadOnlyList<RecognizerPack> ResolveOrderedPacks(IReadOnlyList<string> languages)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var packs = new List<RecognizerPack>(languages.Count);
+        foreach (var lang in languages)
+        {
+            if (string.Equals(lang, "auto", StringComparison.OrdinalIgnoreCase)) continue;
+            var pack = PaddleModelRegistry.FindByLanguage(lang);
+            if (pack is null)
+            {
+                _logger?.LogWarning("Auto-detect candidate '{Lang}' is not supported by any recognizer pack.", lang);
+                continue;
+            }
+            if (seen.Add(pack.Name)) packs.Add(pack);
+        }
+        return packs;
     }
 
     /// <summary>
@@ -425,10 +628,11 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
         var dictPath = await ModelDownloadManager.EnsureModelAsync(
             pack.Dictionary, _options.ModelCachePath, _options.Download, _logger, cancellationToken).ConfigureAwait(false);
 
-        var vocab = CharacterDictionary.Load(dictPath);
+        // Pass the raw dictionary lines; SvtrRecognizer builds the vocab to match the model's class count.
+        var dictLines = CharacterDictionary.LoadLines(dictPath);
         Diagnostics.PaddleOcrDiagnostics.ModelLoads.Add(1, new KeyValuePair<string, object?>("model", pack.Name));
-        _logger?.LogInformation("Recognizer '{Name}' loaded from {Path} ({Count} classes)", pack.Name, modelPath, vocab.Count);
-        return CreateSessionBacked(so => (ITextRecognizer)new SvtrRecognizer(new InferenceSession(modelPath, so), vocab), recognizer: true);
+        _logger?.LogInformation("Recognizer '{Name}' loaded from {Path} ({Count} dict lines)", pack.Name, modelPath, dictLines.Count);
+        return CreateSessionBacked(so => (ITextRecognizer)new SvtrRecognizer(new InferenceSession(modelPath, so), dictLines), recognizer: true);
     }
 
     /// <summary>

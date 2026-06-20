@@ -36,8 +36,18 @@ artifacts/
 *~
 CodeCoverage/
 
-# Model files and downloaded assets
+# Model files and downloaded assets (NEVER commit model blobs)
 onnx_models/
+dist/
+.hfcache/
+.scratch_export/
+*.onnx
+*_validation.json
+
+# Generated artifacts / scratch
+VALIDATION.md
+sample_ocr.png
+*.part
 
 # Local tooling build artifacts (the tools/ SOURCE is committed; only its
 # generated/downloaded/venv output is ignored).

@@ -20,7 +20,12 @@
 		<UseWindowsForms>false</UseWindowsForms>
 		<UseWPF>false</UseWPF>
 		<SupportedOSPlatforms>Windows;Linux;macOS</SupportedOSPlatforms>
+		<PackageIcon>icon.png</PackageIcon>
 	</PropertyGroup>
+
+	<ItemGroup>
+		<None Include="../../icon.png" Pack="true" PackagePath="\" />
+	</ItemGroup>
 
 	<ItemGroup>
 		<InternalsVisibleTo Include="PaddleOcrNet.Tests" />

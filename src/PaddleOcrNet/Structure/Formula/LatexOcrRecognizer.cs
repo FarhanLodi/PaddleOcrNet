@@ -30,10 +30,12 @@ namespace PaddleOcrNet.Structure.Formula;
 /// </para>
 /// <para>
 /// Decoding has <b>no KV-cache</b>: the full token sequence is re-fed to the decoder every step. Starting
-/// from <c>[BOS=1]</c>, each step runs the decoder with three inputs — the int64 token sequence, an all-true
-/// boolean attention mask, and the cached encoder context — in the model's declared input order, takes the
-/// last position's logits, greedily picks the argmax token, and appends it; the loop stops at <c>EOS=2</c>
-/// or after 512 tokens. The token ids are then detokenized via <see cref="_vocab"/> (a decode-only
+/// from <c>[BOS=1]</c>, each step runs the decoder with its three declared inputs in declared order:
+/// <c>x</c> (the int64 token sequence <c>[1,len]</c>), <c>mask</c> (an all-true boolean attention mask
+/// <c>[1,len]</c>), and <c>context</c> (the cached encoder output <c>[1, Nvis, 256]</c>); it yields logits
+/// <c>[1, len, 8000]</c>, takes the last position's logits, greedily picks the argmax token over the real
+/// vocabulary (the 8000-wide logits exceed the ~1175-token vocab), and appends it. The loop stops at
+/// <c>EOS=2</c> or after 512 tokens. The token ids are then detokenized via <see cref="_vocab"/> (a decode-only
 /// id → string map): BOS is skipped, BPE word-boundary markers (<c>"Ġ"</c>) become spaces, the special
 /// <c>[BOS]</c>/<c>[EOS]</c>/<c>[PAD]</c> tokens are stripped, and surrounding whitespace is collapsed.
 /// </para>
@@ -85,7 +87,10 @@ internal sealed class LatexOcrRecognizer : IFormulaRecognizer
     /// <summary>Encoder input tensor name (resolved once from the model's metadata).</summary>
     private readonly string _encoderInputName;
 
-    /// <summary>Decoder input tensor names in the model's declared order: [tokens, mask, context].</summary>
+    /// <summary>
+    /// Decoder input tensor names in the model's declared order. For this re-hosted ONNX they are
+    /// <c>["x", "mask", "context"]</c> — i.e. [int64 tokens, bool mask, float encoder context].
+    /// </summary>
     private readonly string[] _decoderInputNames;
 
     /// <summary>Image-resizer input tensor name (null when no resizer session was supplied).</summary>
@@ -111,7 +116,8 @@ internal sealed class LatexOcrRecognizer : IFormulaRecognizer
         _vocab = vocab ?? throw new ArgumentNullException(nameof(vocab));
 
         // Resolve input names once. The decoder's three inputs are passed in the model's declared order,
-        // which RapidLaTeXOCR exports as [tokens, mask, context]; we honour whatever order the graph reports.
+        // which this re-hosted ONNX exports as ["x" (tokens), "mask", "context"]; we honour whatever names
+        // and order the graph actually reports rather than hard-coding them.
         _encoderInputName = _encoder.InputMetadata.Keys.First();
         _decoderInputNames = _decoder.InputMetadata.Keys.ToArray();
         _resizerInputName = _imageResizer?.InputMetadata.Keys.First();
@@ -163,11 +169,16 @@ internal sealed class LatexOcrRecognizer : IFormulaRecognizer
             using var decoderOutputs = _decoder.Run(decoderInputs);
             var logits = decoderOutputs.First().AsTensor<float>();
 
-            // logits: [1, len, vocab]; greedily pick the argmax over the LAST position's distribution.
+            // logits: [1, len, 8000]; greedily pick the argmax over the LAST position's distribution.
+            // The exported decoder's logit width (8000) is wider than the tokenizer's vocabulary
+            // (_vocab.Count, ~1175); the trailing columns are unused padding whose logits are
+            // unconstrained. Restrict the argmax to real vocabulary ids so a spurious high value in the
+            // padding region can never produce an id that has no token (which detokenizing would drop).
             var dims = logits.Dimensions;
-            int vocabSize = dims[dims.Length - 1];
+            int logitWidth = dims[dims.Length - 1];
+            int vocabSize = Math.Min(logitWidth, _vocab.Count);
             ReadOnlySpan<float> flat = logits.ToArray();
-            int lastRowBase = (len - 1) * vocabSize;
+            int lastRowBase = (len - 1) * logitWidth;
 
             int best = 0;
             float bestScore = float.NegativeInfinity;

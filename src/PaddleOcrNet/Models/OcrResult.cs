@@ -24,6 +24,14 @@ public sealed record OcrResult
     public required IReadOnlyList<string> Languages { get; init; }
 
     /// <summary>
+    /// Gets the language code(s) inferred by automatic language detection, ordered by how many text crops
+    /// each won (most first). Populated only when auto-detection ran (the request set
+    /// <see cref="RecognitionOptions.AutoDetectLanguage"/> or passed the language code <c>"auto"</c>);
+    /// otherwise empty.
+    /// </summary>
+    public IReadOnlyList<string> DetectedLanguages { get; init; } = Array.Empty<string>();
+
+    /// <summary>
     /// Gets the duration of the OCR operation.
     /// </summary>
     public TimeSpan Duration { get; init; }

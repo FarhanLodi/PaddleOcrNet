@@ -32,18 +32,69 @@ internal static class CharacterDictionary
     /// <exception cref="FileNotFoundException">No dictionary file exists at <paramref name="dictPath"/>.</exception>
     public static IReadOnlyList<string> Load(string dictPath)
     {
+        return FromLines(LoadLines(dictPath));
+    }
+
+    /// <summary>
+    /// Reads the raw dictionary lines from <paramref name="dictPath"/> in CTC index order, without applying
+    /// any blank/space convention. Use with <see cref="BuildVocab"/> when the model's output class count is
+    /// known, so the vocabulary can be matched to the network exactly (community ONNX exports disagree on
+    /// whether the file already includes the blank/space classes).
+    /// </summary>
+    public static IReadOnlyList<string> LoadLines(string dictPath)
+    {
         if (string.IsNullOrEmpty(dictPath))
             throw new ArgumentException("Dictionary path must be provided.", nameof(dictPath));
         if (!File.Exists(dictPath))
             throw new FileNotFoundException("Character dictionary file not found.", dictPath);
 
-        // Each line is one label, in CTC index order. We preserve order and content exactly, only
-        // stripping the line terminators (ReadAllLines splits on \r\n / \n / \r and never keeps them).
-        // A trailing blank/whitespace line in the file is meaningful in some ppocr dicts, but the
-        // canonical packs end with content; ReadAllLines drops a single trailing empty produced by a
-        // final newline, which matches PaddleOCR's own loader behaviour.
-        string[] lines = File.ReadAllLines(dictPath, Encoding.UTF8);
-        return FromLines(lines);
+        // ReadAllLines splits on \r\n / \n / \r and drops a single trailing empty from a final newline,
+        // matching PaddleOCR's own loader. We preserve order and content (including interior blank lines).
+        return File.ReadAllLines(dictPath, Encoding.UTF8);
+    }
+
+    /// <summary>
+    /// Builds the CTC vocabulary so that its length equals the recognizer's output class count, auto-detecting
+    /// which blank/space convention the dictionary file follows. Community PP-OCRv5 exports are inconsistent:
+    /// the default <c>ppocrv5_dict.txt</c> is the <em>complete</em> class list already (index 0 is the blank),
+    /// while the per-language dicts omit the blank (and sometimes the trailing space). Matching the file's
+    /// line count against <paramref name="numClasses"/> picks the right construction and avoids the
+    /// off-by-one that shifts every decoded character.
+    /// </summary>
+    /// <param name="lines">Raw dictionary lines (see <see cref="LoadLines"/>).</param>
+    /// <param name="numClasses">The recognizer's number of output classes (last output dim); ≤0 means unknown.</param>
+    public static IReadOnlyList<string> BuildVocab(IReadOnlyList<string> lines, int numClasses)
+    {
+        ArgumentNullException.ThrowIfNull(lines);
+
+        // Unknown class count: fall back to the canonical PaddleOCR convention.
+        if (numClasses <= 0)
+            return FromLines(lines);
+
+        // The file is already the full class list (index 0 is the blank slot) — use it verbatim.
+        if (lines.Count == numClasses)
+            return new List<string>(lines);
+
+        // File omits only the leading blank class.
+        if (lines.Count + 1 == numClasses)
+        {
+            var v = new List<string>(numClasses) { Blank };
+            v.AddRange(lines);
+            return v;
+        }
+
+        // File omits both the leading blank and the trailing space class (the canonical PaddleOCR layout).
+        if (lines.Count + 2 == numClasses)
+            return FromLines(lines);
+
+        // Mismatch we don't recognize: build the canonical vocab, then pad/truncate to the class count so
+        // indexing stays in-bounds (a wrong glyph is preferable to an out-of-range crash mid-batch).
+        var fallback = new List<string>(FromLines(lines));
+        if (fallback.Count > numClasses)
+            fallback.RemoveRange(numClasses, fallback.Count - numClasses);
+        else
+            while (fallback.Count < numClasses) fallback.Add(string.Empty);
+        return fallback;
     }
 
     /// <summary>

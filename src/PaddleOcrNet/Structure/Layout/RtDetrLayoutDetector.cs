@@ -8,25 +8,32 @@ using SixLabors.ImageSharp.Processing;
 namespace PaddleOcrNet.Structure.Layout;
 
 /// <summary>
-/// PP-DocLayout_plus-L / PP-DocLayout-L layout detector (RT-DETR backbone). Resizes the page to the model's
-/// fixed input (PP-DocLayout_plus-L = 800×800, PP-DocLayout-L = 640×640), runs the RT-DETR graph (whose
-/// decoder emits a fixed top-k of 300 boxes — there is no NMS), score-thresholds the predictions, and maps
-/// each raw class index onto a <see cref="StructureBlockType"/> via the supplied <see cref="_classMap"/>.
-/// Owns and disposes the ONNX session.
+/// PP-DocLayoutV3 / PP-DocLayout_plus-L layout detector (RT-DETR backbone). Resizes the page to the model's
+/// fixed input (PP-DocLayoutV3 = 800×800), runs the RT-DETR graph (whose decoder emits a fixed top-k of 300
+/// boxes — there is no NMS), score-thresholds the predictions, and maps each raw class index onto a
+/// <see cref="StructureBlockType"/> via the supplied <see cref="_classMap"/>. Owns and disposes the ONNX
+/// session.
 /// <para>
-/// As with the PicoDet export, the decode is fused into the graph: the output is already-decoded detections
-/// shaped <c>[300, 6]</c> as <c>[class_id, score, x1, y1, x2, y2]</c> (plus a <c>boxes_num</c> tensor),
-/// batch = 1, with the boxes already in <b>absolute source-image pixels</b> (the graph un-scales them using
-/// the supplied <c>scale_factor</c>). This detector performs no decode and no NMS — it only pre-processes,
-/// runs the session, keeps rows scoring above the threshold, and maps the class id.
+/// The decode is fused into the graph: the output (<c>fetch_name_0</c>) is already-decoded detections shaped
+/// <c>[300, 7]</c> as <c>[class_id, score, x1, y1, x2, y2, extra]</c> — the leading six columns are the
+/// detection, the seventh is an in-graph rank/index that is ignored. A companion <c>boxes_num</c> tensor
+/// (<c>fetch_name_1</c>, <c>int32[1]</c>) gives the valid row count, and <c>fetch_name_2</c>
+/// (<c>int32[300,200,200]</c>) is an auxiliary instance mask that box detection ignores. Boxes come out in
+/// <b>absolute source-image pixels</b> (the graph un-scales them using the supplied <c>scale_factor</c> and
+/// <c>im_shape</c>): verified by running the model — e.g. a full-page table on a 527×1122 image returns the
+/// box <c>(-0.1, -0.1, 526.9, 1121.9)</c>. This detector performs no decode and no NMS — it only
+/// pre-processes, runs the session, keeps rows scoring above the threshold, and maps the class id.
 /// </para>
 /// <para>
-/// Pre-processing is the RT-DETR <b>trap</b>: it feeds <i>raw 0–255 float pixels</i> — there is <b>no</b>
-/// <c>/255</c> and <b>no</b> mean/std normalization — in RGB CHW order. The graph takes three inputs:
-/// <c>image</c> <c>[1,3,H,W]</c>, <c>im_shape</c> <c>[1,2]</c> = <c>[inputH, inputW]</c>, and
-/// <c>scale_factor</c> <c>[1,2]</c> = <c>[resizedH/origH, resizedW/origW]</c> (scale_y first). Because the
-/// input is a stretch-resize to a square, both scales equal inputEdge/origEdge per axis.
-/// Reference: PaddleX <c>DetResize</c> (keep_ratio = false) + <c>RTDETRPostProcess</c>.
+/// Pre-processing (verified against the real ONNX): stretch-resize to the 800×800 square (keep_ratio = false)
+/// and feed <c>pixel / 255</c> float pixels — there is <b>no</b> mean/std normalization — in RGB CHW order.
+/// (Feeding raw 0–255 pixels collapses every score to ~0.01; the <c>/255</c> scaling restores them, e.g.
+/// 0.94 for the body text on <c>ocr_test1.png</c>.) The graph takes three inputs: <c>image</c>
+/// <c>[1,3,800,800]</c>, <c>im_shape</c> <c>[1,2]</c> = <c>[inputH, inputW]</c> = <c>[800, 800]</c>, and
+/// <c>scale_factor</c> <c>[1,2]</c> = <c>[inputH/origH, inputW/origW]</c> (scale_y first — the other order
+/// yields wrong boxes). Because the input is a stretch-resize to a square, both scales equal
+/// inputEdge/origEdge per axis. Reference: PaddleX <c>DetResize</c> (keep_ratio = false) + <c>NormalizeImage</c>
+/// (scale 1/255, no mean/std) + <c>RTDETRPostProcess</c>.
 /// </para>
 /// </summary>
 internal sealed class RtDetrLayoutDetector : ILayoutDetector
@@ -77,12 +84,14 @@ internal sealed class RtDetrLayoutDetector : ILayoutDetector
             return Array.Empty<LayoutRegion>();
         }
 
-        // PREPROCESS: stretch-resize to the model's square input and pack RAW 0-255 float pixels into
-        // [1,3,H,W] RGB CHW. NOTE: deliberately no /255 and no mean/std — that is the RT-DETR trap.
+        // PREPROCESS: stretch-resize to the model's square input and pack pixel/255 float pixels into
+        // [1,3,H,W] RGB CHW. NOTE: /255 scaling but NO mean/std — confirmed by running the real ONNX (raw
+        // 0-255 collapses all scores to ~0.01; /255 restores them).
         var input = BuildInputTensor(image);
 
-        // im_shape is the network input size [inputH, inputW]; scale_factor is [resizedH/origH, resizedW/origW]
-        // (scale_y FIRST). The graph uses these to emit boxes in absolute *source-image* pixels.
+        // im_shape is the network input size [inputH, inputW] = [800, 800]; scale_factor is
+        // [inputH/origH, inputW/origW] (scale_y FIRST). The graph uses these to emit boxes in absolute
+        // *source-image* pixels.
         float scaleY = _inputHeight / (float)origH;
         float scaleX = _inputWidth / (float)origW;
 
@@ -109,8 +118,9 @@ internal sealed class RtDetrLayoutDetector : ILayoutDetector
 
         using var results = _session.Run(inputs);
 
-        // POSTPROCESS: read the fused-decode detections [300,6] = [class_id, score, x1,y1,x2,y2] in absolute
-        // source pixels, then threshold and map the class id. No NMS — the RT-DETR decoder is NMS-free.
+        // POSTPROCESS: read the fused-decode detections [300,7] = [class_id, score, x1,y1,x2,y2, extra] in
+        // absolute source pixels (the trailing column is an in-graph index, ignored), then threshold and map
+        // the class id. No NMS — the RT-DETR decoder is NMS-free.
         var detections = LayoutGraph.ReadDetections(results);
         if (detections.Rows == 0)
         {
@@ -125,8 +135,9 @@ internal sealed class RtDetrLayoutDetector : ILayoutDetector
 
     /// <summary>
     /// Stretch-resizes <paramref name="image"/> to the model's square input (keep_ratio = false) and packs
-    /// the <b>raw</b> 0–255 channel values (as floats, with no normalization) in RGB CHW order into a
-    /// <c>[1, 3, H, W]</c> float32 tensor — the RT-DETR pre-processing the graph expects.
+    /// the <c>channel / 255</c> values (as floats, with no mean/std normalization) in RGB CHW order into a
+    /// <c>[1, 3, H, W]</c> float32 tensor — the RT-DETR pre-processing the graph expects (verified against
+    /// the real PP-DocLayoutV3 ONNX).
     /// </summary>
     private DenseTensor<float> BuildInputTensor(Image<Rgb24> image)
     {
@@ -155,10 +166,10 @@ internal sealed class RtDetrLayoutDetector : ILayoutDetector
                 {
                     var px = row[x];
                     int idx = rowOffset + x;
-                    // RAW pixels — NO /255, NO mean/std. RGB CHW.
-                    buffer[idx] = px.R;             // R channel
-                    buffer[plane + idx] = px.G;     // G channel
-                    buffer[2 * plane + idx] = px.B; // B channel
+                    // pixel/255 — NO mean/std. RGB CHW.
+                    buffer[idx] = px.R / 255f;             // R channel
+                    buffer[plane + idx] = px.G / 255f;     // G channel
+                    buffer[2 * plane + idx] = px.B / 255f; // B channel
                 }
             }
         });

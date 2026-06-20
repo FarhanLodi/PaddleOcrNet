@@ -35,6 +35,21 @@ internal static class LayoutLabelMap
     };
 
     /// <summary>
+    /// The canonical 25-class PP-DocLayoutV3 label vocabulary in class-id order, as shipped in the model's
+    /// <c>PP-DocLayoutV3_labels.txt</c> sidecar (one label per line, id = line index). This is the vocabulary
+    /// of the RT-DETR layout model driven by <see cref="RtDetrLayoutDetector"/>; it is kept here as the
+    /// built-in fallback used when the sidecar is missing or unparseable. (Verified by loading the ONNX and
+    /// running it: e.g. id 21 = <c>table</c>, 22 = <c>text</c>, 14 = <c>image</c>.)
+    /// </summary>
+    public static readonly IReadOnlyList<string> DocLayoutV325 = new[]
+    {
+        "abstract", "algorithm", "aside_text", "chart", "content", "display_formula", "doc_title",
+        "figure_title", "footer", "footer_image", "footnote", "formula_number", "header", "header_image",
+        "image", "inline_formula", "number", "paragraph_title", "reference", "reference_content", "seal",
+        "table", "text", "vertical_text", "vision_footnote",
+    };
+
+    /// <summary>
     /// Loads the label sidecar at <paramref name="labelPath"/> and returns the class-id → block-type map.
     /// Accepts either a plain one-label-per-line list (id = line index), simple <c>id: name</c> /
     /// <c>- name</c> YAML lines, or a PaddleX-style <c>label_list:</c> block (only entries under that key are
@@ -126,7 +141,7 @@ internal static class LayoutLabelMap
         var key = name.Replace('-', '_').Replace(' ', '_').ToLowerInvariant();
         return key switch
         {
-            "text" or "plain_text" or "content" => StructureBlockType.Text,
+            "text" or "plain_text" or "content" or "vertical_text" => StructureBlockType.Text,
             "title" or "section_title" or "section_header" or "paragraph_title" => StructureBlockType.Title,
             "doc_title" or "document_title" => StructureBlockType.DocTitle,
             "paragraph" => StructureBlockType.Paragraph,
@@ -135,14 +150,15 @@ internal static class LayoutLabelMap
             "table_caption" or "table_title" => StructureBlockType.TableCaption,
             "figure" or "image" or "picture" => StructureBlockType.Figure,
             "figure_caption" or "figure_title" or "image_caption" => StructureBlockType.FigureCaption,
-            "formula" or "equation" or "isolate_formula" or "interline_equation" => StructureBlockType.Formula,
+            "formula" or "equation" or "isolate_formula" or "interline_equation"
+                or "display_formula" or "inline_formula" => StructureBlockType.Formula,
             "formula_number" or "formula_caption" or "equation_number" => StructureBlockType.FormulaNumber,
             "seal" or "stamp" => StructureBlockType.Seal,
             "chart" or "chart_title" => StructureBlockType.Chart,
             "header" or "page_header" or "header_image" => StructureBlockType.Header,
             "footer" or "page_footer" or "footer_image" => StructureBlockType.Footer,
             "reference" or "references" or "reference_content" => StructureBlockType.Reference,
-            "footnote" => StructureBlockType.Footnote,
+            "footnote" or "vision_footnote" => StructureBlockType.Footnote,
             "page_number" or "number" => StructureBlockType.PageNumber,
             "abstract" => StructureBlockType.Abstract,
             "algorithm" => StructureBlockType.Algorithm,

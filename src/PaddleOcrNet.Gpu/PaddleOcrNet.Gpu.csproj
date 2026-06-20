@@ -17,7 +17,12 @@
 		<GenerateDocumentationFile>true</GenerateDocumentationFile>
 		<IncludeBuildOutput>false</IncludeBuildOutput>
 		<NoWarn>$(NoWarn);NU5128</NoWarn>
+		<PackageIcon>icon.png</PackageIcon>
 	</PropertyGroup>
+
+	<ItemGroup>
+		<None Include="../../icon.png" Pack="true" PackagePath="\" />
+	</ItemGroup>
 
 	<ItemGroup>
 		<ProjectReference Include="../PaddleOcrNet/PaddleOcrNet.csproj" />

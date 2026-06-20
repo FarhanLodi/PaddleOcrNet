@@ -31,7 +31,10 @@ internal sealed class SvtrRecognizer : ITextRecognizer
     private const int DefaultBatchSize = 6;
 
     private readonly InferenceSession _session;
-    private readonly IReadOnlyList<string> _vocab;
+    private readonly IReadOnlyList<string> _dictLines;
+    // Built lazily on the first decode, once the model's actual output class count is known, so the vocab
+    // length matches the network exactly (community dicts disagree on whether the blank/space are included).
+    private IReadOnlyList<string>? _vocab;
     private readonly int _imageHeight;
     private readonly string _inputName;
     private readonly string _outputName;
@@ -42,16 +45,17 @@ internal sealed class SvtrRecognizer : ITextRecognizer
     /// character dictionary in the Paddle vocab convention (blank at index 0).
     /// </summary>
     /// <param name="session">The loaded recognition model session (this instance takes ownership and disposes it).</param>
-    /// <param name="vocab">
-    /// The ordered CTC label set: <c>["blank"] + dictionary lines + [" "]</c> (see
-    /// <see cref="CharacterDictionary.Load(string)"/>). Index 0 is the blank token.
+    /// <param name="dictLines">
+    /// The raw dictionary lines in CTC index order (see <see cref="CharacterDictionary.LoadLines(string)"/>).
+    /// The final vocabulary is built on first inference via <see cref="CharacterDictionary.BuildVocab"/> so its
+    /// length matches the model's output class count exactly.
     /// </param>
     /// <param name="imageHeight">Fixed recognition input height in pixels (PaddleOCR's <c>rec_image_shape</c> H). Default 48.</param>
     /// <param name="batchSize">Crops per ONNX run (PaddleOCR's <c>rec_batch_num</c>). Default 6.</param>
-    public SvtrRecognizer(InferenceSession session, IReadOnlyList<string> vocab, int imageHeight = 48, int batchSize = DefaultBatchSize)
+    public SvtrRecognizer(InferenceSession session, IReadOnlyList<string> dictLines, int imageHeight = 48, int batchSize = DefaultBatchSize)
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
-        _vocab = vocab ?? throw new ArgumentNullException(nameof(vocab));
+        _dictLines = dictLines ?? throw new ArgumentNullException(nameof(dictLines));
         _imageHeight = imageHeight > 0 ? imageHeight : 48;
         _batchSize = batchSize > 0 ? batchSize : DefaultBatchSize;
 
@@ -137,7 +141,9 @@ internal sealed class SvtrRecognizer : ITextRecognizer
             // Output shape is [N, T, C]; T and C come from the model (T depends on maxWidth).
             var dims = output.Dimensions;
             int timeSteps = dims.Length >= 3 ? dims[1] : 0;
-            int numClasses = dims.Length >= 3 ? dims[2] : _vocab.Count;
+            int numClasses = dims.Length >= 3 ? dims[2] : _dictLines.Count;
+            // Build the vocab to match the model's class count on first use (then reuse it).
+            var vocab = _vocab ??= CharacterDictionary.BuildVocab(_dictLines, numClasses);
             // Materialize once to a flat span so the decoder can index by (row, t, c) without per-element
             // overhead from the tensor indexer.
             ReadOnlySpan<float> flat = output.ToArray();
@@ -146,7 +152,7 @@ internal sealed class SvtrRecognizer : ITextRecognizer
             for (int b = 0; b < batchCount; b++)
             {
                 ReadOnlySpan<float> rowLogits = flat.Slice(b * rowStride, rowStride);
-                results[order[start + b]] = CtcDecoder.GreedyDecode(rowLogits, timeSteps, numClasses, _vocab);
+                results[order[start + b]] = CtcDecoder.GreedyDecode(rowLogits, timeSteps, numClasses, vocab);
             }
         }
 

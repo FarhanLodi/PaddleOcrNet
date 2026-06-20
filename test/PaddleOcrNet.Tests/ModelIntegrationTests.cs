@@ -46,4 +46,41 @@ public class ModelIntegrationTests
 
         Assert.NotNull(regions);
     }
+
+    [SkippableTheory]
+    [InlineData("lang_en_typed.png", "en")]
+    [InlineData("lang_en_handwritten.png", "en")]
+    [InlineData("lang_zh_typed.png", "ch")]
+    [InlineData("lang_zh_handwritten.png", "ch")]
+    [InlineData("lang_ja_typed.png", "ja")]
+    [InlineData("lang_ja_handwritten.png", "ja")]
+    [InlineData("lang_ko_typed.png", "ko")]
+    [InlineData("lang_ko_handwritten.png", "ko")]
+    [InlineData("lang_cy_typed.png", "cyrillic")]
+    [InlineData("lang_cy_handwritten.png", "cyrillic")]
+    [InlineData("lang_ar_typed.png", "arabic")]
+    [InlineData("lang_ar_handwritten.png", "arabic")]
+    [InlineData("lang_hi_typed.png", "devanagari")]
+    [InlineData("lang_hi_handwritten.png", "devanagari")]
+    public async Task ExtractTextFromGeneratedImages_runs_successfully(string filename, string language)
+    {
+        Skip.IfNot(IntegrationEnabled, $"Integration test skipped; set {Gate}=1 to run.");
+
+        var assetsDir = Path.Combine(AppContext.BaseDirectory, "../../../test/Assets");
+        if (!Directory.Exists(assetsDir))
+        {
+            // fallback
+            assetsDir = Path.Combine(Directory.GetCurrentDirectory(), "test/Assets");
+        }
+        var imagePath = Path.Combine(assetsDir, filename);
+
+        Assert.True(File.Exists(imagePath), $"Test image not found at: {imagePath}");
+
+        await using var service = new PaddleOcrService();
+        var result = await service.ExtractTextFromImage(imagePath, new[] { language });
+
+        Assert.NotNull(result);
+        Assert.NotNull(result.Lines);
+    }
 }
+

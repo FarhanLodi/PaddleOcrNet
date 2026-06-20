@@ -361,7 +361,7 @@ public sealed class PaddleOcrService : IPaddleOcrService
         using var activity = PaddleOcrDiagnostics.ActivitySource.StartActivity("PaddleOcr.Extract", ActivityKind.Internal);
         var sw = Stopwatch.StartNew();
 
-        (IReadOnlyList<OcrLine> Lines, string[] Languages) outcome;
+        (IReadOnlyList<OcrLine> Lines, string[] Languages, IReadOnlyList<string> Detected) outcome;
 
         if (options.Preprocessing.DetectOrientation)
         {
@@ -372,11 +372,11 @@ public sealed class PaddleOcrService : IPaddleOcrService
             outcome = await CoreAsync(image, languages, options, cancellationToken).ConfigureAwait(false);
         }
 
-        return BuildResult(outcome.Lines, outcome.Languages, sw, activity, image.Width, image.Height);
+        return BuildResult(outcome.Lines, outcome.Languages, sw, activity, image.Width, image.Height, outcome.Detected);
     }
 
     /// <summary>Sorts into reading order, records metrics/trace tags, and assembles the result.</summary>
-    private OcrResult BuildResult(IReadOnlyList<OcrLine> lines, string[] languages, Stopwatch sw, Activity? activity, int sourceWidth = 0, int sourceHeight = 0)
+    private OcrResult BuildResult(IReadOnlyList<OcrLine> lines, string[] languages, Stopwatch sw, Activity? activity, int sourceWidth = 0, int sourceHeight = 0, IReadOnlyList<string>? detectedLanguages = null)
     {
         var ordered = SortLinesByReadingOrder(lines);
         sw.Stop();
@@ -397,6 +397,7 @@ public sealed class PaddleOcrService : IPaddleOcrService
             FullText = BuildFullText(ordered),
             Lines = ordered,
             Languages = languages,
+            DetectedLanguages = detectedLanguages ?? Array.Empty<string>(),
             Duration = sw.Elapsed,
             UsedGpu = _useGpu,
             SourceWidth = sourceWidth,
@@ -405,13 +406,13 @@ public sealed class PaddleOcrService : IPaddleOcrService
     }
 
     /// <summary>Runs OCR at 0/90/180/270° and keeps the orientation with the strongest result.</summary>
-    private async Task<(IReadOnlyList<OcrLine>, string[])> RecognizeBestOrientationAsync(
+    private async Task<(IReadOnlyList<OcrLine>, string[], IReadOnlyList<string>)> RecognizeBestOrientationAsync(
         Image<Rgb24> image, IEnumerable<string> languages, RecognitionOptions options, CancellationToken ct)
     {
         var langsList = languages.ToArray();
         var noOrient = options with { Preprocessing = options.Preprocessing with { DetectOrientation = false } };
 
-        (IReadOnlyList<OcrLine> Lines, string[] Langs)? best = null;
+        (IReadOnlyList<OcrLine> Lines, string[] Langs, IReadOnlyList<string> Detected)? best = null;
         double bestScore = double.NegativeInfinity;
 
         foreach (var degrees in new[] { 0, 90, 180, 270 })
@@ -420,13 +421,13 @@ public sealed class PaddleOcrService : IPaddleOcrService
             Image<Rgb24>? rotated = degrees == 0 ? null : ImagePreprocessor.RotateRightAngle(image, degrees);
             try
             {
-                var (lines, langs) = await CoreAsync(rotated ?? image, langsList, noOrient, ct).ConfigureAwait(false);
+                var (lines, langs, detected) = await CoreAsync(rotated ?? image, langsList, noOrient, ct).ConfigureAwait(false);
                 double score = lines.Where(l => !string.IsNullOrWhiteSpace(l.Text)).Sum(l => l.Confidence * l.Text.Length);
                 _logger?.LogInformation("Orientation {Deg}° scored {Score:F1}", degrees, score);
                 if (score > bestScore)
                 {
                     bestScore = score;
-                    best = (lines, langs);
+                    best = (lines, langs, detected);
                 }
             }
             finally
@@ -435,14 +436,14 @@ public sealed class PaddleOcrService : IPaddleOcrService
             }
         }
 
-        return best ?? (Array.Empty<OcrLine>(), langsList);
+        return best ?? (Array.Empty<OcrLine>(), langsList, Array.Empty<string>());
     }
 
     /// <summary>
     /// Preprocess → resolve languages → region crop → recognize. The recognition itself is delegated to
     /// <see cref="PaddleOcrEngine.RecognizeAsync"/> (det → cls → rec), whose body the downstream agent fills.
     /// </summary>
-    private async Task<(IReadOnlyList<OcrLine> Lines, string[] Languages)> CoreAsync(
+    private async Task<(IReadOnlyList<OcrLine> Lines, string[] Languages, IReadOnlyList<string> Detected)> CoreAsync(
         Image<Rgb24> image, IEnumerable<string> languages, RecognitionOptions options, CancellationToken ct)
     {
         // Denoise / deskew / binarize into a working image (orientation handled by the caller).
@@ -450,9 +451,11 @@ public sealed class PaddleOcrService : IPaddleOcrService
         Image<Rgb24> working = needsPreprocess ? ImagePreprocessor.Apply(image, options.Preprocessing) : image;
         try
         {
-            var langs = ResolveLanguages(languages, allowEmpty: false);
-            var lines = await RecognizeWithRegionAsync(working, langs, options, ct).ConfigureAwait(false);
-            return (lines, langs);
+            // "auto" is a detection trigger, not a recognizer language; allow it to be the only code (it is
+            // dropped by the engine's candidate resolution) so callers can pass languages: ["auto"].
+            var langs = ResolveLanguages(languages, allowEmpty: IsAutoRequested(languages, options));
+            var (lines, detected) = await RecognizeWithRegionAsync(working, langs, options, ct).ConfigureAwait(false);
+            return (lines, langs, detected);
         }
         finally
         {
@@ -460,21 +463,29 @@ public sealed class PaddleOcrService : IPaddleOcrService
         }
     }
 
+    /// <summary>
+    /// True when language auto-detection is requested — either <see cref="RecognitionOptions.AutoDetectLanguage"/>
+    /// is set or the literal language code <c>"auto"</c> appears in the requested languages.
+    /// </summary>
+    private static bool IsAutoRequested(IEnumerable<string> languages, RecognitionOptions options)
+        => options.AutoDetectLanguage
+           || languages.Any(l => string.Equals(l?.Trim(), "auto", StringComparison.OrdinalIgnoreCase));
+
     /// <summary>Applies the optional region-of-interest crop and translates boxes back to image coordinates.</summary>
-    private async Task<IReadOnlyList<OcrLine>> RecognizeWithRegionAsync(
+    private async Task<(IReadOnlyList<OcrLine> Lines, IReadOnlyList<string> Detected)> RecognizeWithRegionAsync(
         Image<Rgb24> image, string[] langs, RecognitionOptions options, CancellationToken ct)
     {
         if (options.Region is not { } region)
         {
-            return await _engine.RecognizeAsync(image, langs, options, ct).ConfigureAwait(false);
+            return await _engine.RecognizeWithDetectedLanguagesAsync(image, langs, options, ct).ConfigureAwait(false);
         }
 
         var (rx, ry, rw, rh) = region.Resolve(image.Width, image.Height);
-        if (rw < 2 || rh < 2) return Array.Empty<OcrLine>();
+        if (rw < 2 || rh < 2) return (Array.Empty<OcrLine>(), Array.Empty<string>());
 
         using var roi = image.Clone(ctx => ctx.Crop(new Rectangle(rx, ry, rw, rh)));
-        var roiLines = await _engine.RecognizeAsync(roi, langs, options, ct).ConfigureAwait(false);
-        return TranslateLines(roiLines, rx, ry);
+        var (roiLines, detected) = await _engine.RecognizeWithDetectedLanguagesAsync(roi, langs, options, ct).ConfigureAwait(false);
+        return (TranslateLines(roiLines, rx, ry), detected);
     }
 
     // ---- helpers ----

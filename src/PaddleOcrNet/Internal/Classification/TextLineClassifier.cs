@@ -7,22 +7,26 @@ using SixLabors.ImageSharp.Processing;
 namespace PaddleOcrNet.Internal.Classification;
 
 /// <summary>
-/// PaddleOCR text-line orientation classifier (the <c>cls</c> model). Resizes each crop to the model's
-/// fixed input (3×48×192), runs the 2-class network, and reports whether the "180°" label won.
+/// PaddleOCR text-line orientation classifier (the <c>cls</c> model, <c>PP-LCNet_x1_0_textline_ori</c>).
+/// Resizes each crop to the model's fixed input (3×80×160), runs the 2-class network, and reports whether
+/// the "180°" label won.
 /// <para>
 /// The pipeline mirrors PaddleOCR's <c>ClsResizeImg</c> / RapidOcrNet's <c>TextClassifier</c>: resize the
-/// crop to height 48 keeping aspect ratio (width capped at 192), right-pad with zeros to width 192,
+/// crop to height 80 keeping aspect ratio (width capped at 160), right-pad with zeros to width 160,
 /// normalize each channel as <c>(x/255 − 0.5)/0.5</c> into RGB CHW order, and run the ONNX graph. The
-/// output is a <c>[1, 2]</c> tensor of scores over the labels {0°, 180°}; <c>argmax</c> selects the label
-/// and its value is the confidence. The 180° label (index 1) is only accepted when its score clears the
-/// configured threshold (PaddleOCR's <c>cls_thresh</c>, default 0.9). When accepted, the caller rotates
-/// the crop 180° before recognition.
+/// graph's input is named <c>x</c> with the fixed shape <c>[N, 3, 80, 160]</c> (only the batch dimension
+/// is dynamic) and its single output <c>fetch_name_0</c> is a <c>[N, 2]</c> tensor of scores over the
+/// labels {0°, 180°}; <c>argmax</c> selects the label and its value is the confidence. The 180° label
+/// (index 1) is only accepted when its score clears the configured threshold (PaddleOCR's
+/// <c>cls_thresh</c>, default 0.9). When accepted, the caller rotates the crop 180° before recognition.
 /// </para>
 /// </summary>
 internal sealed class TextLineClassifier : IAngleClassifier
 {
-    private const int TargetHeight = 48;
-    private const int TargetWidth = 192;
+    // The cls graph (PP-LCNet_x1_0_textline_ori) has a fixed spatial input of 80×160; only the batch
+    // dimension is dynamic. Feeding any other H×W fails ONNX Runtime's shape check.
+    private const int TargetHeight = 80;
+    private const int TargetWidth = 160;
     private const int RotatedLabel = 1; // output index for the 180° class
 
     private readonly InferenceSession _session;
@@ -52,7 +56,7 @@ internal sealed class TextLineClassifier : IAngleClassifier
         using var results = _session.Run(
             new[] { NamedOnnxValue.CreateFromTensor(_inputName, input) });
 
-        // Output is [1, 2]: scores for {0°, 180°}. Take argmax and its value.
+        // Output "fetch_name_0" is [1, 2]: scores for {0°, 180°}. Take argmax and its value.
         var scores = results[0].AsEnumerable<float>().ToArray();
         int idx = ArgMax(scores, out float score);
 
@@ -61,8 +65,8 @@ internal sealed class TextLineClassifier : IAngleClassifier
     }
 
     /// <summary>
-    /// Preprocesses <paramref name="crop"/> into the model's <c>[1, 3, 48, 192]</c> input: resize to
-    /// height 48 keeping aspect ratio (width = min(192, ⌈48·w/h⌉)), right-pad with zeros to width 192,
+    /// Preprocesses <paramref name="crop"/> into the model's <c>[1, 3, 80, 160]</c> input: resize to
+    /// height 80 keeping aspect ratio (width = min(160, ⌈80·w/h⌉)), right-pad with zeros to width 160,
     /// and normalize each RGB channel as <c>(x/255 − 0.5)/0.5</c> in CHW layout. Padding columns stay
     /// at the normalized value of 0 (i.e. <c>(0 − 0.5)/0.5 = −1</c>), matching PaddleOCR's zero-padding.
     /// </summary>
@@ -80,7 +84,7 @@ internal sealed class TextLineClassifier : IAngleClassifier
             Sampler = KnownResamplers.Bicubic,
         }));
 
-        // Tensor is zero-initialized, so padded columns [resizeWidth, 192) start at the channel mean and
+        // Tensor is zero-initialized, so padded columns [resizeWidth, 160) start at the channel mean and
         // become −1 after normalization — exactly PaddleOCR's zero-pad-then-normalize behavior.
         var tensor = new DenseTensor<float>(new[] { 1, 3, TargetHeight, TargetWidth });
         const int channelStride = TargetHeight * TargetWidth;

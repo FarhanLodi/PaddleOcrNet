@@ -51,6 +51,36 @@ public sealed record RecognitionOptions
     public bool UseTextLineOrientation { get; init; }
 
     /// <summary>
+    /// Automatically detect the script/language of the image instead of trusting the requested language
+    /// code(s). When enabled, the detected text crops are recognized with every candidate pack in
+    /// <see cref="AutoDetectCandidates"/> and, per crop, the highest-confidence reading is kept; the pack
+    /// that wins the most crops (weighted by confidence) is reported in
+    /// <see cref="OcrResult.DetectedLanguages"/>. The needed recognizer models are auto-downloaded on
+    /// demand. Default false.
+    /// <para>
+    /// Passing the literal language code <c>"auto"</c> to an
+    /// <see cref="Services.PaddleOcrService.ExtractTextFromImage(string, System.Collections.Generic.IEnumerable{string}, RecognitionOptions, System.Threading.CancellationToken)"/>
+    /// overload is an equivalent trigger and sets this behaviour without having to construct options.
+    /// </para>
+    /// <para>
+    /// A fast path avoids downloading every candidate for clean Latin/CJK pages: the default PP-OCRv5
+    /// recognizer is tried first and, if its mean confidence is high and the text is dominantly Latin or CJK,
+    /// it is accepted and the other candidates are skipped.
+    /// </para>
+    /// </summary>
+    public bool AutoDetectLanguage { get; init; }
+
+    /// <summary>
+    /// The shortlist of language codes whose recognizer packs are tried during
+    /// <see cref="AutoDetectLanguage">auto-detection</see>. Each code is resolved to a recognizer pack and
+    /// auto-downloaded on demand. <c>null</c> (the default) uses a curated cross-script shortlist: the
+    /// default PP-OCRv5 pack plus <c>latin, cyrillic, arabic, devanagari, korean, japan, thai, greek,
+    /// telugu, tamil</c>. Provide your own list to narrow the search (fewer downloads, faster) when the set
+    /// of possible scripts is known.
+    /// </summary>
+    public IReadOnlyList<string>? AutoDetectCandidates { get; init; }
+
+    /// <summary>
     /// Restrict recognition to this exact set of characters (e.g. <c>"0123456789"</c> for an amount).
     /// Anything outside the set is never emitted, which sharply improves accuracy on constrained fields.
     /// Null = allow every character. Mutually exclusive with <see cref="Blocklist"/> (allowlist wins).

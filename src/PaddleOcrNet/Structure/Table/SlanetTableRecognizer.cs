@@ -10,7 +10,7 @@ using SixLabors.ImageSharp.Processing;
 namespace PaddleOcrNet.Structure.Table;
 
 /// <summary>
-/// SLANet / SLANeXt table-structure recognizer. Resizes the table crop to the model's fixed input, runs
+/// SLANet_plus table-structure recognizer. Aspect-pads the table crop to the model's 488×488 input, runs
 /// the structure decoder to produce a sequence of HTML structure tokens (from the supplied
 /// <see cref="_structureVocab"/>) plus per-cell bounding boxes, then distributes the supplied OCR lines into
 /// the cells (by box overlap) and emits a complete HTML <c>&lt;table&gt;</c>. Owns and disposes the ONNX session.
@@ -20,6 +20,18 @@ namespace PaddleOcrNet.Structure.Table;
 /// returns <b>both</b> the per-step structure-token probabilities and the per-step cell bounding boxes — there
 /// is no host-side decode loop. This mirrors PaddleOCR's <c>TableLabelDecode</c> (post-processing) and
 /// <c>TableMatch</c> (matcher), and RapidAI/RapidTable's <c>TableStructurer</c>.
+/// </para>
+/// <para>
+/// Verified against the REAL exported graph (<c>onnx_models/table/SLANet_plus.onnx</c>) via onnxruntime:
+/// <list type="bullet">
+/// <item><b>Input</b> <c>x</c> : float [N, 3, H, W] (H/W dynamic; we feed the padded 488×488).</item>
+/// <item><b>Output</b> <c>save_infer_model/scale_0.tmp_0</c> : float [N, L, <b>8</b>] — the location head,
+/// a <b>4-point polygon</b> (x1,y1,x2,y2,x3,y3,x4,y4) per step in [0,1] (NOT a 2-corner rectangle).</item>
+/// <item><b>Output</b> <c>save_infer_model/scale_1.tmp_0</c> : float [N, L, <b>50</b>] — the structure head,
+/// a softmax over the <b>50</b>-class vocab (<c>sos</c> + the 48-token <c>table_structure_dict_ch.txt</c> +
+/// <c>eos</c>). The head is the <b>non-merged</b> vocab, so <c>&lt;td&gt;</c> and <c>&lt;/td&gt;</c> are
+/// separate tokens — <c>merge_no_span_structure</c> is <b>not</b> applied here.</item>
+/// </list>
 /// </para>
 /// </summary>
 internal sealed class SlanetTableRecognizer : ITableRecognizer
@@ -37,12 +49,42 @@ internal sealed class SlanetTableRecognizer : ITableRecognizer
     /// The structure tokens whose appearance in the decoded sequence consumes one bounding-box row from the
     /// location head. Matches PaddleOCR's <c>TableLabelDecode.td_token</c>: a cell is opened by exactly one of
     /// <c>&lt;td&gt;</c>, <c>&lt;td</c> (the prefix of a span-cell whose attributes follow) or the merged
-    /// <c>&lt;td&gt;&lt;/td&gt;</c> token.
+    /// <c>&lt;td&gt;&lt;/td&gt;</c> token. The SLANet_plus head observed here emits the first two (it is the
+    /// non-merged vocab); <c>&lt;td&gt;&lt;/td&gt;</c> is kept so a merged export also works.
     /// </summary>
     private static readonly HashSet<string> TdTokens = new(StringComparer.Ordinal)
     {
         "<td>", "<td", "<td></td>",
     };
+
+    /// <summary>
+    /// The canonical 48-token PaddleOCR table-structure dictionary (<c>ppocr/utils/dict/table_structure_dict_ch.txt</c>)
+    /// the SLANet_plus head was trained with. Wrapped by <see cref="BuildVocab"/> as
+    /// <c>sos</c> + these 48 + <c>eos</c> → the <b>50</b>-class head the real ONNX emits (confirmed by running
+    /// the model). Used as a fallback when the caller supplies no usable dictionary (the repo ships only the
+    /// <c>.onnx</c>, not the dict file). Order is load-bearing: each token's position is its class id.
+    /// </summary>
+    private static readonly string[] DefaultTableDict = BuildDefaultTableDict();
+
+    /// <summary>Builds <see cref="DefaultTableDict"/> (10 fixed HTML tags + colspan="2..20" + rowspan="2..20").</summary>
+    private static string[] BuildDefaultTableDict()
+    {
+        var dict = new List<string>(48)
+        {
+            "<thead>", "</thead>", "<tbody>", "</tbody>", "<tr>", "</tr>", "<td>", "<td", ">", "</td>",
+        };
+        for (int n = 2; n <= 20; n++)
+        {
+            dict.Add(" colspan=\"" + n.ToString(CultureInfo.InvariantCulture) + "\"");
+        }
+
+        for (int n = 2; n <= 20; n++)
+        {
+            dict.Add(" rowspan=\"" + n.ToString(CultureInfo.InvariantCulture) + "\"");
+        }
+
+        return dict.ToArray();
+    }
 
     private readonly InferenceSession _session;
 
@@ -59,23 +101,105 @@ internal sealed class SlanetTableRecognizer : ITableRecognizer
     /// <summary>Class id of the end-of-sequence token (always the last vocab entry).</summary>
     private readonly int _endIdx;
 
+    /// <summary>The single graph input name (the real export calls it <c>x</c>).</summary>
     private readonly string _inputName;
 
     /// <summary>
-    /// Creates the recognizer over a built SLANet/SLANeXt ONNX session and the structure-token vocabulary
+    /// Graph output name of the structure-probs head (<c>save_infer_model/scale_1.tmp_0</c>, last dim = 50).
+    /// Resolved by metadata so output order is irrelevant.
+    /// </summary>
+    private readonly string _probOutputName;
+
+    /// <summary>
+    /// Graph output name of the location head (<c>save_infer_model/scale_0.tmp_0</c>, last dim = 8 — a
+    /// 4-point polygon per cell). Resolved by metadata so output order is irrelevant.
+    /// </summary>
+    private readonly string _locOutputName;
+
+    /// <summary>
+    /// Creates the recognizer over a built SLANet_plus ONNX session and the structure-token vocabulary
     /// (from <c>table_structure_dict.txt</c>) the decoder's head emits.
     /// </summary>
     /// <param name="session">The loaded table-structure model session (this instance takes ownership).</param>
-    /// <param name="structureVocab">The ordered structure-token vocabulary (HTML tag tokens + control tokens).</param>
+    /// <param name="structureVocab">
+    /// The ordered structure-token vocabulary (HTML tag tokens + control tokens). May be empty — the
+    /// recognizer embeds the canonical 48-token dictionary as a fallback (see <see cref="DefaultTableDict"/>),
+    /// and replaces any supplied vocab whose class count does not match the model's structure head.
+    /// </param>
     public SlanetTableRecognizer(InferenceSession session, IReadOnlyList<string> structureVocab)
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
         ArgumentNullException.ThrowIfNull(structureVocab);
 
-        _structureVocab = BuildVocab(structureVocab);
+        _inputName = _session.InputMetadata.Keys.First();
+        (_locOutputName, _probOutputName) = ResolveOutputNames(_session);
+
+        // Build the vocab, then reconcile it with the head's real class count. The exported SLANet_plus head
+        // has a static last dimension we can read from metadata; if the supplied dict yields a different count
+        // we fall back to ["sos"] + embedded 48-token dict + ["eos"] so decoding stays aligned with the head.
+        int headClasses = StructureHeadClassCount(_session, _probOutputName);
+        var vocab = BuildVocab(structureVocab);
+        if (headClasses > 0 && vocab.Count != headClasses)
+        {
+            vocab = BuildVocab(Array.Empty<string>());
+        }
+
+        _structureVocab = vocab;
         _begIdx = 0;
         _endIdx = _structureVocab.Count - 1;
-        _inputName = _session.InputMetadata.Keys.First();
+    }
+
+    /// <summary>
+    /// Resolves the (location, structure) output names from session metadata by their static last dimension:
+    /// the location head ends in 8 (the 4-point cell polygon), the structure head ends in the vocab size
+    /// (50, &gt; 8). Falls back to the documented order (out[0]=loc, out[1]=structure) when the dims are
+    /// dynamic/unknown.
+    /// </summary>
+    private static (string Loc, string Prob) ResolveOutputNames(InferenceSession session)
+    {
+        string? locName = null;
+        string? probName = null;
+
+        foreach (var kv in session.OutputMetadata)
+        {
+            var dims = kv.Value.Dimensions;
+            int last = dims.Length > 0 ? dims[^1] : -1;
+            if (last == 8)
+            {
+                locName ??= kv.Key;
+            }
+            else if (last > 8)
+            {
+                probName ??= kv.Key;
+            }
+        }
+
+        if (locName is not null && probName is not null)
+        {
+            return (locName, probName);
+        }
+
+        // Dynamic dims (or an unexpected export): use the documented positional order out[0]=loc, out[1]=prob.
+        var names = session.OutputMetadata.Keys.ToList();
+        return (names[0], names.Count > 1 ? names[1] : names[0]);
+    }
+
+    /// <summary>
+    /// Reads the static class count (last dim) of the structure-probs head from session metadata, or 0 when
+    /// it is dynamic/unknown.
+    /// </summary>
+    private static int StructureHeadClassCount(InferenceSession session, string probOutputName)
+    {
+        if (session.OutputMetadata.TryGetValue(probOutputName, out var meta))
+        {
+            var dims = meta.Dimensions;
+            if (dims.Length > 0 && dims[^1] > 0)
+            {
+                return dims[^1];
+            }
+        }
+
+        return 0;
     }
 
     /// <inheritdoc />
@@ -85,18 +209,20 @@ internal sealed class SlanetTableRecognizer : ITableRecognizer
         ocrLines ??= Array.Empty<OcrLine>();
 
         // 1. Pre-process: aspect-preserving resize → ImageNet normalize → CHW → top-left pad to 488×488. The
-        //    shape_list carries [origH, origW, ratio, ratio] so the location head's [0,1] boxes can be mapped
-        //    back into the crop's pixel coordinates.
+        //    real graph takes a SINGLE input `x` (no shape_list side-input); we keep origW/origH/ratio host-side
+        //    so the location head's [0,1] polygons can be mapped back into the crop's pixel coordinates.
         var input = Preprocess(tableCrop, out int origW, out int origH, out float ratio);
 
-        // 2. Run the unrolled decoder graph once — it returns BOTH the location boxes and the structure probs.
+        // 2. Run the unrolled decoder graph once — it returns BOTH the location polygons and the structure
+        //    probs. We request the two heads BY NAME (resolved in the ctor) so output order can't bite us.
+        //    loc head  : float [1, L, 8] — 4-point polygon (x1,y1,x2,y2,x3,y3,x4,y4) in [0,1].
+        //    prob head : float [1, L, 50] — softmax over the 50-class vocab.
         var inputs = new[] { NamedOnnxValue.CreateFromTensor(_inputName, input) };
-        using var outputs = _session.Run(inputs);
+        using var outputs = _session.Run(inputs, new[] { _locOutputName, _probOutputName });
 
-        // out[0] = loc_preds  : float [1, L, 4] sigmoid (x1,y1,x2,y2) in [0,1]
-        // out[1] = structure_probs : float [1, L, C] softmax over the C-class vocab
         var outList = outputs.ToList();
-        var (locTensor, probTensor) = ResolveOutputs(outList);
+        var locTensor = outList[0].AsTensor<float>();
+        var probTensor = outList[1].AsTensor<float>();
 
         // 3. Decode the structure-token sequence and the per-cell boxes (rescaled to crop pixels).
         var (structureTokens, cellBoxes) = Decode(locTensor, probTensor, origW, origH, ratio);
@@ -184,17 +310,30 @@ internal sealed class SlanetTableRecognizer : ITableRecognizer
     // Decode
     // ===============================================================================================
 
+    /// <summary>The number of values the location head emits per cell: a 4-point polygon (x,y)×4.</summary>
+    private const int LocStride = 8;
+
     /// <summary>
     /// Decodes the unrolled graph outputs into (a) the HTML structure-token list and (b) the per-cell
-    /// bounding boxes in the crop's pixel coordinates. Mirrors PaddleOCR's <c>TableLabelDecode.decode</c>
-    /// verbatim: take the per-step argmax of the structure probabilities, then for each step <c>idx</c>:
-    /// break when <c>idx &gt; 0 &amp;&amp; char == eos</c>; skip the ignored tokens (sos and eos); for every
-    /// td-token (<see cref="TdTokens"/>) decode and collect the matching location box; append the token to the
-    /// structure list. The box is rescaled by <c>_bbox_decode</c>: each coordinate is multiplied by the padded
-    /// canvas edge (488) and divided by the resize ratio, landing it back in the original crop's pixels.
+    /// bounding boxes in the crop's pixel coordinates. Mirrors PaddleOCR's <c>TableLabelDecode.decode</c>:
+    /// take the per-step argmax of the structure probabilities, then for each step <c>idx</c>: break when
+    /// <c>idx &gt; 0 &amp;&amp; char == eos</c>; skip the ignored tokens (sos and eos); for every td-token
+    /// (<see cref="TdTokens"/>) decode and collect the matching location box; append the token to the
+    /// structure list.
+    /// <para>
+    /// The REAL location head emits <b>8</b> values per step — a 4-point polygon
+    /// (x1,y1,x2,y2,x3,y3,x4,y4) in [0,1], NOT a 2-corner rectangle. PaddleOCR's <c>_bbox_decode</c> scales
+    /// the x components by <c>pad_w / ratio_w</c> and the y components by <c>pad_h / ratio_h</c>; here
+    /// <c>pad_w == pad_h == 488</c> and <c>ratio_w == ratio_h == ratio</c>, so every coordinate is scaled by
+    /// <c>488 / ratio == max(origH, origW)</c>, landing it back in the crop's pixels. Because the rest of the
+    /// pipeline (OCR↔cell matching, <see cref="TableResult.CellBounds"/>) is axis-aligned, we reduce the
+    /// polygon to its tight AABB <c>[minX,minY,maxX,maxY]</c> over the four corners. <i>Approximation:</i> for
+    /// a skewed cell this AABB is slightly larger than the quad, but the predicted polygons are near-axis-
+    /// aligned in practice and the matcher only needs overlap, so the effect is negligible.
+    /// </para>
     /// </summary>
-    /// <param name="locTensor">Location head, shape [1, L, 4], sigmoid (x1,y1,x2,y2) in [0,1].</param>
-    /// <param name="probTensor">Structure head, shape [1, L, C], softmax over the vocab.</param>
+    /// <param name="locTensor">Location head, shape [1, L, 8], 4-point polygon per step in [0,1].</param>
+    /// <param name="probTensor">Structure head, shape [1, L, 50], softmax over the vocab.</param>
     /// <param name="origW">Crop original width (for clamping the decoded boxes).</param>
     /// <param name="origH">Crop original height (for clamping the decoded boxes).</param>
     /// <param name="ratio">Resize ratio <c>488 / max(h,w)</c> (the shape_list's ratio_h == ratio_w).</param>
@@ -206,22 +345,20 @@ internal sealed class SlanetTableRecognizer : ITableRecognizer
         float ratio)
     {
         var probDims = probTensor.Dimensions;
-        int steps = probDims[1];
-        int numClasses = probDims[2];
+        int steps = probDims[^2];
+        int numClasses = probDims[^1];
 
         var locDims = locTensor.Dimensions;
-        int boxSteps = locDims[1];
+        int boxSteps = locDims[^2];
+        int locStride = locDims[^1]; // 8 for the real export; tolerate 4 in case of a rectangle export.
 
         // Flatten once so we can index without the per-element tensor-indexer overhead.
         float[] probs = probTensor.ToArray();
         float[] loc = locTensor.ToArray();
 
-        // _bbox_decode: bbox[0::2] *= pad_w; bbox[1::2] *= pad_h; bbox[0::2] /= ratio_w; bbox[1::2] /= ratio_h.
-        // Here pad_w == pad_h == InputSize (488) and ratio_w == ratio_h == ratio, so every coordinate is
-        // scaled by (InputSize / ratio) == max(origH, origW). Guard against a zero ratio.
+        // Every coordinate is scaled by (InputSize / ratio) == max(origH, origW). Guard against a zero ratio.
         float safeRatio = ratio > 0 ? ratio : 1f;
-        float xScale = InputSize / safeRatio;
-        float yScale = InputSize / safeRatio;
+        float scale = InputSize / safeRatio;
 
         var tokens = new List<string>(steps);
         var boxes = new List<float[]>();
@@ -257,21 +394,31 @@ internal sealed class SlanetTableRecognizer : ITableRecognizer
 
             string token = best >= 0 && best < _structureVocab.Count ? _structureVocab[best] : string.Empty;
 
-            // td-tokens decode and collect the location box at THIS step (lock-step with the structure step).
+            // td-tokens decode and collect the location polygon at THIS step (lock-step with the structure
+            // step), reducing the (up to 4) corner points to a clamped axis-aligned box.
             if (TdTokens.Contains(token) && t < boxSteps)
             {
-                int lBase = t * 4;
-                float x1 = loc[lBase + 0] * xScale;
-                float y1 = loc[lBase + 1] * yScale;
-                float x2 = loc[lBase + 2] * xScale;
-                float y2 = loc[lBase + 3] * yScale;
+                int lBase = t * locStride;
+                float minX = float.MaxValue, minY = float.MaxValue;
+                float maxX = float.MinValue, maxY = float.MinValue;
+
+                // Walk the polygon as (x,y) pairs: 4 corners for the [.,.,8] head, 2 for a [.,.,4] fallback.
+                for (int k = 0; k + 1 < locStride; k += 2)
+                {
+                    float px = loc[lBase + k] * scale;
+                    float py = loc[lBase + k + 1] * scale;
+                    if (px < minX) minX = px;
+                    if (py < minY) minY = py;
+                    if (px > maxX) maxX = px;
+                    if (py > maxY) maxY = py;
+                }
 
                 // Clamp into the crop so downstream overlays / matching stay inside the image.
-                x1 = Math.Clamp(x1, 0f, origW);
-                y1 = Math.Clamp(y1, 0f, origH);
-                x2 = Math.Clamp(x2, 0f, origW);
-                y2 = Math.Clamp(y2, 0f, origH);
-                boxes.Add(new[] { x1, y1, x2, y2 });
+                minX = Math.Clamp(minX, 0f, origW);
+                minY = Math.Clamp(minY, 0f, origH);
+                maxX = Math.Clamp(maxX, 0f, origW);
+                maxY = Math.Clamp(maxY, 0f, origH);
+                boxes.Add(new[] { minX, minY, maxX, maxY });
             }
 
             // Every non-ignored token (td or not) goes into the structure list, matching PaddleOCR.
@@ -496,16 +643,26 @@ internal sealed class SlanetTableRecognizer : ITableRecognizer
 
     /// <summary>
     /// Builds the full class-indexed vocabulary the structure head emits, replicating PaddleOCR's
-    /// <c>TableLabelDecode.__init__</c> exactly:
+    /// <c>TableLabelDecode.__init__</c>:
     /// <list type="number">
-    /// <item>load the <c>table_structure_dict.txt</c> tokens (one per line);</item>
-    /// <item>apply the <c>merge_no_span_structure</c> transform the SLANet_plus head was trained with —
-    /// append <c>&lt;td&gt;&lt;/td&gt;</c> if absent, then remove <c>&lt;td&gt;</c> if present;</item>
+    /// <item>load the <c>table_structure_dict_ch.txt</c> tokens (one per line). If the caller supplies none
+    /// (the model repo ships only the <c>.onnx</c>), fall back to the embedded
+    /// <see cref="DefaultTableDict"/>;</item>
     /// <item>wrap with the special tokens via <c>add_special_char</c>:
     /// <c>["sos"] + dict + ["eos"]</c>.</item>
     /// </list>
-    /// This yields a 30-class head: index 0 = <c>sos</c>, last index = <c>eos</c>. If the caller already
-    /// supplied a wrapped/merged list it is returned unchanged (idempotent).
+    /// <para>
+    /// <b>No merge transform.</b> The REAL exported SLANet_plus structure head has <b>50</b> classes — i.e.
+    /// <c>sos</c> + the 48-token dictionary + <c>eos</c> with <c>&lt;td&gt;</c> and <c>&lt;/td&gt;</c> as
+    /// <b>separate</b> tokens (verified by argmax-decoding the live model). PaddleOCR's
+    /// <c>merge_no_span_structure</c> (which appends <c>&lt;td&gt;&lt;/td&gt;</c> and drops <c>&lt;td&gt;</c>)
+    /// is <b>not</b> applied to this export; applying it would yield 50 classes too but shift every id and
+    /// mis-decode the sequence, so it is deliberately omitted here.
+    /// </para>
+    /// This yields index 0 = <c>sos</c>, last index = <c>eos</c>. If the caller already supplied a list
+    /// wrapped with sentinels it is returned unchanged (idempotent). If the supplied dictionary does not
+    /// produce a vocabulary matching the head's class count it is replaced by the embedded default, so the
+    /// recognizer stays correct even when fed a wrong/empty sidecar.
     /// </summary>
     private static IReadOnlyList<string> BuildVocab(IReadOnlyList<string> dict)
     {
@@ -521,7 +678,7 @@ internal sealed class SlanetTableRecognizer : ITableRecognizer
             tokens.RemoveAt(tokens.Count - 1);
         }
 
-        // Already wrapped with sentinels (e.g. a pre-built 30-class vocab) → return as-is.
+        // Already wrapped with sentinels (e.g. a pre-built vocab) → return as-is.
         bool hasSentinels = tokens.Count >= 2 &&
             (tokens[0] is "sos" or "beg" or "<sos>") &&
             (tokens[^1] is "eos" or "end" or "<eos>");
@@ -530,54 +687,17 @@ internal sealed class SlanetTableRecognizer : ITableRecognizer
             return tokens;
         }
 
-        // merge_no_span_structure=True: append "<td></td>" (if missing), then remove "<td>" (if present).
-        // The order matters — PaddleOCR appends first, removes second — so "<td></td>" lands at the end.
-        if (!tokens.Contains("<td></td>"))
+        // No usable dictionary supplied (the repo has no table_structure_dict.txt) → embed the canonical one.
+        if (tokens.Count == 0)
         {
-            tokens.Add("<td></td>");
+            tokens.AddRange(DefaultTableDict);
         }
 
-        tokens.Remove("<td>");
-
-        // add_special_char: ["sos"] + dict + ["eos"].
+        // add_special_char: ["sos"] + dict + ["eos"]. With the 48-token dict this is the 50-class head.
         var vocab = new List<string>(tokens.Count + 2) { "sos" };
         vocab.AddRange(tokens);
         vocab.Add("eos");
         return vocab;
-    }
-
-    /// <summary>
-    /// Resolves which of the two graph outputs is the location head ([·,·,4]) and which is the structure head
-    /// ([·,·,C], C&gt;4). Output ordering can differ between exports, so we identify them by their last
-    /// dimension rather than by position.
-    /// </summary>
-    private static (Tensor<float> Loc, Tensor<float> Prob) ResolveOutputs(List<DisposableNamedOnnxValue> outputs)
-    {
-        if (outputs.Count < 2)
-        {
-            throw new InvalidOperationException(
-                $"SLANet table model returned {outputs.Count} output(s); expected 2 (loc_preds + structure_probs).");
-        }
-
-        var a = outputs[0].AsTensor<float>();
-        var b = outputs[1].AsTensor<float>();
-
-        int aLast = a.Dimensions[^1];
-        int bLast = b.Dimensions[^1];
-
-        // The location head's last dim is 4 (x1,y1,x2,y2); the structure head's is the vocab size (>4).
-        if (aLast == 4 && bLast != 4)
-        {
-            return (a, b);
-        }
-
-        if (bLast == 4 && aLast != 4)
-        {
-            return (b, a);
-        }
-
-        // Fall back to the documented order: out[0]=loc, out[1]=structure.
-        return (a, b);
     }
 
     /// <inheritdoc />

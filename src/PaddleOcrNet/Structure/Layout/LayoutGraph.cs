@@ -6,34 +6,40 @@ namespace PaddleOcrNet.Structure.Layout;
 
 /// <summary>
 /// Shared ONNX-graph helpers for the PaddleX / PaddleOCR layout detectors (<see cref="PicoDetLayoutDetector"/>
-/// and <see cref="RtDetrLayoutDetector"/>). Both exports fuse the box decode + NMS into the graph and emit
-/// the same already-decoded detection layout — <c>[N, 6]</c> rows of
-/// <c>[class_id, score, x1, y1, x2, y2]</c> plus an <c>int32</c> <c>boxes_num</c> tensor giving the per-image
-/// row count (batch = 1). This class centralizes (a) resolving the image input name + fixed spatial size and
-/// the optional auxiliary inputs from the session metadata, (b) reading those fused detections out of the
-/// run results, and (c) thresholding + class-mapping + box-scaling them into <see cref="LayoutRegion"/>s.
+/// and <see cref="RtDetrLayoutDetector"/>). These exports fuse the box decode + NMS into the graph and emit
+/// already-decoded detections whose leading columns are <c>[class_id, score, x1, y1, x2, y2]</c>, plus an
+/// <c>int32</c> <c>boxes_num</c> tensor giving the per-image row count (batch = 1). The PicoDet / RT-DETR-plus
+/// exports use a 6-wide row; the re-hosted PP-DocLayoutV3 RT-DETR export emits a <b>7-wide</b> row
+/// (<c>[class_id, score, x1, y1, x2, y2, extra]</c>, the trailing column being an in-graph rank/index that is
+/// ignored), confirmed by loading the ONNX and printing the output. The detection row width is therefore
+/// detected per-run rather than fixed. This class centralizes (a) resolving the image input name + fixed
+/// spatial size and the optional auxiliary inputs from the session metadata, (b) reading those fused
+/// detections out of the run results, and (c) thresholding + class-mapping + box-scaling them into
+/// <see cref="LayoutRegion"/>s.
 /// </summary>
 internal static class LayoutGraph
 {
-    /// <summary>The fused-decode detection row width: <c>[class_id, score, x1, y1, x2, y2]</c>.</summary>
-    private const int RowWidth = 6;
-
     /// <summary>
     /// A flat view over the graph's fused-decode output: <see cref="Rows"/> detections, each a
-    /// <see cref="RowWidth"/>-wide run of <c>[class_id, score, x1, y1, x2, y2]</c> in <see cref="Data"/>.
+    /// <see cref="RowWidth"/>-wide run whose leading columns are <c>[class_id, score, x1, y1, x2, y2]</c> in
+    /// <see cref="Data"/> (any trailing columns past the box corners are ignored).
     /// </summary>
     public readonly struct Detections
     {
-        /// <summary>The contiguous <c>[Rows × 6]</c> detection values, row-major.</summary>
+        /// <summary>The contiguous <c>[Rows × RowWidth]</c> detection values, row-major.</summary>
         public readonly float[] Data;
 
         /// <summary>The number of valid detection rows.</summary>
         public readonly int Rows;
 
-        public Detections(float[] data, int rows)
+        /// <summary>The per-row stride: 6 for the PicoDet / RT-DETR-plus exports, 7 for PP-DocLayoutV3.</summary>
+        public readonly int RowWidth;
+
+        public Detections(float[] data, int rows, int rowWidth)
         {
             Data = data;
             Rows = rows;
+            RowWidth = rowWidth;
         }
     }
 
@@ -83,15 +89,21 @@ internal static class LayoutGraph
         return null;
     }
 
+    /// <summary>The minimum detection row width: <c>[class_id, score, x1, y1, x2, y2]</c>.</summary>
+    private const int MinRowWidth = 6;
+
     /// <summary>
-    /// Reads the fused-decode detections out of the run <paramref name="results"/>. Picks the first float
-    /// output whose element count is a multiple of <see cref="RowWidth"/> as the <c>[N,6]</c> detection
-    /// tensor, and — when present — uses the companion <c>int32</c> <c>boxes_num</c> tensor to cap the row
-    /// count to the actual number of valid boxes (otherwise every <c>[N,6]</c> row is taken).
+    /// Reads the fused-decode detections out of the run <paramref name="results"/>. Picks the float output
+    /// shaped <c>[N, W]</c> (W ≥ 6) as the detection tensor — its leading six columns are
+    /// <c>[class_id, score, x1, y1, x2, y2]</c> and any trailing column is ignored — and uses the companion
+    /// <c>int32</c> <c>boxes_num</c> tensor (when present) to cap the row count to the actual number of valid
+    /// boxes (otherwise every row is taken). The per-row stride W is taken from the tensor's declared shape so
+    /// both the 6-wide (PicoDet / RT-DETR-plus) and the 7-wide (PP-DocLayoutV3) exports parse correctly.
     /// </summary>
     public static Detections ReadDetections(IDisposableReadOnlyCollection<DisposableNamedOnnxValue> results)
     {
         float[]? data = null;
+        int rowWidth = 0;
         int? boxesNum = null;
 
         foreach (var value in results)
@@ -103,24 +115,35 @@ internal static class LayoutGraph
                 continue;
             }
 
-            if (data is null && value.Value is Tensor<float> floatTensor)
+            if (data is null && value.Value is Tensor<float> floatTensor && floatTensor.Length > 0)
             {
-                var arr = floatTensor.ToArray();
-                if (arr.Length % RowWidth == 0 && arr.Length > 0)
+                // The detection tensor is 2-D [N, W]; prefer its declared last-dimension stride. Fall back to
+                // a 6/7-wide divisibility check for exports that flatten the output to a 1-D buffer.
+                var dims = floatTensor.Dimensions;
+                int w = dims.Length >= 2 ? dims[dims.Length - 1] : 0;
+                if (w < MinRowWidth)
                 {
-                    data = arr;
+                    w = floatTensor.Length % MinRowWidth == 0 ? MinRowWidth
+                        : floatTensor.Length % 7 == 0 ? 7
+                        : 0;
+                }
+
+                if (w >= MinRowWidth && floatTensor.Length % w == 0)
+                {
+                    data = floatTensor.ToArray();
+                    rowWidth = w;
                 }
             }
         }
 
         if (data is null)
         {
-            return new Detections(Array.Empty<float>(), 0);
+            return new Detections(Array.Empty<float>(), 0, MinRowWidth);
         }
 
-        int totalRows = data.Length / RowWidth;
+        int totalRows = data.Length / rowWidth;
         int rows = boxesNum is int n && n >= 0 ? Math.Min(n, totalRows) : totalRows;
-        return new Detections(data, rows);
+        return new Detections(data, rows, rowWidth);
     }
 
     /// <summary>
@@ -141,11 +164,12 @@ internal static class LayoutGraph
         int origH)
     {
         var data = detections.Data;
+        int rowWidth = detections.RowWidth;
         var regions = new List<LayoutRegion>();
 
         for (int i = 0; i < detections.Rows; i++)
         {
-            int baseIdx = i * RowWidth;
+            int baseIdx = i * rowWidth;
             float score = data[baseIdx + 1];
             if (score <= scoreThreshold)
             {
