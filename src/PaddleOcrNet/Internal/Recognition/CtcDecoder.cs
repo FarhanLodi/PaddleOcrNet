@@ -32,11 +32,26 @@ internal static class CtcDecoder
     /// The ordered CTC label set in the Paddle convention: index 0 is the blank token, the remaining
     /// indices map to characters (see <see cref="CharacterDictionary"/>).
     /// </param>
+    /// <param name="selectable">
+    /// Optional per-class allow mask (parallel to <paramref name="vocab"/>) implementing a recognition
+    /// <c>Allowlist</c>/<c>Blocklist</c>. When supplied, a class whose entry is <c>false</c> is treated as if
+    /// its logit were −∞ at every timestep, so it can never win the argmax and is never emitted; the blank
+    /// must remain selectable (index 0) or decoding breaks. Build it once per call with
+    /// <see cref="CharacterDictionary.BuildSelectableMask"/>. <c>null</c> (the default) disables masking and
+    /// reproduces the unfiltered result byte-for-byte. Confidence is still the mean of the chosen (masked)
+    /// classes' probabilities, consistent with the unmasked path.
+    /// </param>
     /// <returns>The decoded <c>Text</c> and its mean per-character <c>Confidence</c> (0–1).</returns>
     public static (string Text, float Confidence) GreedyDecode(
-        ReadOnlySpan<float> logits, int timeSteps, int numClasses, IReadOnlyList<string> vocab)
+        ReadOnlySpan<float> logits, int timeSteps, int numClasses, IReadOnlyList<string> vocab,
+        bool[]? selectable = null)
     {
         ArgumentNullException.ThrowIfNull(vocab);
+
+        // A mask whose length disagrees with the class count can't be safely indexed in the hot loop; ignore
+        // it (decode unfiltered) rather than risk an out-of-range read mid-batch.
+        if (selectable is not null && selectable.Length != numClasses)
+            selectable = null;
 
         var sb = new StringBuilder(timeSteps);
         double confidenceSum = 0d;
@@ -51,10 +66,14 @@ internal static class CtcDecoder
             int offset = t * numClasses;
 
             // Per-timestep argmax over the C classes, tracking the max probability for the confidence.
+            // When a selectable mask is present, non-selectable classes are skipped (their logit is treated
+            // as −∞). Class 0 (blank) is always selectable, so seeding the search with it is always valid.
             int bestIndex = 0;
             float bestProb = logits[offset];
             for (int c = 1; c < numClasses; c++)
             {
+                if (selectable is not null && !selectable[c])
+                    continue;
                 float p = logits[offset + c];
                 if (p > bestProb)
                 {

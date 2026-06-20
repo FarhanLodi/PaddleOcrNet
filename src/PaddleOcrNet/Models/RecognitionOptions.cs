@@ -81,17 +81,50 @@ public sealed record RecognitionOptions
     public IReadOnlyList<string>? AutoDetectCandidates { get; init; }
 
     /// <summary>
-    /// Restrict recognition to this exact set of characters (e.g. <c>"0123456789"</c> for an amount).
-    /// Anything outside the set is never emitted, which sharply improves accuracy on constrained fields.
-    /// Null = allow every character. Mutually exclusive with <see cref="Blocklist"/> (allowlist wins).
+    /// Restrict recognition to this exact set of dictionary tokens (e.g.
+    /// <c>["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]</c> for an amount). Anything outside the set is
+    /// never emitted, which sharply improves accuracy on constrained fields. Each entry is one dictionary
+    /// token — usually a single character, but matched as a whole string so multi-character tokens (some
+    /// PaddleOCR dicts have them) work too. Null/empty = allow every character.
+    /// <para>
+    /// The CTC blank is always kept (decoding requires it), and the space class stays available so words can
+    /// still be separated even if you omit space from the allowlist — add space to <see cref="Blocklist"/> to
+    /// suppress it. <see cref="Blocklist"/> is still honored when an allowlist is set and takes precedence on
+    /// conflict (a token in both lists is blocked).
+    /// </para>
+    /// <para>
+    /// Use the <see cref="FromCharacters(string)"/> helper to build a list from a flat string such as
+    /// <c>"0123456789"</c>.
+    /// </para>
     /// </summary>
-    public string? Allowlist { get; init; }
+    public IReadOnlyCollection<string>? Allowlist { get; init; }
 
     /// <summary>
-    /// Forbid these characters from being emitted (e.g. exclude punctuation). Null/empty = no block.
-    /// Ignored when <see cref="Allowlist"/> is set.
+    /// Forbid these dictionary tokens from being emitted (e.g. exclude punctuation). Each entry is one
+    /// dictionary token, matched as a whole string. Null/empty = no block. Applies whether or not
+    /// <see cref="Allowlist"/> is set, and wins over the allowlist on conflict (the CTC blank is never
+    /// blocked). Use <see cref="FromCharacters(string)"/> to build a list from a flat string.
     /// </summary>
-    public string? Blocklist { get; init; }
+    public IReadOnlyCollection<string>? Blocklist { get; init; }
+
+    /// <summary>
+    /// Convenience helper that explodes a flat string of single characters (e.g. <c>"0123456789"</c>) into the
+    /// per-token list shape expected by <see cref="Allowlist"/> / <see cref="Blocklist"/>. Returns an empty
+    /// list for null/empty input. Use this for the common single-character case; build the list directly when
+    /// you need multi-character dictionary tokens.
+    /// </summary>
+    /// <param name="characters">The characters to include, one token per character.</param>
+    /// <returns>One single-character string per input character.</returns>
+    public static IReadOnlyList<string> FromCharacters(string? characters)
+    {
+        if (string.IsNullOrEmpty(characters))
+            return Array.Empty<string>();
+
+        var list = new List<string>(characters.Length);
+        foreach (char c in characters)
+            list.Add(c.ToString());
+        return list;
+    }
 
     /// <summary>
     /// Restrict OCR to a rectangular sub-region of the image (e.g. only the bottom banner of a sign).

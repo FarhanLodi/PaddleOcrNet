@@ -42,17 +42,17 @@ public static class PdfOcrExtensions
         var langs = languages as string[] ?? languages.ToArray();
 
         var pages = new List<PdfPageResult>();
-        await PdfRasterizer.ForEachPageAsync(pdfBytes, pdfOptions.Dpi, pdfOptions.MaxPages, pdfOptions.MaxPagePixels, async (index, count, image) =>
+        await PdfRasterizer.ForEachPageAsync(pdfBytes, pdfOptions, async (pageNumber, count, image) =>
         {
             var ocr = await service.ExtractTextFromImage(image, langs, options, cancellationToken).ConfigureAwait(false);
             pages.Add(new PdfPageResult
             {
-                PageNumber = index + 1,
+                PageNumber = pageNumber,
                 Ocr = ocr,
                 PixelWidth = image.Width,
                 PixelHeight = image.Height,
             });
-            pdfOptions.Progress?.Report(new PdfPageProgress(index + 1, count));
+            pdfOptions.Progress?.Report(new PdfPageProgress(pageNumber, count));
         }, cancellationToken).ConfigureAwait(false);
 
         return new PdfOcrResult { Pages = pages };
@@ -101,18 +101,18 @@ public static class PdfOcrExtensions
         var builder = new SearchablePdfBuilder();
         var pages = new List<PdfPageResult>();
 
-        await PdfRasterizer.ForEachPageAsync(pdfBytes, pdfOptions.Dpi, pdfOptions.MaxPages, pdfOptions.MaxPagePixels, async (index, count, image) =>
+        await PdfRasterizer.ForEachPageAsync(pdfBytes, pdfOptions, async (pageNumber, count, image) =>
         {
             var ocr = await service.ExtractTextFromImage(image, langs, options, cancellationToken).ConfigureAwait(false);
             builder.AddPage(image, ocr, pdfOptions.Dpi, pdfOptions.JpegQuality);
             pages.Add(new PdfPageResult
             {
-                PageNumber = index + 1,
+                PageNumber = pageNumber,
                 Ocr = ocr,
                 PixelWidth = image.Width,
                 PixelHeight = image.Height,
             });
-            pdfOptions.Progress?.Report(new PdfPageProgress(index + 1, count));
+            pdfOptions.Progress?.Report(new PdfPageProgress(pageNumber, count));
         }, cancellationToken).ConfigureAwait(false);
 
         return (new PdfOcrResult { Pages = pages }, builder.Build());

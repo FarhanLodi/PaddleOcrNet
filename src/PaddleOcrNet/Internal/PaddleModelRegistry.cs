@@ -44,22 +44,26 @@ internal sealed record RecognizerPack(
 ///         thai, greek, telugu, tamil, chinese_cht, eslav), each with its matching ppocr dictionary.</item>
 /// </list>
 /// <para>
-/// <b>SHA256 values are placeholders.</b> The assets are not yet published, so every checksum is absent
-/// (see <see cref="Checksums"/>): downloads succeed only under
-/// <see cref="Services.ModelDownloadOptions.AllowUnverifiedModels"/>. Regenerate and populate
-/// <see cref="Checksums"/> from the exact files once the maintainer uploads them to the model repo; the
-/// verification path in <see cref="ModelDownloadManager"/> is already wired and will start enforcing them
-/// automatically with no other change.
+/// <b>The core PP-OCRv5 working set is published and checksum-enforced.</b> The detectors, every
+/// recognizer pack + dictionary, both orientation classifiers, UVDoc, the LaTeX-OCR formula files, and the
+/// structure models actually exported to ONNX (<c>PP-DocLayoutV3</c>, <c>SLANet_plus</c>) are hosted at
+/// <see cref="DefaultBaseUrl"/> (the public <c>PaddleOcrNet/PaddleOcrNet-models</c> repo) and have real
+/// <see cref="Checksums"/> that <see cref="ModelDownloadManager"/> verifies after download. A handful of
+/// <i>secondary</i> structure models referenced below — the seal detector, the SLANeXt / PicoDet layout
+/// variants, the RT-DETR table-cell detectors, and the table classifier — are <b>not yet exported to ONNX
+/// and so are not published</b>; their <see cref="Checksums"/> entries are absent, so they fail closed
+/// (download accepted only under <see cref="Services.ModelDownloadOptions.AllowUnverifiedModels"/>) until
+/// the export toolchain (<c>tools/export_onnx.py</c>) produces and uploads them.
 /// </para>
 /// </summary>
 internal static class PaddleModelRegistry
 {
     /// <summary>
-    /// Base URL where the exported PP-OCRv5 ONNX assets and dictionaries are hosted. This is a
-    /// <b>placeholder</b> repository path; override it at runtime via
-    /// <see cref="Services.ModelDownloadOptions.BaseUrlOverride"/> or the
-    /// <c>PADDLEOCRNET_MODEL_BASE_URL</c> environment variable (both honored by
-    /// <see cref="ModelDownloadManager"/>) to point at the real model host or a private mirror.
+    /// Base URL where the exported PP-OCRv5 ONNX assets and dictionaries are hosted: the public
+    /// <c>PaddleOcrNet/PaddleOcrNet-models</c> HuggingFace repo, which is live and serves the core working
+    /// set anonymously. Override it at runtime via <see cref="Services.ModelDownloadOptions.BaseUrlOverride"/>
+    /// or the <c>PADDLEOCRNET_MODEL_BASE_URL</c> environment variable (both honored by
+    /// <see cref="ModelDownloadManager"/>) to point at a private mirror.
     /// </summary>
     public const string DefaultBaseUrl =
         "https://huggingface.co/PaddleOcrNet/PaddleOcrNet-models/resolve/main";
@@ -128,13 +132,14 @@ internal static class PaddleModelRegistry
     /// SHA256 checksums (upper-case hex) of every published asset, verified after download by
     /// <see cref="ModelDownloadManager"/>.
     /// <para>
-    /// PLACEHOLDER: this table is intentionally empty because the PP-OCRv5 assets have not been exported
-    /// and uploaded yet, so no real hashes exist. While an entry is absent, <see cref="Asset"/> hands the
-    /// downloader a <c>null</c> <see cref="ModelAsset.Sha256"/> and the download is only accepted under
-    /// <see cref="Services.ModelDownloadOptions.AllowUnverifiedModels"/> (the fail-open path) — otherwise it
-    /// is rejected. <b>Regenerate every value below from the exact uploaded files</b> (e.g.
-    /// <c>Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)))</c>) and fill them in; the verifier
-    /// then enforces them with no further code change. Keys must equal the asset <see cref="ModelAsset.FileName"/>.
+    /// Populated from the files published to <see cref="DefaultBaseUrl"/> (regenerate with
+    /// <c>tools/stage_and_checksum.py</c>, which emits this exact block). Every entry below is enforced:
+    /// <see cref="ModelDownloadManager"/> rejects a download whose SHA256 does not match. Assets <i>not</i>
+    /// listed here (the secondary structure models that are not yet exported — seal detector, SLANeXt /
+    /// PicoDet layout variants, table-cell detectors, table classifier) get a <c>null</c>
+    /// <see cref="ModelAsset.Sha256"/> from <see cref="Asset"/> and so fail closed unless
+    /// <see cref="Services.ModelDownloadOptions.AllowUnverifiedModels"/> is set. Keys must equal the asset
+    /// <see cref="ModelAsset.FileName"/>.
     /// </para>
     /// </summary>
     private static readonly FrozenDictionary<string, string> Checksums =

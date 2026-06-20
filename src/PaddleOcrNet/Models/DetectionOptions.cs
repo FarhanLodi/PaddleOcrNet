@@ -64,6 +64,10 @@ public sealed record DetectionOptions
     /// </summary>
     public bool UseDilation { get; init; }
 
+    // TODO(box-type-poly): PaddleOCR's det_box_type ("quad" vs "poly") is not yet exposed. Adding it
+    // means emitting many-point polygons (poly mode) instead of 4-point quads, which ripples into the
+    // shared output models (TextQuad / DetectedRegion) owned by other code. Deferred to a dedicated task.
+
     /// <summary>Discard detected boxes smaller than this side length (px). PaddleOCR's <c>det_db_min_size</c>. Default 3.</summary>
     public int MinSize { get; init; } = 3;
 

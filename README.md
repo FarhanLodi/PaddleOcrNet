@@ -5,13 +5,16 @@
 <h1 align="center">PaddleOcrNet</h1>
 
 <p align="center">
-  <strong>Native .NET document OCR — powered by PaddleOCR's PP-OCRv5 models, running on ONNX Runtime.</strong><br/>
-  No Python. No native PaddlePaddle. No sidecar server. Just a NuGet package.
+  <strong>The complete PaddleOCR document pipeline — natively in .NET, on ONNX Runtime.</strong><br/>
+  Turn scans, photos, and PDFs into text, tables, formulas — and answers.<br/>
+  <em>No Python. No native PaddlePaddle. No sidecar server. Just a NuGet package.</em>
 </p>
 
 <p align="center">
   <a href="https://www.nuget.org/packages/PaddleOcrNet"><img src="https://img.shields.io/nuget/v/PaddleOcrNet.svg?label=NuGet&color=004880" alt="NuGet"/></a>
   <a href="https://www.nuget.org/packages/PaddleOcrNet"><img src="https://img.shields.io/nuget/dt/PaddleOcrNet.svg?label=Downloads&color=004880" alt="Downloads"/></a>
+  <img src="https://img.shields.io/badge/models-PP--OCRv5%20%2B%20PP--StructureV3-ff6f00" alt="PP-OCRv5 + PP-StructureV3"/>
+  <img src="https://img.shields.io/badge/languages-80%2B-1f6feb" alt="80+ languages"/>
   <img src="https://img.shields.io/badge/.NET-10.0-512BD4" alt=".NET 10"/>
   <img src="https://img.shields.io/badge/AOT-ready-2ea44f" alt="AOT ready"/>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"/></a>
@@ -19,11 +22,12 @@
 
 ---
 
-PaddleOcrNet turns scanned documents, photos, and PDFs into structured text. It runs the full
-**PP-OCRv5 + PP-StructureV3** pipeline — text detection, recognition, orientation correction, layout
+PaddleOcrNet turns scanned documents, photos, and PDFs into structured text — and into answers. It runs the
+full **PP-OCRv5 + PP-StructureV3** pipeline — text detection, recognition, orientation correction, layout
 analysis, table extraction, and formula recognition — entirely in managed .NET on
-[ONNX Runtime](https://onnxruntime.ai/). Models download and cache on first use; everything after that
-runs in-process, offline-capable, and trim/AOT-friendly.
+[ONNX Runtime](https://onnxruntime.ai/), then layers on **LLM-backed key-information extraction and document
+Q&A** through any provider you choose. Models download and cache on first use; everything after that runs
+in-process, offline-capable, and trim/AOT-friendly.
 
 ## Highlights
 
@@ -33,7 +37,9 @@ runs in-process, offline-capable, and trim/AOT-friendly.
 - **Automatic language detection** — pass `"auto"` and PaddleOcrNet identifies the script and pulls the
   right model on demand (Python PaddleOCR requires you to name the language up front).
 - **Document understanding** — `AnalyzeDocumentAsync` returns layout regions, reading order, tables as
-  HTML, and formulas as LaTeX, and serializes the whole document to **Markdown or JSON**.
+  HTML, and formulas as LaTeX, and serializes the whole document to **Markdown, HTML, JSON, Word, or Excel**.
+- **Ask your documents** — LLM-backed key-information extraction and Q&A, provider-agnostic: bring your own
+  `IChatModel` or use the built-in OpenAI-compatible adapter (OpenAI, Azure, Ollama, vLLM, Groq, …).
 - **PDF in, searchable PDF out** — rasterize and OCR PDFs, or emit a searchable PDF with an invisible
   text layer.
 - **Robust by design** — singleton-safe, thread-safe ONNX sessions; DI + health checks; OpenTelemetry
@@ -187,8 +193,38 @@ share across threads. Call `WarmUp(...)` to pre-load models off the request path
 ### Output formats
 
 `OcrResult` exports to plain text, **JSON**, **hOCR**, **ALTO XML**, and TSV; documents export to
-**Markdown** and **JSON**; PDFs can be re-emitted as **searchable PDFs**. All exporters are AOT-safe via a
-source-generated JSON context.
+**Markdown**, **HTML**, **JSON**, **Word (.docx)**, and **Excel (.xlsx)** (with native tables / merged
+cells); multi-page Markdown can be stitched with `ConcatenateMarkdownPages`; PDFs can be re-emitted as
+**searchable PDFs**. All exporters are AOT-safe via a source-generated JSON context.
+
+---
+
+## Document intelligence (LLM-backed KIE & Q&A)
+
+The `PaddleOcrNet.Intelligence` layer adds key-information extraction and document Q&A on top of OCR/structure
+analysis — **provider-agnostic**. Plug in any LLM by implementing `IChatModel`, or use the built-in
+OpenAI-compatible adapter, which targets OpenAI, Azure OpenAI, Ollama, vLLM, LM Studio, Groq, Together,
+DeepSeek, Mistral, and any other OpenAI-style `/chat/completions` endpoint.
+
+```csharp
+using PaddleOcrNet.Intelligence;
+
+// Pick any provider — here OpenAI; swap for .AzureOpenAi(...), .Ollama(...), or .Generic(...).
+var chat = new OpenAiCompatibleChatModel(OpenAiCompatibleOptions.OpenAi(apiKey, "gpt-4o-mini"));
+var docs = new DocumentIntelligenceEngine(ocrService, chat);
+
+// Key-information extraction (returns a JSON-grounded key → value result).
+var info = await docs.ExtractKeyInformationAsync("invoice.png", new[] { "Invoice Number", "Vendor", "Total" });
+Console.WriteLine(info["Total"]);
+
+// Document question-answering.
+var answer = await docs.AskAsync("contract.pdf", "What is the termination notice period?");
+Console.WriteLine(answer.Answer);
+```
+
+DI: `services.AddOpenAiCompatibleChatModel(...)` (or `AddChatModel(myModel)`) + `AddPaddleOcrDocumentIntelligence()`.
+The model is grounded on the parsed document Markdown by default; set `DocumentIntelligenceOptions.UseVision`
+to also attach the page image when the model is multimodal.
 
 ---
 
@@ -208,11 +244,13 @@ attribution. The library itself is **MIT** — see [LICENSE](LICENSE).
 ## Roadmap
 
 Already shipped: detection, recognition (multilingual + auto-detect), orientation, unwarp, layout, tables,
-formulas, reading order, Markdown/JSON export, and the PDF pipeline. Under consideration:
+formulas, reading order, Markdown/HTML/JSON/DOCX/XLSX export, the PDF pipeline, and LLM-backed document
+intelligence (key-information extraction + Q&A). Under consideration:
 
-- Seal text recognition (pending a hostable ONNX model)
-- Key-information extraction (SER/RE)
-- DOCX / XLSX document export
+- Seal text recognition, SLANeXt/PicoDet layout variants, and table-cell detection — pending the ONNX
+  export of those models (the code paths exist; the assets need exporting via `tools/export_onnx.py`)
+- On-device (ONNX) KIE as an offline alternative to the LLM path
+- PP-OCRv6 model line
 - Additional per-language recognizer packs
 
 ---

@@ -226,7 +226,7 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
             // highest-confidence reading across all candidate packs.
             IReadOnlyList<(string Text, float Confidence)> readings = auto
                 ? await RecognizeAutoAsync(crops, options, detectedLanguagesSink, cancellationToken).ConfigureAwait(false)
-                : (await GetOrLoadRecognizerAsync(fixedPack!, cancellationToken).ConfigureAwait(false)).Recognize(crops);
+                : (await GetOrLoadRecognizerAsync(fixedPack!, cancellationToken).ConfigureAwait(false)).Recognize(crops, options);
 
             // Drop low-confidence / empty readings (PaddleOCR's drop_score), then keep each surviving
             // line paired with its source polygon.
@@ -310,7 +310,7 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
         {
             // No candidate resolved: fall back to the default recognizer so we still return readings.
             var fallback = await GetOrLoadRecognizerAsync(PaddleModelRegistry.MobileRecognizer, cancellationToken).ConfigureAwait(false);
-            return fallback.Recognize(crops);
+            return fallback.Recognize(crops, options);
         }
 
         int n = crops.Count;
@@ -324,7 +324,7 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
             cancellationToken.ThrowIfCancellationRequested();
             var pack = candidatePacks[p];
             var recognizer = await GetOrLoadRecognizerAsync(pack, cancellationToken).ConfigureAwait(false);
-            var readings = recognizer.Recognize(crops);
+            var readings = recognizer.Recognize(crops, options);
 
             double confSum = 0;
             for (int i = 0; i < n && i < readings.Count; i++)

@@ -7,13 +7,15 @@ namespace PaddleOcrNet.Internal.Detection;
 /// <summary>
 /// DB (Differentiable Binarization) post-processing: turns the network's per-pixel text-probability map
 /// into ordered text quadrilaterals. Mirrors PaddleOCR's <c>DBPostProcess</c> (and RapidOcrNet's port):
-/// binarize the probability map at <see cref="DetectionOptions.DetThreshold"/>, extract connected regions
-/// (via <see cref="ConnectedComponents"/>), fit a minimum-area quad to each region
-/// (<see cref="MinAreaRect"/>), score the quad against the probability map (<c>box_score_fast</c>), drop
-/// low-scoring or tiny boxes, then "unclip" (expand) each surviving quad outward by
-/// <see cref="DetectionOptions.UnclipRatio"/> using Clipper2's polygon offsetting and re-fit a quad to the
-/// inflated polygon. Coordinates are in the detector's resized-image space; the caller rescales them back
-/// to the original image.
+/// binarize the probability map at <see cref="DetectionOptions.DetThreshold"/>, optionally dilate that
+/// binary map with a 2x2 kernel when <see cref="DetectionOptions.UseDilation"/> is set, extract connected
+/// regions (via <see cref="ConnectedComponents"/>), fit a minimum-area quad to each region
+/// (<see cref="MinAreaRect"/>), score it against the probability map — <c>box_score_fast</c> (the quad's
+/// bounding-box crop) or <c>box_score_slow</c> (the exact region mask) per
+/// <see cref="DetectionOptions.ScoreMode"/> — drop low-scoring or tiny boxes, then "unclip" (expand) each
+/// surviving quad outward by <see cref="DetectionOptions.UnclipRatio"/> using Clipper2's polygon offsetting
+/// and re-fit a quad to the inflated polygon. Coordinates are in the detector's resized-image space; the
+/// caller rescales them back to the original image.
 /// </summary>
 internal static class DBPostProcess
 {
@@ -53,6 +55,13 @@ internal static class DBPostProcess
             bitmap[i] = prob[i] > thresh ? (byte)1 : (byte)0;
         }
 
+        // use_dilation: bridge thin/broken strokes with cv2.dilate(bitmap, np.ones((2,2))) before
+        // contour extraction. Off by default, so the unchanged path stays byte-identical.
+        if (options.UseDilation)
+        {
+            bitmap = Morphology.Dilate2x2(bitmap, width, height);
+        }
+
         // Connected-component (contour/region) extraction over the binary map.
         var (labels, components) = ConnectedComponents.Label(bitmap, width, height);
 
@@ -78,8 +87,12 @@ internal static class DBPostProcess
                 continue;
             }
 
-            // box_score_fast: mean probability inside the quad's bounding box under a polygon mask.
-            float score = BoxScoreFast(prob, width, height, quad);
+            // Score the candidate against the probability map (PaddleOCR scores BEFORE unclip):
+            //   Fast — mean probability over the quad's bounding-box crop under a polygon mask.
+            //   Slow — mean probability over the region's exact pixel mask (the contour interior).
+            float score = options.ScoreMode == DetectionScoreMode.Slow
+                ? BoxScoreSlow(prob, width, regionPoints)
+                : BoxScoreFast(prob, width, height, quad);
             if (score < boxThresh)
             {
                 continue;
@@ -207,6 +220,31 @@ internal static class DBPostProcess
         }
 
         return count == 0 ? 0f : (float)(sum / count);
+    }
+
+    /// <summary>
+    /// PaddleOCR's <c>box_score_slow</c>: the mean probability over the region's exact mask rather than the
+    /// quad's bounding-box crop. PaddleOCR rasterizes the contour polygon with <c>cv2.fillPoly</c> and
+    /// averages the probability map under it; because <paramref name="regionPoints"/> are precisely the
+    /// connected component's labeled pixels, that mask equals this pixel set, so we average directly over it
+    /// (no rasterization needed). This is slightly slower but more accurate than <see cref="BoxScoreFast"/>
+    /// for slanted or non-rectangular regions, where the bounding-box crop bleeds in background probability.
+    /// </summary>
+    private static float BoxScoreSlow(ReadOnlySpan<float> prob, int width, IReadOnlyList<OcrPoint> regionPoints)
+    {
+        if (regionPoints.Count == 0)
+        {
+            return 0f;
+        }
+
+        double sum = 0;
+        for (int i = 0; i < regionPoints.Count; i++)
+        {
+            var p = regionPoints[i];
+            sum += prob[(int)p.Y * width + (int)p.X];
+        }
+
+        return (float)(sum / regionPoints.Count);
     }
 
     /// <summary>Even-odd ray-cast point-in-polygon test at pixel-center (x, y).</summary>

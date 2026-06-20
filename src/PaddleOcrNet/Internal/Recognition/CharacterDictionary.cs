@@ -98,6 +98,95 @@ internal static class CharacterDictionary
     }
 
     /// <summary>
+    /// Builds a per-class "selectable" mask over an already-built CTC <paramref name="vocab"/> that the
+    /// decoder consults to honor a recognition <c>Allowlist</c>/<c>Blocklist</c>. The mask is indexed by
+    /// class index (parallel to <paramref name="vocab"/>) and is intended to be built once per recognition
+    /// call so the decode hot loop stays allocation-free.
+    /// <para>
+    /// Semantics (matching <see cref="Models.RecognitionOptions.Allowlist"/> /
+    /// <see cref="Models.RecognitionOptions.Blocklist"/>):
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description>
+    /// Returns <c>null</c> when both <paramref name="allowlist"/> and <paramref name="blocklist"/> are
+    /// null/empty — the caller then decodes without any masking (byte-identical to the unfiltered path).
+    /// </description></item>
+    /// <item><description>
+    /// <b>Allowlist</b>: when non-empty, only classes whose vocab token is in the allowlist are selectable.
+    /// The CTC <see cref="Blank"/> (index 0) is <em>always</em> selectable regardless of the allowlist —
+    /// removing it would break best-path decoding. The literal space class stays selectable when it is part
+    /// of the dictionary and the caller did not explicitly block it (an allowlist that omits space still lets
+    /// the model separate words; block space explicitly to suppress it).
+    /// </description></item>
+    /// <item><description>
+    /// <b>Blocklist</b>: any class whose vocab token is in the blocklist is made non-selectable. The blocklist
+    /// is applied after the allowlist, so it wins on conflict (a token in both lists is blocked). The blank is
+    /// never blocked even if it somehow appears in the list, so decoding always terminates.
+    /// </description></item>
+    /// </list>
+    /// Matching is by exact token string, so multi-character dictionary tokens (PaddleOCR dicts are one token
+    /// per line, occasionally multi-char) are matched as a whole rather than per character.
+    /// </summary>
+    /// <param name="vocab">The CTC vocabulary (index 0 is the blank) the mask is parallel to.</param>
+    /// <param name="allowlist">Tokens to permit, or null/empty for "no allowlist".</param>
+    /// <param name="blocklist">Tokens to forbid, or null/empty for "no blocklist".</param>
+    /// <returns>
+    /// A <c>bool[]</c> of length <c><paramref name="vocab"/>.Count</c> where <c>true</c> means the class may be
+    /// emitted, or <c>null</c> when no filtering is requested.
+    /// </returns>
+    public static bool[]? BuildSelectableMask(
+        IReadOnlyList<string> vocab,
+        IReadOnlyCollection<string>? allowlist,
+        IReadOnlyCollection<string>? blocklist)
+    {
+        ArgumentNullException.ThrowIfNull(vocab);
+
+        bool hasAllow = allowlist is { Count: > 0 };
+        bool hasBlock = blocklist is { Count: > 0 };
+        if (!hasAllow && !hasBlock)
+            return null;
+
+        // Ordinal sets so matching is culture-independent and O(1) per token.
+        var allow = hasAllow ? new HashSet<string>(allowlist!, StringComparer.Ordinal) : null;
+        var block = hasBlock ? new HashSet<string>(blocklist!, StringComparer.Ordinal) : null;
+        bool spaceBlocked = block is not null && block.Contains(" ");
+
+        var mask = new bool[vocab.Count];
+        for (int i = 0; i < vocab.Count; i++)
+        {
+            string token = vocab[i];
+
+            // The CTC blank (index 0) must always survive — without it the best-path decode cannot separate
+            // characters and effectively stops emitting. It is never subject to allow/block.
+            if (i == 0)
+            {
+                mask[i] = true;
+                continue;
+            }
+
+            bool selectable;
+            if (allow is not null)
+            {
+                // Allowlist active: permit only listed tokens, plus the space class (so word separation keeps
+                // working) unless the caller explicitly blocked space.
+                selectable = allow.Contains(token) || (token == " " && !spaceBlocked);
+            }
+            else
+            {
+                selectable = true;
+            }
+
+            // Blocklist wins on conflict.
+            if (block is not null && block.Contains(token))
+                selectable = false;
+
+            mask[i] = selectable;
+        }
+
+        return mask;
+    }
+
+    /// <summary>
     /// Builds the Paddle vocabulary directly from an in-memory ordered set of dictionary lines, applying
     /// the same <c>["blank"] + lines + [" "]</c> convention as <see cref="Load(string)"/>.
     /// </summary>

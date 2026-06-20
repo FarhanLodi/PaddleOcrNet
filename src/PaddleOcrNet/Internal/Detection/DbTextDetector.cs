@@ -14,8 +14,9 @@ namespace PaddleOcrNet.Internal.Detection;
 /// it against the probability map, and "unclips" (expands) the polygon by
 /// <see cref="DetectionOptions.UnclipRatio"/> back to original-image coordinates.
 /// <para>
-/// Pre-processing matches PaddleOCR's <c>DetResizeForTest</c> (limit_type=max) + ImageNet normalization;
-/// post-processing is delegated to <see cref="DBPostProcess"/>. Polygon unclip uses Clipper2 (Clipper2Lib).
+/// Pre-processing matches PaddleOCR's <c>DetResizeForTest</c> (limit_type max or min, per
+/// <see cref="DetectionOptions.LimitTypeMax"/>) + ImageNet normalization; post-processing is delegated to
+/// <see cref="DBPostProcess"/>. Polygon unclip uses Clipper2 (Clipper2Lib).
 /// Reference: RapidOcrNet <c>TextDetector.cs</c> (Apache-2.0) and OnnxOCR <c>db_postprocess.py</c>.
 /// </para>
 /// </summary>
@@ -56,7 +57,7 @@ internal sealed class DbTextDetector : IPaddleDetector
         }
 
         // PREPROCESS: compute the resized (multiple-of-32) dimensions and the resize ratios per axis.
-        var (resizeW, resizeH, ratioW, ratioH) = ComputeResize(origW, origH, options.LimitSideLen);
+        var (resizeW, resizeH, ratioW, ratioH) = ComputeResize(origW, origH, options.LimitSideLen, options.LimitTypeMax);
 
         // Build the [1,3,H,W] float32 input tensor: resize, ImageNet-normalize, RGB, CHW.
         var input = BuildInputTensor(image, resizeW, resizeH);
@@ -90,11 +91,14 @@ internal sealed class DbTextDetector : IPaddleDetector
     }
 
     /// <summary>
-    /// PaddleOCR's <c>DetResizeForTest</c> (limit_type=max): scale so the longest side is at most
-    /// <paramref name="limitSideLen"/>, then round each dimension to the nearest multiple of 32 (min 32).
-    /// Returns the resized width/height and the per-axis resize ratios (resized / original).
+    /// PaddleOCR's <c>DetResizeForTest</c>: pick a uniform scale from <paramref name="limitSideLen"/> and
+    /// the limit policy, then round each dimension to the nearest multiple of 32 (min 32). With
+    /// <paramref name="limitTypeMax"/> = <c>true</c> (<c>limit_type=max</c>) the longest side is capped at
+    /// <paramref name="limitSideLen"/> (only ever scaling down); with <c>false</c> (<c>limit_type=min</c>)
+    /// the shortest side is brought up to <paramref name="limitSideLen"/> (only ever scaling up). Returns
+    /// the resized width/height and the per-axis resize ratios (resized / original).
     /// </summary>
-    private static (int Width, int Height, double RatioW, double RatioH) ComputeResize(int origW, int origH, int limitSideLen)
+    private static (int Width, int Height, double RatioW, double RatioH) ComputeResize(int origW, int origH, int limitSideLen, bool limitTypeMax)
     {
         if (limitSideLen <= 0)
         {
@@ -102,10 +106,23 @@ internal sealed class DbTextDetector : IPaddleDetector
         }
 
         double ratio = 1.0;
-        int maxSide = Math.Max(origW, origH);
-        if (maxSide > limitSideLen)
+        if (limitTypeMax)
         {
-            ratio = (double)limitSideLen / maxSide;
+            // limit_type=max: scale down only when the longest side exceeds the limit.
+            int maxSide = Math.Max(origW, origH);
+            if (maxSide > limitSideLen)
+            {
+                ratio = (double)limitSideLen / maxSide;
+            }
+        }
+        else
+        {
+            // limit_type=min: scale up only when the shortest side is below the limit.
+            int minSide = Math.Min(origW, origH);
+            if (minSide < limitSideLen)
+            {
+                ratio = (double)limitSideLen / minSide;
+            }
         }
 
         int resizeW = (int)Math.Round(origW * ratio / 32.0) * 32;

@@ -1,3 +1,4 @@
+using PaddleOcrNet.Models;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 
@@ -24,4 +25,16 @@ internal interface ITextRecognizer : IDisposable
     /// <param name="crops">The upright text-line crops (caller retains ownership of each).</param>
     /// <returns>One (text, confidence) tuple per input crop, in the same order.</returns>
     IReadOnlyList<(string Text, float Confidence)> Recognize(IReadOnlyList<Image<Rgb24>> crops);
+
+    /// <summary>
+    /// Recognizes a batch of crops while honoring the per-call character filter
+    /// (<see cref="RecognitionOptions.Allowlist"/> / <see cref="RecognitionOptions.Blocklist"/>) carried by
+    /// <paramref name="options"/>. The filter is scoped to this call so a shared/cached recognizer stays safe
+    /// to reuse with different options. Equivalent to <see cref="Recognize(IReadOnlyList{Image{Rgb24}})"/>
+    /// when both lists are empty.
+    /// </summary>
+    /// <param name="crops">The upright text-line crops (caller retains ownership of each).</param>
+    /// <param name="options">The recognition options whose allow/block lists to honor.</param>
+    /// <returns>One (text, confidence) tuple per input crop, in the same order.</returns>
+    IReadOnlyList<(string Text, float Confidence)> Recognize(IReadOnlyList<Image<Rgb24>> crops, RecognitionOptions options);
 }

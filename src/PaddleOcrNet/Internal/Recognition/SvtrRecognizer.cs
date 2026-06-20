@@ -1,5 +1,6 @@
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
+using PaddleOcrNet.Models;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
@@ -40,6 +41,12 @@ internal sealed class SvtrRecognizer : ITextRecognizer
     private readonly string _outputName;
     private readonly int _batchSize;
 
+    // The most recently requested character filter. The recognizer is shared/cached across calls, while
+    // Allowlist/Blocklist are per-call options, so the engine sets this immediately before invoking
+    // Recognize, or passes options to the options-aware overload. Null = no filtering.
+    private IReadOnlyCollection<string>? _allowlist;
+    private IReadOnlyCollection<string>? _blocklist;
+
     /// <summary>
     /// Creates the recognizer over an already-built ONNX <see cref="InferenceSession"/> and a loaded
     /// character dictionary in the Paddle vocab convention (blank at index 0).
@@ -62,6 +69,51 @@ internal sealed class SvtrRecognizer : ITextRecognizer
         // The recognition graph has a single input and a single output; resolve their names once.
         _inputName = _session.InputMetadata.Keys.First();
         _outputName = _session.OutputMetadata.Keys.First();
+    }
+
+    /// <summary>
+    /// Applies the per-call character filter (<see cref="RecognitionOptions.Allowlist"/> /
+    /// <see cref="RecognitionOptions.Blocklist"/>) used by subsequent <see cref="Recognize(IReadOnlyList{Image{Rgb24}})"/>
+    /// calls. The recognizer is shared and cached across recognition calls while these options are per-call,
+    /// so the engine sets the filter immediately before each <c>Recognize</c> (or uses the
+    /// <see cref="Recognize(IReadOnlyList{Image{Rgb24}}, RecognitionOptions)"/> overload, which scopes it
+    /// automatically). Passing <c>null</c>, or options with empty lists, clears the filter.
+    /// </summary>
+    /// <param name="options">The recognition options whose allow/block lists to honor, or <c>null</c> to clear.</param>
+    public void SetCharacterFilter(RecognitionOptions? options)
+    {
+        _allowlist = options?.Allowlist;
+        _blocklist = options?.Blocklist;
+    }
+
+    /// <summary>
+    /// Recognizes a batch of crops while honoring the character filter (allow/block lists) carried by
+    /// <paramref name="options"/>. The filter is scoped to this call: it is applied for the duration of the
+    /// recognition and the previously active filter is restored afterwards, so a shared recognizer stays
+    /// safe to reuse across calls with different options.
+    /// </summary>
+    /// <param name="crops">The upright text-line crops (caller retains ownership of each).</param>
+    /// <param name="options">The recognition options whose allow/block lists to honor.</param>
+    /// <returns>One (text, confidence) tuple per input crop, in the same order.</returns>
+    public IReadOnlyList<(string Text, float Confidence)> Recognize(
+        IReadOnlyList<Image<Rgb24>> crops, RecognitionOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(crops);
+        ArgumentNullException.ThrowIfNull(options);
+
+        var prevAllow = _allowlist;
+        var prevBlock = _blocklist;
+        _allowlist = options.Allowlist;
+        _blocklist = options.Blocklist;
+        try
+        {
+            return Recognize(crops);
+        }
+        finally
+        {
+            _allowlist = prevAllow;
+            _blocklist = prevBlock;
+        }
     }
 
     /// <inheritdoc />
@@ -90,6 +142,13 @@ internal sealed class SvtrRecognizer : ITextRecognizer
             ratios[i] = crops[i].Width / (float)Math.Max(1, crops[i].Height);
         }
         Array.Sort(ratios, order);
+
+        // Snapshot the active character filter for the whole call so concurrent mutation can't change it
+        // mid-batch. The actual mask is built lazily below, once the vocab (and thus class indices) is known.
+        var allowlist = _allowlist;
+        var blocklist = _blocklist;
+        bool[]? selectable = null;
+        bool selectableBuilt = false;
 
         // Process in fixed-size batches; each batch is padded to its own maximum width.
         for (int start = 0; start < count; start += _batchSize)
@@ -144,6 +203,16 @@ internal sealed class SvtrRecognizer : ITextRecognizer
             int numClasses = dims.Length >= 3 ? dims[2] : _dictLines.Count;
             // Build the vocab to match the model's class count on first use (then reuse it).
             var vocab = _vocab ??= CharacterDictionary.BuildVocab(_dictLines, numClasses);
+
+            // Build the allow/block selectable mask once for the whole call, now that the vocab (and so the
+            // class→token mapping) is known. Null when no filter is requested — the decoder then runs
+            // byte-identically to the unfiltered path.
+            if (!selectableBuilt)
+            {
+                selectable = CharacterDictionary.BuildSelectableMask(vocab, allowlist, blocklist);
+                selectableBuilt = true;
+            }
+
             // Materialize once to a flat span so the decoder can index by (row, t, c) without per-element
             // overhead from the tensor indexer.
             ReadOnlySpan<float> flat = output.ToArray();
@@ -152,7 +221,7 @@ internal sealed class SvtrRecognizer : ITextRecognizer
             for (int b = 0; b < batchCount; b++)
             {
                 ReadOnlySpan<float> rowLogits = flat.Slice(b * rowStride, rowStride);
-                results[order[start + b]] = CtcDecoder.GreedyDecode(rowLogits, timeSteps, numClasses, vocab);
+                results[order[start + b]] = CtcDecoder.GreedyDecode(rowLogits, timeSteps, numClasses, vocab, selectable);
             }
         }
 
