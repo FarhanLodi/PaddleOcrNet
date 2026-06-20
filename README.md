@@ -247,8 +247,8 @@ Already shipped: detection, recognition (multilingual + auto-detect), orientatio
 formulas, reading order, Markdown/HTML/JSON/DOCX/XLSX export, the PDF pipeline, and LLM-backed document
 intelligence (key-information extraction + Q&A). Under consideration:
 
-- Seal text recognition, SLANeXt/PicoDet layout variants, and table-cell detection — pending the ONNX
-  export of those models (the code paths exist; the assets need exporting via `tools/export_onnx.py`)
+- Activate the table-recognition-v2 path (SLANeXt + RT-DETR cell detection) and seal recognition
+  end-to-end — the ONNX assets are now hosted; the remaining work is wiring them into the active pipeline
 - On-device (ONNX) KIE as an offline alternative to the LLM path
 - PP-OCRv6 model line
 - Additional per-language recognizer packs

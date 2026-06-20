@@ -44,16 +44,15 @@ internal sealed record RecognizerPack(
 ///         thai, greek, telugu, tamil, chinese_cht, eslav), each with its matching ppocr dictionary.</item>
 /// </list>
 /// <para>
-/// <b>The core PP-OCRv5 working set is published and checksum-enforced.</b> The detectors, every
-/// recognizer pack + dictionary, both orientation classifiers, UVDoc, the LaTeX-OCR formula files, and the
-/// structure models actually exported to ONNX (<c>PP-DocLayoutV3</c>, <c>SLANet_plus</c>) are hosted at
-/// <see cref="DefaultBaseUrl"/> (the public <c>PaddleOcrNet/PaddleOcrNet-models</c> repo) and have real
-/// <see cref="Checksums"/> that <see cref="ModelDownloadManager"/> verifies after download. A handful of
-/// <i>secondary</i> structure models referenced below — the seal detector, the SLANeXt / PicoDet layout
-/// variants, the RT-DETR table-cell detectors, and the table classifier — are <b>not yet exported to ONNX
-/// and so are not published</b>; their <see cref="Checksums"/> entries are absent, so they fail closed
-/// (download accepted only under <see cref="Services.ModelDownloadOptions.AllowUnverifiedModels"/>) until
-/// the export toolchain (<c>tools/export_onnx.py</c>) produces and uploads them.
+/// <b>Every model the runtime loads is published and checksum-enforced.</b> The detectors, every recognizer
+/// pack + dictionary, both orientation classifiers, UVDoc, the LaTeX-OCR formula files, and the full
+/// structure set — layout (<c>PP-DocLayoutV3</c> plus <c>PP-DocLayout-S/M/plus-L</c>), tables
+/// (<c>SLANet_plus</c>, <c>SLANeXt_wired/wireless</c>, the table classifier and the RT-DETR cell detectors)
+/// and the seal detector — are hosted at <see cref="DefaultBaseUrl"/> (the public
+/// <c>PaddleOcrNet/PaddleOcrNet-models</c> repo) and have real <see cref="Checksums"/> that
+/// <see cref="ModelDownloadManager"/> verifies after download. The only intentionally-unlisted entries are
+/// the optional <c>table_structure_dict.txt</c> (<c>SlanetTableRecognizer</c> embeds the canonical vocab as
+/// a fallback) and the unused <c>SLANet_plus_wired/wireless</c> aliases.
 /// </para>
 /// </summary>
 internal static class PaddleModelRegistry
@@ -133,13 +132,13 @@ internal static class PaddleModelRegistry
     /// <see cref="ModelDownloadManager"/>.
     /// <para>
     /// Populated from the files published to <see cref="DefaultBaseUrl"/> (regenerate with
-    /// <c>tools/stage_and_checksum.py</c>, which emits this exact block). Every entry below is enforced:
-    /// <see cref="ModelDownloadManager"/> rejects a download whose SHA256 does not match. Assets <i>not</i>
-    /// listed here (the secondary structure models that are not yet exported — seal detector, SLANeXt /
-    /// PicoDet layout variants, table-cell detectors, table classifier) get a <c>null</c>
-    /// <see cref="ModelAsset.Sha256"/> from <see cref="Asset"/> and so fail closed unless
-    /// <see cref="Services.ModelDownloadOptions.AllowUnverifiedModels"/> is set. Keys must equal the asset
-    /// <see cref="ModelAsset.FileName"/>.
+    /// <c>tools/stage_and_checksum.py</c> for the core set and <c>tools/stage_structure_models.py</c> for the
+    /// structure set). Every entry below is enforced: <see cref="ModelDownloadManager"/> rejects a download
+    /// whose SHA256 does not match. The few assets <i>not</i> listed here (the optional
+    /// <c>table_structure_dict.txt</c>, embedded as a fallback, and the unused <c>SLANet_plus_wired/wireless</c>
+    /// aliases) get a <c>null</c> <see cref="ModelAsset.Sha256"/> from <see cref="Asset"/> and so fail closed
+    /// unless <see cref="Services.ModelDownloadOptions.AllowUnverifiedModels"/> is set. Keys must equal the
+    /// asset <see cref="ModelAsset.FileName"/>.
     /// </para>
     /// </summary>
     private static readonly FrozenDictionary<string, string> Checksums =
@@ -184,6 +183,20 @@ internal static class PaddleModelRegistry
             ["PP-DocLayoutV3.onnx"] = "DC5670EBBB42E2BA4E41395FC55E8217B007134E8B9E35023D592A8FE040A288",
             ["PP-DocLayoutV3_labels.txt"] = "A04C55C3BB398FE7C5ECE52D279EB26A905F9645CD58C0C812FB9DE3C4790F46",
             ["SLANet_plus.onnx"] = "D57A942AF6A2F57D6A4A0372573C696A2379BF5857C45E2AC69993F3B334514B",
+            // Remaining structure models exported via tools/export_onnx.py and published 2026-06-20
+            // by the CI "Export & publish structure models" workflow.
+            ["PP-DocLayout-S.onnx"] = "E3A5864E9F29BFDDF7EA447CE03CD42ADDE0A49CEA93191D7858E95407D0040A",
+            ["PP-DocLayout-M.onnx"] = "34ECDC84E60D5F5822FAB85E3E97F30CA73FDC6C7C0AA10B3BD7227742A574B5",
+            ["PP-DocLayout_plus-L.onnx"] = "B96B102EBEF6E8C51A6B27485EB601FA6B232D389EBD21934D3D6DD7DFE46C7C",
+            ["PP-DocLayout-S.yml"] = "6F690098C438214C67822239A568F0BC2BBE97A8F02FBA93E492D4F2C47523C3",
+            ["PP-DocLayout-M.yml"] = "76AEB103310F432EA773D4A6D187E15B26D92C051C5E2875598E1D49F725D70D",
+            ["PP-DocLayout_plus-L.yml"] = "D60F782A16F96AFB27E8280399899A94C3E9FFC694FFB2F913EA00AF1C522F1E",
+            ["PP-LCNet_x1_0_table_cls.onnx"] = "C4D7737FDB2B0B31D9CB3D961B339174E36152AD5A48E7979CD81D7CF7E5B7DE",
+            ["SLANeXt_wired.onnx"] = "0A6E063B56E35A434EB6669EB2342113C6BD76A6CE5ACAA0331F370C9E00732F",
+            ["SLANeXt_wireless.onnx"] = "5C79EE87CCE6712F8F640394DECCE72157BD1DF13C9BCCF86D071BD07A6E9F97",
+            ["RT-DETR-L_wired_table_cell_det.onnx"] = "D1D6D0D3426B63A87C27566AA1E9EBB3912B46F3D606394C4DC0D6B23D32FD60",
+            ["RT-DETR-L_wireless_table_cell_det.onnx"] = "F18A845DE806C4983DB1DF372280F6BF7D6AF2049C02673AB691EF18FD2DF50D",
+            ["PP-OCRv4_server_seal_det.onnx"] = "2F83D57EE079490E7465E83017606DD1A5ED71FC99555C45B1460FF0332ADC25",
         }.ToFrozenDictionary(StringComparer.Ordinal);
 
     /// <summary>
