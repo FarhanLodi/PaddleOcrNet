@@ -652,12 +652,12 @@ internal sealed class SlanetTableRecognizer : ITableRecognizer
     /// <c>["sos"] + dict + ["eos"]</c>.</item>
     /// </list>
     /// <para>
-    /// <b>No merge transform.</b> The REAL exported SLANet_plus structure head has <b>50</b> classes — i.e.
-    /// <c>sos</c> + the 48-token dictionary + <c>eos</c> with <c>&lt;td&gt;</c> and <c>&lt;/td&gt;</c> as
-    /// <b>separate</b> tokens (verified by argmax-decoding the live model). PaddleOCR's
-    /// <c>merge_no_span_structure</c> (which appends <c>&lt;td&gt;&lt;/td&gt;</c> and drops <c>&lt;td&gt;</c>)
-    /// is <b>not</b> applied to this export; applying it would yield 50 classes too but shift every id and
-    /// mis-decode the sequence, so it is deliberately omitted here.
+    /// <b>merge_no_span_structure IS applied</b> (PaddleOCR's default for SLANet inference, and how SLANet_plus
+    /// was exported): the empty-cell token is the single <c>&lt;td&gt;&lt;/td&gt;</c> (appended at the end),
+    /// and the bare <c>&lt;td&gt;</c> is removed. The merged 48-token dictionary + <c>sos</c>/<c>eos</c> gives
+    /// the <b>50</b>-class head. Verified by argmax-decoding the live model on a known table: the cell class is
+    /// 48 (=<c>&lt;td&gt;&lt;/td&gt;</c> only after the merge); without the merge that id is <c>rowspan="20"</c>
+    /// and no cells decode.
     /// </para>
     /// This yields index 0 = <c>sos</c>, last index = <c>eos</c>. If the caller already supplied a list
     /// wrapped with sentinels it is returned unchanged (idempotent). If the supplied dictionary does not
@@ -693,7 +693,18 @@ internal sealed class SlanetTableRecognizer : ITableRecognizer
             tokens.AddRange(DefaultTableDict);
         }
 
-        // add_special_char: ["sos"] + dict + ["eos"]. With the 48-token dict this is the 50-class head.
+        // merge_no_span_structure (PaddleOCR's default for SLANet inference, and how SLANet_plus was exported):
+        // the structure head is trained on the MERGED vocab, where an empty cell is the single token
+        // "<td></td>" rather than the "<td>" … "</td>" pair. Remove "<td>" and append "<td></td>" at the END.
+        // VERIFIED against the live model: a 4×3 table decodes to argmax class 48, which is "<td></td>" ONLY
+        // after this merge (without it, class 48 wrongly maps to rowspan="20" and no cells are produced).
+        tokens.Remove("<td>");
+        if (!tokens.Contains("<td></td>"))
+        {
+            tokens.Add("<td></td>");
+        }
+
+        // add_special_char: ["sos"] + merged dict + ["eos"]. With the 48-token merged dict this is the 50-class head.
         var vocab = new List<string>(tokens.Count + 2) { "sos" };
         vocab.AddRange(tokens);
         vocab.Add("eos");
