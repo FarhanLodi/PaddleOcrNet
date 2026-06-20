@@ -47,8 +47,6 @@ to the configured model host.
   visualization helpers; PDF input rasterization and searchable-PDF output plumbing.
 - **GPU** — optional `PaddleOcrNet.Gpu` package (CUDA 12+), auto-detected with a CPU fallback and an
   actionable upgrade hint (`GpuAccelerationHint`).
-- **Maintainer export toolchain** (`tools/`) — converts every PaddleOCR / PaddleX model to ONNX,
-  generates checksums + a C# registry snippet, and uploads to Hugging Face.
 - **Tests** — pure-function unit tests for min-area-rect ordering, DB unclip, CTC decode, character
   dictionary parsing, the registry, perspective warp, and reading order (`Category!=Integration`,
   CI-safe with no model download).

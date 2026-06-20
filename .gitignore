@@ -49,16 +49,8 @@ VALIDATION.md
 sample_ocr.png
 *.part
 
-# Local tooling build artifacts (the tools/ SOURCE is committed; only its
-# generated/downloaded/venv output is ignored).
-tools/__pycache__/
-tools/.venv/
-tools/.venv*/
-tools/venv/
-tools/onnx_models/
-tools/paddle_models/
-tools/checksums_snippet.cs
-tools/*.log
+# Maintainer-only ONNX export/upload toolchain — kept local, never committed.
+tools/
 
 # Python virtual environment
 .venv/
