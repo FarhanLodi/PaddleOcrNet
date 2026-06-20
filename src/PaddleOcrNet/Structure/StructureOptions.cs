@@ -40,8 +40,11 @@ public sealed record StructureOptions
     /// <summary>Recognize the text of detected seal regions. Default true.</summary>
     public bool RecognizeSeals { get; init; } = true;
 
-    /// <summary>Which layout-detection model to use. Default <see cref="LayoutModel.PicoDetS"/>.</summary>
-    public LayoutModel LayoutModel { get; init; } = LayoutModel.PicoDetS;
+    /// <summary>
+    /// Which layout-detection model to use. Default <see cref="LayoutModel.RtDetrL"/> — the RT-DETR slot is
+    /// served by the hosted PP-DocLayoutV3 model (the PicoDet S/M variants are not hosted yet).
+    /// </summary>
+    public LayoutModel LayoutModel { get; init; } = LayoutModel.RtDetrL;
 
     /// <summary>
     /// Recognition languages passed through to the text recognizer for text/caption/seal regions. Defaults
