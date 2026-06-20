@@ -1,61 +1,67 @@
 <p align="center">
-  <img src="icon.png" alt="PaddleOcrNet Logo" width="160" height="160" />
+  <img src="icon.png" alt="PaddleOcrNet" width="140" height="140" />
 </p>
 
-# PaddleOcrNet
+<h1 align="center">PaddleOcrNet</h1>
 
-High-accuracy, **native .NET OCR** powered by [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR)'s
-PP-OCRv5 neural models, running on [ONNX Runtime](https://onnxruntime.ai/). No Python, no native
-PaddlePaddle, no server process — just a NuGet package and ONNX models downloaded on first use.
+<p align="center">
+  <strong>Production-grade document OCR for .NET — powered by PaddleOCR's PP-OCRv5 models, running natively on ONNX Runtime.</strong><br/>
+  No Python. No native PaddlePaddle. No sidecar server. Just a NuGet package.
+</p>
 
-> **Status:** core OCR engine (DB detection + text-line orientation + SVTR/CTC recognition + the
-> multilingual model registry + the det → cls → rec pipeline) is implemented and unit-tested.
-> The **document-structure subsystem** (layout analysis, table recognition, formula recognition, seal
-> recognition, doc pre-processing, XY-cut reading order, and Markdown/JSON export — surfaced via
-> `AnalyzeDocumentAsync`) is now **implemented and unit-tested** in-code; it still needs the maintainer
-> to export and upload its ONNX models to validate end-to-end (document unwarp remains a safe
-> pass-through stub).
+<p align="center">
+  <a href="https://www.nuget.org/packages/PaddleOcrNet"><img src="https://img.shields.io/nuget/v/PaddleOcrNet.svg?label=NuGet&color=004880" alt="NuGet"/></a>
+  <a href="https://www.nuget.org/packages/PaddleOcrNet"><img src="https://img.shields.io/nuget/dt/PaddleOcrNet.svg?label=Downloads&color=004880" alt="Downloads"/></a>
+  <img src="https://img.shields.io/badge/.NET-10.0-512BD4" alt=".NET 10"/>
+  <img src="https://img.shields.io/badge/AOT-ready-2ea44f" alt="AOT ready"/>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"/></a>
+</p>
 
 ---
 
-## Why PaddleOcrNet (PaddleOCR vs EasyOCR)
+PaddleOcrNet turns scanned documents, photos, and PDFs into structured text. It runs the full
+**PP-OCRv5 + PP-StructureV3** pipeline — text detection, recognition, orientation correction, layout
+analysis, table extraction, and formula recognition — entirely in managed .NET on
+[ONNX Runtime](https://onnxruntime.ai/). Models download and cache on first use; everything after that
+runs in-process, offline-capable, and trim/AOT-friendly.
 
-EasyOCR and PaddleOCR are both excellent CRAFT/DB-style detector + recognizer stacks, but PaddleOCR's
-PP-OCRv5 line is the stronger base for **document** OCR, which is what this library targets:
+## Highlights
 
-- **Dense / small-text documents.** PP-OCRv5's detector + SVTR recognizer hold up better on
-  tightly-packed invoices, forms, receipts and scanned pages where EasyOCR tends to merge or drop
-  lines.
-- **Document structure (the roadmap).** PaddleOCR ships first-class **layout analysis**, **table
-  structure recognition** (SLANet / SLANeXt → HTML), and **formula recognition** (LaTeX-OCR →
-  LaTeX) models. EasyOCR has no equivalent. PaddleOcrNet's export toolchain produces these
-  ONNX assets (formula via the MIT [RapidLaTeXOCR](https://github.com/RapidAI/RapidLaTeXOCR) ONNX,
-  since PP-FormulaNet is not ONNX-exportable), and the .NET runtime side is **implemented** — see
-  `AnalyzeDocumentAsync` and the structure section below.
-- **Orientation handling.** Built-in **text-line orientation** (0°/180° per line) and
-  **document orientation** (0/90/180/270°) classifiers correct rotated scans before recognition.
-- **Smaller footprint.** The PP-OCRv5 *mobile* detector + recognizer are a few MB each, versus
-  EasyOCR's larger default models — better for desktop apps, containers and edge deployment.
-- **Broad multilingual coverage** from per-script recognizer packs sharing one detector.
+- **High-accuracy text OCR** — DB detection + SVTR recognition (PP-OCRv5) handles dense invoices, forms,
+  receipts, handwriting, rotated scans, and curved text.
+- **80+ languages** across 12 script families, with one shared detector and per-script recognizer packs.
+- **Automatic language detection** — pass `"auto"` and PaddleOcrNet identifies the script and pulls the
+  right model on demand (Python PaddleOCR requires you to name the language up front).
+- **Document understanding** — `AnalyzeDocumentAsync` returns layout regions, reading order, tables as
+  HTML, and formulas as LaTeX, and serializes the whole document to **Markdown or JSON**.
+- **PDF in, searchable PDF out** — rasterize and OCR PDFs, or emit a searchable PDF with an invisible
+  text layer.
+- **Built for production** — singleton-safe, thread-safe ONNX sessions; DI + health checks; OpenTelemetry
+  metrics; typed exceptions; input/decompression-bomb guards; checksum-verified model downloads.
+- **Deploys anywhere** — pure-managed (no OpenCV), CPU by default, optional CUDA, **Native AOT** and
+  single-file publish supported. Mobile models are a few MB each.
 
-If you only need a handful of Latin lines from clean photos, EasyOCR is fine. If you need **dense
-documents, mixed scripts, rotated scans, and a path to tables/formulas/layout**, PaddleOcrNet is built
-for that.
+---
+
+## Installation
+
+```bash
+dotnet add package PaddleOcrNet
+
+# Optional — NVIDIA CUDA 12+ acceleration (used automatically when present):
+dotnet add package PaddleOcrNet.Gpu
+```
+
+Requires **.NET 10** (`net10.0`). Windows, Linux, and macOS (x64/arm64).
 
 ---
 
 ## Quick start
 
-```bash
-dotnet add package PaddleOcrNet
-# Optional, NVIDIA CUDA 12+ acceleration (used automatically when present):
-dotnet add package PaddleOcrNet.Gpu
-```
-
 ```csharp
 using PaddleOcrNet.Services;
 
-// Models (PP-OCRv5 ONNX) download and cache on first use; nothing happens at construction.
+// ONNX models download + cache on first use; construction itself loads nothing.
 await using var ocr = new PaddleOcrService();
 
 OcrResult result = await ocr.ExtractTextFromImage("invoice.png", new[] { "en" });
@@ -65,53 +71,73 @@ foreach (var line in result.Lines)
     Console.WriteLine($"[{line.Confidence:F2}] {line.Text}");
 ```
 
-### Dependency injection (ASP.NET Core / Generic Host)
+Input can be a file path, `byte[]`, `Stream`, or an already-decoded `Image<Rgb24>`:
 
 ```csharp
-using PaddleOcrNet.Services;
+await ocr.ExtractTextFromImage(bytes,  new[] { "en" });
+await ocr.ExtractTextFromImage(stream, new[] { "en", "de" });
 
-builder.Services.AddPaddleOcrNet(o =>
-{
-    o.UseTextLineOrientation = true;        // correct 180°-flipped lines
-    o.ModelCachePath = "/var/cache/ocr";    // optional shared cache
-});
-
-// Optional readiness probe: Healthy once the models for these languages are cached.
-builder.Services.AddHealthChecks()
-    .AddPaddleOcrHealthCheck(languages: new[] { "en", "ch" });
-```
-
-Inject `IPaddleOcrService` anywhere. The service is registered as a **singleton** (ONNX sessions are
-expensive to build and thread-safe to reuse). Call `WarmUp(...)` to pre-load models off the hot path.
-
-### Other entry points
-
-```csharp
-// Bytes / streams / already-decoded ImageSharp images:
-await ocr.ExtractTextFromImage(byteArray, new[] { "en" });
-await ocr.ExtractTextFromImage(stream,    new[] { "en", "de" });
-
-// Detect-only (layout boxes, redaction, field cropping — no recognition):
+// Detect-only (bounding boxes for redaction / cropping — no recognition):
 var regions = await ocr.DetectRegionsAsync("page.png");
 
-// Recognize caller-supplied region polygons (skip detection):
+// Recognize caller-supplied regions (skip detection):
 var partial = await ocr.RecognizeRegionsAsync(image, regions, new[] { "en" });
 ```
 
-Run the bundled demo:
+### Automatic language detection
 
-```bash
-dotnet run --project test/PaddleOcrNet.Demo -- invoice.png en
+```csharp
+// "auto" → PaddleOcrNet detects the dominant script, downloads the matching pack, and reports it.
+OcrResult r = await ocr.ExtractTextFromImage("multilingual.png", new[] { "auto" });
+
+Console.WriteLine(string.Join(", ", r.DetectedLanguages)); // e.g. "arabic, latin, ch"
 ```
+
+---
+
+## Document structure analysis
+
+`AnalyzeDocumentAsync` runs the PP-StructureV3 pipeline — orientation → layout detection → per-region
+OCR / table / formula → reading-order reconstruction — and returns a structured document you can export
+straight to Markdown or JSON.
+
+```csharp
+using PaddleOcrNet.Services;
+using PaddleOcrNet.Structure;
+
+await using var ocr = new PaddleOcrService();
+
+StructureResult doc = await ocr.AnalyzeDocumentAsync("report.png", new StructureOptions
+{
+    Languages         = new[] { "en" },
+    UseDocOrientation = true,    // auto-rotate skewed scans (0/90/180/270°)
+    RecognizeTables   = true,    // tables → HTML
+    RecognizeFormulas = true,    // formulas → LaTeX
+});
+
+foreach (var block in doc.Blocks)
+    Console.WriteLine($"#{block.Order} {block.Type} — {block.Text}");
+
+string markdown = doc.ToMarkdown();  // titles, paragraphs, tables (HTML), formulas ($$…$$)
+string json     = doc.ToJson();      // structured blocks with bounding boxes + reading order
+```
+
+| Stage | Model | Output |
+| --- | --- | --- |
+| Layout analysis | PP-DocLayoutV3 (RT-DETR) | region boxes + 25 block types |
+| Table recognition | SLANet_plus | `<table>` HTML with cell text matched into the grid |
+| Formula recognition | LaTeX-OCR | LaTeX string |
+| Orientation / unwarp | PP-LCNet · UVDoc | de-skewed, de-warped page |
+| Reading order | XY-cut | multi-column document order |
 
 ---
 
 ## Supported languages
 
-One shared **DB detector** serves every language; recognition uses a per-script **recognizer pack**
-(PP-OCRv5 mobile rec + the matching `ppocr` character dictionary). Pass any of these language codes:
+A single **DB detector** serves every language; recognition selects a per-script **recognizer pack**
+(PP-OCRv5 mobile + the matching character dictionary). Pass any representative code:
 
-| Pack | Codes (representative) |
+| Pack | Codes |
 | --- | --- |
 | Chinese / English / Japanese (default) | `ch` `zh` `en` `ja` |
 | Latin | `latin` `fr` `de` `es` `it` `pt` `nl` `pl` `tr` `vi` … |
@@ -120,112 +146,90 @@ One shared **DB detector** serves every language; recognition uses a per-script 
 | Devanagari | `devanagari` `hi` `mr` `ne` `sa` … |
 | Korean | `korean` `ko` |
 | Japanese (full) | `japan` |
-| Thai | `thai` `th` |
-| Greek | `greek` `el` |
-| Telugu | `telugu` `te` |
-| Tamil | `tamil` `ta` |
+| Thai · Greek · Telugu · Tamil | `thai`/`th` · `greek`/`el` · `telugu`/`te` · `tamil`/`ta` |
 | Traditional Chinese | `chinese_cht` `cht` `zh_tra` |
 | East-Slavic | `eslav` `ru_eslav` `uk_eslav` `be_eslav` |
 
-Unknown codes are skipped with a warning. See
-[`PaddleModelRegistry`](src/PaddleOcrNet/Internal/PaddleModelRegistry.cs) for the full code lists.
+Or pass `"auto"` to detect the script automatically. Unknown codes are skipped with a warning.
 
 ---
 
-## Models & the model host (important)
-
-PaddleOcrNet ships **no model weights**. On first use it downloads the PP-OCRv5 ONNX models and their
-character dictionaries to a local cache (`%LOCALAPPDATA%`/`~/.local/share`, or the
-`PADDLEOCRNET_CACHE` env var / `ModelCachePath` option).
-
-- **The default model host is a placeholder.** `PaddleModelRegistry.DefaultBaseUrl` currently points at
-  a placeholder Hugging Face repo
-  (`https://huggingface.co/PaddleOcrNet/PaddleOcrNet-models/resolve/main`). **The assets are not
-  uploaded yet.**
-- **Override the host** at runtime with the **`PADDLEOCRNET_MODEL_BASE_URL`** environment variable, or
-  per-service via `ModelDownloadOptions.BaseUrlOverride`. Point it at the real model repo or a private
-  mirror; the per-file URL is `{baseUrl}/{fileName}`.
-- **Checksums are not published yet.** Until the SHA256 table in the registry is filled in, downloads
-  are only accepted when `ModelDownloadOptions.AllowUnverifiedModels` is set (fail-closed by default).
-  Once the maintainer uploads the models and pastes the generated checksums, verification is enforced
-  automatically with no code change.
-- **Exporting the models yourself.** The maintainer-only [`tools/`](tools/) toolchain converts every
-  PaddleOCR / PaddleX model to ONNX, computes checksums, and uploads them to Hugging Face. See
-  [`tools/README.md`](tools/README.md).
-
-```bash
-# Point the library at your own model host:
-export PADDLEOCRNET_MODEL_BASE_URL="https://your-host.example/paddleocrnet-models"
-```
-
----
-
-## Requirements
-
-- **.NET 10** (`net10.0`).
-- CPU works everywhere. For **NVIDIA CUDA 12+** acceleration, add the `PaddleOcrNet.Gpu` package — it
-  is detected and used automatically; otherwise OCR runs on CPU and a one-line hint names the package
-  to install.
-- Trimming / **Native AOT** friendly (`IsAotCompatible`; source-generated JSON via
-  `PaddleOcrJsonContext`).
-
----
-
-## Status & roadmap
-
-**Works end-to-end (pending the model upload to validate):**
-
-- DB text **detection** with full DB post-processing (unclip, min-area boxes, NMS).
-- Text-line **orientation** classification (180° flip).
-- SVTR **recognition** + CTC greedy decoding + `ppocr` character dictionaries.
-- Multilingual **model registry**, lazy per-language session loading, reading-order sorting,
-  paragraph grouping.
-- `PaddleOcrService` / `IPaddleOcrService`, DI + health check, export (text/JSON/hOCR/ALTO),
-  PDF input/searchable-PDF output plumbing.
-
-**Document-structure subsystem — implemented (`AnalyzeDocumentAsync`):**
-
-- **Layout** analysis (PP-DocLayout, PicoDet-S/M and the RT-DETR `plus-L` variant) mapped onto a shared
-  block-type vocabulary.
-- **Table** recognition (**SLANet** structure-token decode → HTML, OCR cell-text matched into the
-  predicted grid).
-- **Formula** recognition (**LaTeX-OCR**: image-resize + split encoder/decoder transformer + the
-  autoregressive LaTeX decode loop → LaTeX). This is the MIT
-  [RapidLaTeXOCR](https://github.com/RapidAI/RapidLaTeXOCR) ONNX — **not** PaddleOCR's PP-FormulaNet,
-  which **cannot** be exported to ONNX.
-- **Seal** recognition (PP-OCRv4 seal detector + the shared text recognizer).
-- **Document pre-processing** — orientation classify/rotate (0/90/180/270°) is implemented; **UVDoc
-  unwarp is a safe pass-through stub** (held/disposed session, no-op remap until its grid I/O contract
-  is verified against the real export — see `DocPreprocessor.Unwarp`).
-- **Reading order** via **XY-cut** (`XyCutOrderer`) and **Markdown / JSON export**
-  (`StructureResult.ToMarkdown()` / `.ToJson()`, the latter AOT-safe via a source-generated context).
-- The orchestrator (`PaddleStructureEngine`) lazily loads each model once and reuses the sessions,
-  mirroring the core engine's session-cache/dispose patterns.
+## ASP.NET Core / dependency injection
 
 ```csharp
-await using var ocr = new PaddleOcrService();
-
-StructureResult doc = await ocr.AnalyzeDocumentAsync("page.png", new StructureOptions
+builder.Services.AddPaddleOcrNet(o =>
 {
-    LayoutModel       = LayoutModel.PicoDetS,
-    UseDocOrientation = true,
-    Languages         = new[] { "en" },
+    o.UseTextLineOrientation = true;       // correct 180°-flipped lines
+    o.ModelCachePath         = "/var/cache/ocr";
 });
 
-string markdown = doc.ToMarkdown();   // headings, paragraphs, tables (HTML), formulas ($$...$$)
-string json     = doc.ToJson();
+// Readiness probe — Healthy once models for these languages are cached:
+builder.Services.AddHealthChecks()
+    .AddPaddleOcrHealthCheck(languages: new[] { "en", "ch" });
 ```
 
-**Needs the maintainer's exported + uploaded ONNX models to validate end-to-end:** because no weights
-are published yet, both the core OCR engine and the structure subsystem are verified by
-**pure-function unit tests** (geometry, CTC decode, dictionary parsing, registry, reading order, layout
-output parsing, SLANet structure decode, LaTeX-OCR detokenize, table cell-text matching, XY-cut,
-Markdown export) rather than full image-to-text runs. Point `PADDLEOCRNET_MODEL_BASE_URL` at a host with
-the PP-OCRv5 / structure ONNX assets to exercise real OCR + structure analysis.
+`IPaddleOcrService` is registered as a **singleton** — ONNX sessions are expensive to build and safe to
+share across threads. Call `WarmUp(...)` to pre-load models off the request path.
+
+---
+
+## Configuration
+
+| Concern | How |
+| --- | --- |
+| **GPU** | Add `PaddleOcrNet.Gpu`; CUDA 12+ is detected and used automatically, otherwise CPU. |
+| **Model cache** | `%LOCALAPPDATA%` / `~/.local/share` by default; override via `ModelCachePath` or `PADDLEOCRNET_CACHE`. |
+| **Model host** | Defaults to the public Hugging Face repo; point at a private mirror via `PADDLEOCRNET_MODEL_BASE_URL` or `ModelDownloadOptions.BaseUrlOverride`. |
+| **Offline / air-gapped** | Pre-seed the cache (or a mirror) and run fully offline; downloads are SHA-256 verified. |
+| **Throughput** | `BatchSize`, `MaxDegreeOfParallelism`, and reading-order / paragraph grouping via `RecognitionOptions`. |
+| **Input limits** | Built-in max-pixel / PDF page guards against decompression bombs. |
+
+### Output formats
+
+`OcrResult` exports to plain text, **JSON**, **hOCR**, **ALTO XML**, and TSV; documents export to
+**Markdown** and **JSON**; PDFs can be re-emitted as **searchable PDFs**. All exporters are AOT-safe via a
+source-generated JSON context.
+
+---
+
+## Models & licensing
+
+PaddleOcrNet ships **no weights** — on first use it downloads PP-OCRv5 / PP-StructureV3 ONNX models and
+their dictionaries (SHA-256 verified) to the local cache. The models are derived from
+[PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) (**Apache-2.0**, © PaddlePaddle/Baidu); the formula
+model is [RapidLaTeXOCR](https://github.com/RapidAI/RapidLaTeXOCR) (**MIT**). See [NOTICE](NOTICE) for
+attribution. The library itself is **MIT** — see [LICENSE](LICENSE).
+
+> **Note on formula recognition:** PaddleOCR's PP-FormulaNet cannot be exported to ONNX, so PaddleOcrNet
+> uses the equivalent LaTeX-OCR model for formula → LaTeX.
+
+---
+
+## Roadmap
+
+Already shipped: detection, recognition (multilingual + auto-detect), orientation, unwarp, layout, tables,
+formulas, reading order, Markdown/JSON export, and the PDF pipeline. Under consideration:
+
+- Seal text recognition (pending a hostable ONNX model)
+- Key-information extraction (SER/RE)
+- DOCX / XLSX document export
+- Additional per-language recognizer packs
+
+---
+
+## Why PaddleOcrNet?
+
+- **vs. Python PaddleOCR** — same models and accuracy, but no Python runtime, no `paddlepaddle` native
+  dependency, and no server process. Ships as a single NuGet package with first-class .NET ergonomics
+  (DI, health checks, AOT) and adds automatic language detection.
+- **vs. cloud OCR APIs** — runs entirely in-process and offline; no per-page fees, no data leaving your
+  infrastructure.
+- **vs. EasyOCR-based libraries** — PP-OCRv5 is materially stronger on dense documents, tables, rotated
+  scans, handwriting, and CJK, and adds full document-structure understanding.
 
 ---
 
 ## License
 
-MIT (this library) — see [LICENSE](LICENSE). The PaddleOCR models it downloads are Apache-2.0 and
-attributed to PaddlePaddle / Baidu; see [NOTICE](NOTICE).
+MIT © PaddleOcrNet contributors. Downloaded models are Apache-2.0 / MIT and attributed to their authors
+(see [NOTICE](NOTICE)).
