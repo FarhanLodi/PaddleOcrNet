@@ -11,43 +11,83 @@ namespace PaddleOcrNet.Services;
 /// </summary>
 public interface IPaddleOcrService : IAsyncDisposable, IDisposable
 {
-    /// <summary>OCR an image file on disk.</summary>
+    /// <summary>OCR an image file on disk across the given <see cref="OcrLanguage"/> values.</summary>
     Task<OcrResult> ExtractTextFromImage(
         string imagePath,
-        IEnumerable<string> languages,
+        IReadOnlyList<OcrLanguage> languages,
         RecognitionOptions? options = null,
         CancellationToken cancellationToken = default);
 
-    /// <summary>OCR an image from a stream (format auto-detected).</summary>
+    /// <summary>OCR an image from a stream (format auto-detected) across the given <see cref="OcrLanguage"/> values.</summary>
     Task<OcrResult> ExtractTextFromImage(
         Stream imageStream,
-        IEnumerable<string> languages,
+        IReadOnlyList<OcrLanguage> languages,
         RecognitionOptions? options = null,
         CancellationToken cancellationToken = default);
 
-    /// <summary>OCR an image from an encoded byte array (PNG/JPEG/etc.).</summary>
+    /// <summary>OCR an image from an encoded byte array (PNG/JPEG/etc.) across the given <see cref="OcrLanguage"/> values.</summary>
     Task<OcrResult> ExtractTextFromImage(
         byte[] imageBytes,
-        IEnumerable<string> languages,
+        IReadOnlyList<OcrLanguage> languages,
         RecognitionOptions? options = null,
         CancellationToken cancellationToken = default);
 
-    /// <summary>OCR an image from encoded bytes.</summary>
+    /// <summary>OCR an image from encoded bytes across the given <see cref="OcrLanguage"/> values.</summary>
     Task<OcrResult> ExtractTextFromImage(
         ReadOnlyMemory<byte> imageBytes,
-        IEnumerable<string> languages,
+        IReadOnlyList<OcrLanguage> languages,
         RecognitionOptions? options = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// OCR an already-decoded ImageSharp image. The caller retains ownership of the image
-    /// (it is not disposed by this method).
+    /// OCR an already-decoded ImageSharp image across the given <see cref="OcrLanguage"/> values — the
+    /// in-memory entry point. The caller retains ownership of the image (it is not disposed).
     /// </summary>
     Task<OcrResult> ExtractTextFromImage(
         Image<Rgb24> image,
-        IEnumerable<string> languages,
+        IReadOnlyList<OcrLanguage> languages,
         RecognitionOptions? options = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>OCR an image file on disk in a single <see cref="OcrLanguage"/> (defaults to <see cref="OcrLanguage.Auto"/>).</summary>
+    Task<OcrResult> ExtractTextFromImage(
+        string imagePath,
+        OcrLanguage language = OcrLanguage.Auto,
+        RecognitionOptions? options = null,
+        CancellationToken cancellationToken = default)
+        => ExtractTextFromImage(imagePath, new[] { language }, options, cancellationToken);
+
+    /// <summary>OCR an image from a stream in a single <see cref="OcrLanguage"/> (defaults to <see cref="OcrLanguage.Auto"/>).</summary>
+    Task<OcrResult> ExtractTextFromImage(
+        Stream imageStream,
+        OcrLanguage language = OcrLanguage.Auto,
+        RecognitionOptions? options = null,
+        CancellationToken cancellationToken = default)
+        => ExtractTextFromImage(imageStream, new[] { language }, options, cancellationToken);
+
+    /// <summary>OCR an image from an encoded byte array in a single <see cref="OcrLanguage"/> (defaults to <see cref="OcrLanguage.Auto"/>).</summary>
+    Task<OcrResult> ExtractTextFromImage(
+        byte[] imageBytes,
+        OcrLanguage language = OcrLanguage.Auto,
+        RecognitionOptions? options = null,
+        CancellationToken cancellationToken = default)
+        => ExtractTextFromImage(imageBytes, new[] { language }, options, cancellationToken);
+
+    /// <summary>OCR an image from encoded bytes in a single <see cref="OcrLanguage"/> (defaults to <see cref="OcrLanguage.Auto"/>).</summary>
+    Task<OcrResult> ExtractTextFromImage(
+        ReadOnlyMemory<byte> imageBytes,
+        OcrLanguage language = OcrLanguage.Auto,
+        RecognitionOptions? options = null,
+        CancellationToken cancellationToken = default)
+        => ExtractTextFromImage(imageBytes, new[] { language }, options, cancellationToken);
+
+    /// <summary>OCR an already-decoded image in a single <see cref="OcrLanguage"/> (defaults to <see cref="OcrLanguage.Auto"/>).</summary>
+    Task<OcrResult> ExtractTextFromImage(
+        Image<Rgb24> image,
+        OcrLanguage language = OcrLanguage.Auto,
+        RecognitionOptions? options = null,
+        CancellationToken cancellationToken = default)
+        => ExtractTextFromImage(image, new[] { language }, options, cancellationToken);
 
     /// <summary>
     /// Locates text regions without recognizing them (layout analysis / redaction / field cropping).
@@ -76,7 +116,7 @@ public interface IPaddleOcrService : IAsyncDisposable, IDisposable
     Task<OcrResult> RecognizeRegionsAsync(
         Image<Rgb24> image,
         IEnumerable<IReadOnlyList<OcrPoint>> regions,
-        IEnumerable<string> languages,
+        IReadOnlyList<OcrLanguage> languages,
         RecognitionOptions? options = null,
         CancellationToken cancellationToken = default)
         => throw new NotSupportedException(
@@ -86,7 +126,7 @@ public interface IPaddleOcrService : IAsyncDisposable, IDisposable
     Task<OcrResult> RecognizeRegionsAsync(
         Image<Rgb24> image,
         IEnumerable<DetectedRegion> regions,
-        IEnumerable<string> languages,
+        IReadOnlyList<OcrLanguage> languages,
         RecognitionOptions? options = null,
         CancellationToken cancellationToken = default)
         => throw new NotSupportedException(
@@ -98,7 +138,7 @@ public interface IPaddleOcrService : IAsyncDisposable, IDisposable
     /// initialization latency. A no-op by default on custom implementations; <see cref="PaddleOcrService"/>
     /// performs the warm-up.
     /// </summary>
-    Task WarmUp(IEnumerable<string> languages, CancellationToken cancellationToken = default)
+    Task WarmUp(IReadOnlyList<OcrLanguage> languages, CancellationToken cancellationToken = default)
         => Task.CompletedTask;
 
     // ---- document-structure analysis (PP-StructureV3) ----

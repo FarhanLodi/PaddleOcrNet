@@ -1,3 +1,4 @@
+using PaddleOcrNet.Models;
 using PaddleOcrNet.Services;
 using PaddleOcrNet.Structure;
 using Xunit;
@@ -43,7 +44,7 @@ public sealed class StructureE2ETests
         var options = new StructureOptions
         {
             LayoutModel = LayoutModel.RtDetrL,   // → PP-DocLayoutV3 on HuggingFace
-            Languages = new[] { "en" },
+            Languages = new[] { OcrLanguage.English },
             RecognizeSeals = false,              // no seal model hosted yet
         };
 

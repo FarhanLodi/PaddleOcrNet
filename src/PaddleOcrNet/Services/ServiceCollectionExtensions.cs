@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging;
+using PaddleOcrNet.Models;
 
 namespace PaddleOcrNet.Services;
 
@@ -39,16 +40,16 @@ public static class ServiceCollectionExtensions
     /// distinguish "ready to serve" from "will download on first request".
     /// </summary>
     /// <param name="builder">The health-checks builder (from <c>services.AddHealthChecks()</c>).</param>
-    /// <param name="languages">Languages whose models should be present for a Healthy result. Empty = cache check only.</param>
+    /// <param name="languages"><see cref="OcrLanguage"/> values whose models should be present for a Healthy result. Empty = cache check only. <see cref="OcrLanguage.Auto"/> is ignored, as it has no dedicated model.</param>
     /// <param name="name">Health check name. Defaults to <c>paddleocr</c>.</param>
     /// <param name="failureStatus">Status reported when models are missing. Defaults to <see cref="HealthStatus.Degraded"/>.</param>
     public static IHealthChecksBuilder AddPaddleOcrHealthCheck(
         this IHealthChecksBuilder builder,
-        IEnumerable<string>? languages = null,
+        IReadOnlyList<OcrLanguage>? languages = null,
         string name = "paddleocr",
         HealthStatus failureStatus = HealthStatus.Degraded)
     {
-        var langs = languages?.ToArray() ?? Array.Empty<string>();
+        var langs = languages?.Where(l => l != OcrLanguage.Auto).Select(l => l.ToCode()).ToArray() ?? Array.Empty<string>();
         builder.Services.AddSingleton(sp =>
         {
             var options = sp.GetService<PaddleOcrServiceOptions>() ?? new PaddleOcrServiceOptions();

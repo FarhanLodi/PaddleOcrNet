@@ -125,7 +125,7 @@ public class FeatureValidationTests
         {
             var path = Asset(name);
             if (!File.Exists(path)) { report.AppendLine($"- `{name}`: MISSING asset"); continue; }
-            var r = await service.ExtractTextFromImage(path, new[] { "en" });
+            var r = await service.ExtractTextFromImage(path, OcrLanguage.English);
             report.AppendLine($"- `{name}`: {r.Lines.Count} lines, GPU={r.UsedGpu}, {r.Duration.TotalMilliseconds:F0} ms");
             report.AppendLine("```");
             report.AppendLine(r.FullText.Trim());
@@ -139,7 +139,7 @@ public class FeatureValidationTests
     {
         var path = Asset("ocr_test4.png");
         if (!File.Exists(path)) { report.AppendLine("MISSING asset ocr_test4.png"); return; }
-        var r = await service.ExtractTextFromImage(path, new[] { "auto" });
+        var r = await service.ExtractTextFromImage(path, OcrLanguage.Auto);
         report.AppendLine($"DetectedLanguages: [{string.Join(", ", r.DetectedLanguages)}]");
         report.AppendLine($"Languages used: [{string.Join(", ", r.Languages)}]");
         report.AppendLine($"Lines: {r.Lines.Count}");

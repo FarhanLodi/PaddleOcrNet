@@ -90,7 +90,7 @@ public sealed class PaddleOcrService : IPaddleOcrService
     /// <inheritdoc />
     public async Task<OcrResult> ExtractTextFromImage(
         string imagePath,
-        IEnumerable<string> languages,
+        IReadOnlyList<OcrLanguage> languages,
         RecognitionOptions? options = null,
         CancellationToken cancellationToken = default)
     {
@@ -104,26 +104,26 @@ public sealed class PaddleOcrService : IPaddleOcrService
 
         cancellationToken.ThrowIfCancellationRequested();
         using var image = await LoadGuarded(fullPath, cancellationToken).ConfigureAwait(false);
-        return await RunPipelineAsync(image, languages, options, cancellationToken).ConfigureAwait(false);
+        return await RunPipelineAsync(image, languages.ToCodes(), options, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
     public async Task<OcrResult> ExtractTextFromImage(
         Stream imageStream,
-        IEnumerable<string> languages,
+        IReadOnlyList<OcrLanguage> languages,
         RecognitionOptions? options = null,
         CancellationToken cancellationToken = default)
     {
         EnsureNotDisposed();
         ArgumentNullException.ThrowIfNull(imageStream);
         using var image = await LoadGuarded(imageStream, cancellationToken).ConfigureAwait(false);
-        return await RunPipelineAsync(image, languages, options, cancellationToken).ConfigureAwait(false);
+        return await RunPipelineAsync(image, languages.ToCodes(), options, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
     public Task<OcrResult> ExtractTextFromImage(
         byte[] imageBytes,
-        IEnumerable<string> languages,
+        IReadOnlyList<OcrLanguage> languages,
         RecognitionOptions? options = null,
         CancellationToken cancellationToken = default)
     {
@@ -134,7 +134,7 @@ public sealed class PaddleOcrService : IPaddleOcrService
     /// <inheritdoc />
     public async Task<OcrResult> ExtractTextFromImage(
         ReadOnlyMemory<byte> imageBytes,
-        IEnumerable<string> languages,
+        IReadOnlyList<OcrLanguage> languages,
         RecognitionOptions? options = null,
         CancellationToken cancellationToken = default)
     {
@@ -144,21 +144,78 @@ public sealed class PaddleOcrService : IPaddleOcrService
 
         cancellationToken.ThrowIfCancellationRequested();
         using var image = LoadGuarded(imageBytes.Span);
-        return await RunPipelineAsync(image, languages, options, cancellationToken).ConfigureAwait(false);
+        return await RunPipelineAsync(image, languages.ToCodes(), options, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <inheritdoc />
-    public Task<OcrResult> ExtractTextFromImage(
+    /// <summary>
+    /// Internal code-based image OCR entry point. The public <c>Image&lt;Rgb24&gt;</c> overload is
+    /// <see cref="OcrLanguage"/>-only; this string-code path backs it and is reused by the PDF pipeline
+    /// (which carries string language codes) so rasterized pages don't have to be re-encoded. The caller
+    /// owns the image — the pipeline never disposes the original.
+    /// </summary>
+    internal Task<OcrResult> OcrDecodedImageAsync(
         Image<Rgb24> image,
-        IEnumerable<string> languages,
-        RecognitionOptions? options = null,
-        CancellationToken cancellationToken = default)
+        IReadOnlyList<string> codes,
+        RecognitionOptions? options,
+        CancellationToken cancellationToken)
     {
         EnsureNotDisposed();
         ArgumentNullException.ThrowIfNull(image);
-        // Caller owns the image — RunPipelineAsync never disposes the original.
-        return RunPipelineAsync(image, languages, options, cancellationToken);
+        return RunPipelineAsync(image, codes, options, cancellationToken);
     }
+
+    /// <summary>OCR an already-decoded image across several <see cref="OcrLanguage"/> values (the in-memory entry point).</summary>
+    public Task<OcrResult> ExtractTextFromImage(
+        Image<Rgb24> image,
+        IReadOnlyList<OcrLanguage> languages,
+        RecognitionOptions? options = null,
+        CancellationToken cancellationToken = default)
+        => OcrDecodedImageAsync(image, languages.ToCodes(), options, cancellationToken);
+
+    // ---- single-language convenience overloads ----
+    // Concrete here (not only as IPaddleOcrService default methods) so they're callable on a concrete
+    // PaddleOcrService reference — e.g. new PaddleOcrService().ExtractTextFromImage("x.png", OcrLanguage.English).
+    // Default of OcrLanguage.Auto makes the zero-config call (ExtractTextFromImage("x.png")) just work.
+
+    /// <summary>OCR an image file in a single <see cref="OcrLanguage"/> (defaults to <see cref="OcrLanguage.Auto"/>).</summary>
+    public Task<OcrResult> ExtractTextFromImage(
+        string imagePath,
+        OcrLanguage language = OcrLanguage.Auto,
+        RecognitionOptions? options = null,
+        CancellationToken cancellationToken = default)
+        => ExtractTextFromImage(imagePath, new[] { language }, options, cancellationToken);
+
+    /// <summary>OCR an image stream in a single <see cref="OcrLanguage"/> (defaults to <see cref="OcrLanguage.Auto"/>).</summary>
+    public Task<OcrResult> ExtractTextFromImage(
+        Stream imageStream,
+        OcrLanguage language = OcrLanguage.Auto,
+        RecognitionOptions? options = null,
+        CancellationToken cancellationToken = default)
+        => ExtractTextFromImage(imageStream, new[] { language }, options, cancellationToken);
+
+    /// <summary>OCR an encoded image byte array in a single <see cref="OcrLanguage"/> (defaults to <see cref="OcrLanguage.Auto"/>).</summary>
+    public Task<OcrResult> ExtractTextFromImage(
+        byte[] imageBytes,
+        OcrLanguage language = OcrLanguage.Auto,
+        RecognitionOptions? options = null,
+        CancellationToken cancellationToken = default)
+        => ExtractTextFromImage(imageBytes, new[] { language }, options, cancellationToken);
+
+    /// <summary>OCR encoded image bytes in a single <see cref="OcrLanguage"/> (defaults to <see cref="OcrLanguage.Auto"/>).</summary>
+    public Task<OcrResult> ExtractTextFromImage(
+        ReadOnlyMemory<byte> imageBytes,
+        OcrLanguage language = OcrLanguage.Auto,
+        RecognitionOptions? options = null,
+        CancellationToken cancellationToken = default)
+        => ExtractTextFromImage(imageBytes, new[] { language }, options, cancellationToken);
+
+    /// <summary>OCR an already-decoded image in a single <see cref="OcrLanguage"/> (defaults to <see cref="OcrLanguage.Auto"/>).</summary>
+    public Task<OcrResult> ExtractTextFromImage(
+        Image<Rgb24> image,
+        OcrLanguage language = OcrLanguage.Auto,
+        RecognitionOptions? options = null,
+        CancellationToken cancellationToken = default)
+        => ExtractTextFromImage(image, new[] { language }, options, cancellationToken);
 
     /// <summary>
     /// Locates text regions <b>without</b> recognizing them — fast, language-independent, and useful
@@ -207,7 +264,7 @@ public sealed class PaddleOcrService : IPaddleOcrService
     public async Task<OcrResult> RecognizeRegionsAsync(
         Image<Rgb24> image,
         IEnumerable<IReadOnlyList<OcrPoint>> regions,
-        IEnumerable<string> languages,
+        IReadOnlyList<OcrLanguage> languages,
         RecognitionOptions? options = null,
         CancellationToken cancellationToken = default)
     {
@@ -224,7 +281,7 @@ public sealed class PaddleOcrService : IPaddleOcrService
         using var activity = PaddleOcrDiagnostics.ActivitySource.StartActivity("PaddleOcr.Recognize", ActivityKind.Internal);
         var sw = Stopwatch.StartNew();
 
-        var langs = ResolveLanguages(languages, allowEmpty: false);
+        var langs = ResolveLanguages(languages.ToCodes(), allowEmpty: false);
         if (polygons.Length == 0)
         {
             return BuildResult(Array.Empty<OcrLine>(), langs, sw, activity, image.Width, image.Height);
@@ -238,7 +295,7 @@ public sealed class PaddleOcrService : IPaddleOcrService
     public Task<OcrResult> RecognizeRegionsAsync(
         Image<Rgb24> image,
         IEnumerable<DetectedRegion> regions,
-        IEnumerable<string> languages,
+        IReadOnlyList<OcrLanguage> languages,
         RecognitionOptions? options = null,
         CancellationToken cancellationToken = default)
     {
@@ -247,10 +304,10 @@ public sealed class PaddleOcrService : IPaddleOcrService
     }
 
     /// <inheritdoc />
-    public async Task WarmUp(IEnumerable<string> languages, CancellationToken cancellationToken = default)
+    public async Task WarmUp(IReadOnlyList<OcrLanguage> languages, CancellationToken cancellationToken = default)
     {
         using var op = BeginOperation();
-        var langs = ResolveLanguages(languages, allowEmpty: false);
+        var langs = ResolveLanguages(languages.ToCodes(), allowEmpty: false);
         await _engine.WarmUp(langs, cancellationToken).ConfigureAwait(false);
     }
 

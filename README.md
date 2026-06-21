@@ -34,8 +34,8 @@ in-process, offline-capable, and trim/AOT-friendly.
 - **High-accuracy text OCR** — DB detection + SVTR recognition (PP-OCRv5) handles dense invoices, forms,
   receipts, handwriting, rotated scans, and curved text.
 - **80+ languages** across 12 script families, with one shared detector and per-script recognizer packs.
-- **Automatic language detection** — pass `"auto"` and PaddleOcrNet identifies the script and pulls the
-  right model on demand (Python PaddleOCR requires you to name the language up front).
+- **Automatic language detection** — pass `OcrLanguage.Auto` and PaddleOcrNet identifies the script and
+  pulls the right model on demand (Python PaddleOCR requires you to name the language up front).
 - **Document understanding** — `AnalyzeDocumentAsync` returns layout regions, reading order, tables as
   HTML, and formulas as LaTeX, and serializes the whole document to **Markdown, HTML, JSON, Word, or Excel**.
 - **Ask your documents** — LLM-backed key-information extraction and Q&A, provider-agnostic: bring your own
@@ -65,12 +65,13 @@ Requires **.NET 10** (`net10.0`). Windows, Linux, and macOS (x64/arm64).
 ## Quick start
 
 ```csharp
+using PaddleOcrNet.Models;
 using PaddleOcrNet.Services;
 
 // ONNX models download + cache on first use; construction itself loads nothing.
 await using var ocr = new PaddleOcrService();
 
-OcrResult result = await ocr.ExtractTextFromImage("invoice.png", new[] { "en" });
+OcrResult result = await ocr.ExtractTextFromImage("invoice.png", OcrLanguage.English);
 
 Console.WriteLine(result.FullText);
 foreach (var line in result.Lines)
@@ -80,21 +81,21 @@ foreach (var line in result.Lines)
 Input can be a file path, `byte[]`, `Stream`, or an already-decoded `Image<Rgb24>`:
 
 ```csharp
-await ocr.ExtractTextFromImage(bytes,  new[] { "en" });
-await ocr.ExtractTextFromImage(stream, new[] { "en", "de" });
+await ocr.ExtractTextFromImage(bytes,  OcrLanguage.English);
+await ocr.ExtractTextFromImage(stream, new[] { OcrLanguage.English, OcrLanguage.German });
 
 // Detect-only (bounding boxes for redaction / cropping — no recognition):
 var regions = await ocr.DetectRegionsAsync("page.png");
 
 // Recognize caller-supplied regions (skip detection):
-var partial = await ocr.RecognizeRegionsAsync(image, regions, new[] { "en" });
+var partial = await ocr.RecognizeRegionsAsync(image, regions, new[] { OcrLanguage.English });
 ```
 
 ### Automatic language detection
 
 ```csharp
-// "auto" → PaddleOcrNet detects the dominant script, downloads the matching pack, and reports it.
-OcrResult r = await ocr.ExtractTextFromImage("multilingual.png", new[] { "auto" });
+// OcrLanguage.Auto → PaddleOcrNet detects the dominant script, downloads the matching pack, and reports it.
+OcrResult r = await ocr.ExtractTextFromImage("multilingual.png", OcrLanguage.Auto);
 
 Console.WriteLine(string.Join(", ", r.DetectedLanguages)); // e.g. "arabic, latin, ch"
 ```
@@ -108,6 +109,7 @@ OCR / table / formula → reading-order reconstruction — and returns a structu
 straight to Markdown or JSON.
 
 ```csharp
+using PaddleOcrNet.Models;
 using PaddleOcrNet.Services;
 using PaddleOcrNet.Structure;
 
@@ -115,7 +117,7 @@ await using var ocr = new PaddleOcrService();
 
 StructureResult doc = await ocr.AnalyzeDocumentAsync("report.png", new StructureOptions
 {
-    Languages         = new[] { "en" },
+    Languages         = new[] { OcrLanguage.English },
     UseDocOrientation = true,    // auto-rotate skewed scans (0/90/180/270°)
     RecognizeTables   = true,    // tables → HTML
     RecognizeFormulas = true,    // formulas → LaTeX
@@ -141,7 +143,8 @@ string json     = doc.ToJson();      // structured blocks with bounding boxes + 
 ## Supported languages
 
 A single **DB detector** serves every language; recognition selects a per-script **recognizer pack**
-(PP-OCRv5 mobile + the matching character dictionary). Pass any representative code:
+(PP-OCRv5 mobile + the matching character dictionary). Languages are expressed with the **`OcrLanguage`**
+enum; each value maps to one of the representative recognizer codes below:
 
 | Pack | Codes |
 | --- | --- |
@@ -156,13 +159,32 @@ A single **DB detector** serves every language; recognition selects a per-script
 | Traditional Chinese | `chinese_cht` `cht` `zh_tra` |
 | East-Slavic | `eslav` `ru_eslav` `uk_eslav` `be_eslav` |
 
-Or pass `"auto"` to detect the script automatically. Unknown codes are skipped with a warning.
+Or pass **`OcrLanguage.Auto`** to detect the script automatically.
+
+Languages are **enum-only** — the OCR methods take `OcrLanguage` (there are no raw-string overloads). The
+single-language overload defaults to `OcrLanguage.Auto`, so `ExtractTextFromImage("x.png")` auto-detects
+with zero configuration:
+
+```csharp
+using PaddleOcrNet.Models;
+
+await ocr.ExtractTextFromImage("page.png");                                       // zero-config: defaults to OcrLanguage.Auto
+await ocr.ExtractTextFromImage("page.png", OcrLanguage.French);                   // single language
+await ocr.ExtractTextFromImage("page.png", new[] { OcrLanguage.English, OcrLanguage.German });  // multiple
+await ocr.ExtractTextFromImage("page.png", OcrLanguage.Auto);                     // explicit auto-detect
+
+// Got raw codes from config or the command line? Parse them into the enum:
+OcrLanguage lang = OcrLanguageExtensions.FromCode("en");
+IReadOnlyList<OcrLanguage> langs = OcrLanguageExtensions.FromCodes(new[] { "en", "de" });
+```
 
 ---
 
 ## ASP.NET Core / dependency injection
 
 ```csharp
+using PaddleOcrNet.Models;
+
 builder.Services.AddPaddleOcrNet(o =>
 {
     o.UseTextLineOrientation = true;       // correct 180°-flipped lines
@@ -171,7 +193,7 @@ builder.Services.AddPaddleOcrNet(o =>
 
 // Readiness probe — Healthy once models for these languages are cached:
 builder.Services.AddHealthChecks()
-    .AddPaddleOcrHealthCheck(languages: new[] { "en", "ch" });
+    .AddPaddleOcrHealthCheck(languages: new[] { OcrLanguage.English, OcrLanguage.ChineseSimplified });
 ```
 
 `IPaddleOcrService` is registered as a **singleton** — ONNX sessions are expensive to build and safe to
@@ -264,6 +286,14 @@ intelligence (key-information extraction + Q&A). Under consideration:
   infrastructure.
 - **vs. EasyOCR-based libraries** — PP-OCRv5 is materially stronger on dense documents, tables, rotated
   scans, handwriting, and CJK, and adds full document-structure understanding.
+
+---
+
+## Contact
+
+For work inquiries, collaboration, feature requests, or any questions, reach out to:
+
+**Farhan Lodi** — [farhanlodi31@gmail.com](mailto:farhanlodi31@gmail.com)
 
 ---
 

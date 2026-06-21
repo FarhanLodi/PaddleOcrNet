@@ -1,3 +1,4 @@
+using PaddleOcrNet.Models;
 using PaddleOcrNet.Services;
 // using PaddleOcrNet.Structure;   // uncomment for the AnalyzeDocumentAsync structure snippet below
 
@@ -26,7 +27,7 @@ if (service.GpuAccelerationHint is { } hint)
 }
 
 var imagePath = args[0];
-var languages = args.Length > 1 ? args[1..] : new[] { "en" };
+var languageCodes = args.Length > 1 ? args[1..] : new[] { "en" };
 
 if (!File.Exists(imagePath))
 {
@@ -36,7 +37,21 @@ if (!File.Exists(imagePath))
     return 2;
 }
 
-Console.WriteLine($"Running OCR on '{imagePath}' (languages: {string.Join(", ", languages)})...");
+// Parse the CLI string codes (e.g. "en", "ch", "auto") into the strongly-typed OcrLanguage enum.
+IReadOnlyList<OcrLanguage> languages;
+try
+{
+    languages = OcrLanguageExtensions.FromCodes(languageCodes);
+}
+catch (ArgumentException ex)
+{
+    Console.Error.WriteLine(ex.Message);
+    Console.Error.WriteLine();
+    PrintUsage();
+    return 2;
+}
+
+Console.WriteLine($"Running OCR on '{imagePath}' (languages: {string.Join(", ", languageCodes)})...");
 Console.WriteLine("Note: required PP-OCRv5 ONNX models download on first use; see README for the model host note.");
 Console.WriteLine();
 
@@ -87,7 +102,7 @@ static void PrintUsage()
 //       RecognizeTables   = true,                  // SLANet table structure -> HTML
 //       RecognizeFormulas = true,                  // LaTeX-OCR -> LaTeX
 //       RecognizeSeals    = true,                  // seal text
-//       Languages         = new[] { "en" },
+//       Languages         = new[] { OcrLanguage.English },
 //   };
 //
 //   StructureResult doc = await service.AnalyzeDocumentAsync("page.png", options);

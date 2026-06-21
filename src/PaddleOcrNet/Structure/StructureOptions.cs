@@ -1,3 +1,5 @@
+using PaddleOcrNet.Models;
+
 namespace PaddleOcrNet.Structure;
 
 /// <summary>
@@ -47,10 +49,12 @@ public sealed record StructureOptions
     public LayoutModel LayoutModel { get; init; } = LayoutModel.RtDetrL;
 
     /// <summary>
-    /// Recognition languages passed through to the text recognizer for text/caption/seal regions. Defaults
-    /// to a single-element list of the default model code (<c>"ch"</c>, which also covers English/Japanese).
+    /// Recognition languages passed through to the text recognizer for text/caption/seal regions. Takes
+    /// strongly-typed <see cref="OcrLanguage"/> values. Defaults to a single-element list of
+    /// <see cref="OcrLanguage.ChineseSimplified"/> (code <c>"ch"</c>, which also covers English/Japanese).
+    /// Use <see cref="OcrLanguage.Auto"/> for auto-detect.
     /// </summary>
-    public IReadOnlyList<string> Languages { get; init; } = new[] { "ch" };
+    public IReadOnlyList<OcrLanguage> Languages { get; init; } = new[] { OcrLanguage.ChineseSimplified };
 
     /// <summary>Default structure options.</summary>
     public static StructureOptions Default { get; } = new();

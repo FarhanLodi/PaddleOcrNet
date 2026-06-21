@@ -80,7 +80,7 @@ public sealed class AssetsOcrTests : IClassFixture<AssetsOcrTests.ServiceFixture
         Skip.IfNot(IntegrationEnabled, $"Integration test skipped; set {Gate}=1 to run.");
 
         var path = Path.Combine(AssetsDir, fileName);
-        OcrResult result = await _fixture.Service.ExtractTextFromImage(path, new[] { "en" });
+        OcrResult result = await _fixture.Service.ExtractTextFromImage(path, OcrLanguage.English);
 
         Assert.NotNull(result);
         Assert.True(result.SourceWidth > 0 && result.SourceHeight > 0, "source dimensions should be populated");
@@ -97,7 +97,7 @@ public sealed class AssetsOcrTests : IClassFixture<AssetsOcrTests.ServiceFixture
         Skip.IfNot(IntegrationEnabled, $"Integration test skipped; set {Gate}=1 to run.");
 
         var path = Path.Combine(AssetsDir, fileName);
-        OcrResult result = await _fixture.Service.ExtractTextFromImage(path, new[] { "auto" });
+        OcrResult result = await _fixture.Service.ExtractTextFromImage(path, OcrLanguage.Auto);
 
         Assert.NotNull(result);
         _out.WriteLine($"[{fileName}] detected: [{string.Join(", ", result.DetectedLanguages)}] — {result.Lines.Count} line(s)");
@@ -110,7 +110,7 @@ public sealed class AssetsOcrTests : IClassFixture<AssetsOcrTests.ServiceFixture
         Skip.IfNot(IntegrationEnabled, $"Integration test skipped; set {Gate}=1 to run.");
 
         var path = Path.Combine(AssetsDir, "pdf", fileName);
-        PdfOcrResult result = await _fixture.Service.ExtractTextFromPdfAsync(path, new[] { "en" });
+        PdfOcrResult result = await _fixture.Service.ExtractTextFromPdfAsync(path, OcrLanguage.English);
 
         Assert.NotNull(result);
         Assert.NotEmpty(result.Pages);

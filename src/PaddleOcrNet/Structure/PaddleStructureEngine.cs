@@ -246,7 +246,7 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
         Image<Rgb24> crop, StructureOptions options, CancellationToken ct)
     {
         var recOptions = new RecognitionOptions { Grouping = TextGrouping.Line };
-        return await _ocrEngine.RecognizeAsync(crop, options.Languages, recOptions, ct).ConfigureAwait(false);
+        return await _ocrEngine.RecognizeAsync(crop, options.Languages.ToCodes(), recOptions, ct).ConfigureAwait(false);
     }
 
     /// <summary>Clamps a (possibly out-of-bounds / inverted) bounding box to an integer pixel rectangle inside the page.</summary>
@@ -442,7 +442,7 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
             if (_sealRecognizer is not null) return _sealRecognizer;
 
             var sealDet = await LoadSessionAsync(PaddleModelRegistry.SealDetector, ct).ConfigureAwait(false);
-            var textRecognizer = await _ocrEngine.GetSharedRecognizerAsync(options.Languages, ct).ConfigureAwait(false);
+            var textRecognizer = await _ocrEngine.GetSharedRecognizerAsync(options.Languages.ToCodes(), ct).ConfigureAwait(false);
 
             _sealRecognizer = new SealRecognizer(sealDet, textRecognizer);
             _logger?.LogInformation("Seal recognizer loaded (PP-OCRv4 seal det + shared text recognizer).");

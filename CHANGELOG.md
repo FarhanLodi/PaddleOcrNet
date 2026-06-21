@@ -24,6 +24,15 @@ All notable changes to PaddleOcrNet are documented here. The format is based on
   — parity with `save_to_html` / `concatenate_markdown_pages`.
 - **PDF page-range & password** — `PdfOcrOptions.PageRange` (1-based `"1-3,5,8-"` syntax) and `Password`
   (encrypted PDFs via PDFium) with original page numbers preserved in `PdfOcrResult`.
+- **`OcrLanguage` enum — the language API is now enum-only.** Languages are expressed with the
+  strongly-typed `OcrLanguage` enum (incl. `OcrLanguage.Auto`); the raw string-code language parameters
+  have been removed. `ExtractTextFromImage`, `RecognizeRegionsAsync`, `WarmUp`, the PDF helpers
+  (`ExtractTextFromPdfAsync` / `CreateSearchablePdfAsync`), `StructureOptions.Languages`, and
+  `AddPaddleOcrHealthCheck(languages:)` all take `OcrLanguage` / `IReadOnlyList<OcrLanguage>`. The
+  single-language convenience overloads default to `OcrLanguage.Auto`, so `ExtractTextFromImage("x.png")`
+  auto-detects with zero configuration. `ToCode()`/`ToCodes()` convert to the underlying codes, and
+  `OcrLanguageExtensions.FromCode`/`TryFromCode`/`FromCodes` parse raw string codes (from CLI args or
+  config) back into the enum.
 - **Document intelligence (LLM-backed KIE + Q&A)** — a new `PaddleOcrNet.Intelligence` layer that replaces
   PaddleOCR's PP-ChatOCR / KIE with a **provider-agnostic** design: a bring-your-own `IChatModel` interface
   plus a built-in `OpenAiCompatibleChatModel` that targets OpenAI, Azure OpenAI, Ollama, vLLM, LM Studio,
