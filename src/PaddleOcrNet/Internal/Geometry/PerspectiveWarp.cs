@@ -171,7 +171,9 @@ internal static class PerspectiveWarp
         return new[] { sol[0], sol[1], sol[2], sol[3], sol[4], sol[5], sol[6], sol[7], 1.0 };
     }
 
-    /// <summary>Gaussian elimination with partial pivoting for an 8x8 system.</summary>
+    /// <summary>
+    /// Gaussian elimination with partial pivoting for an 8x8 system.
+    /// </summary>
     private static bool SolveLinear(double[,] a, double[] b, out double[] x)
     {
         const int n = 8;

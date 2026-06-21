@@ -65,7 +65,9 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
         _sessionOptions = ExecutionProviderResolver.BuildSessionOptions(_resolvedProvider, options, logger, perBoxParallel: false);
     }
 
-    /// <summary>The OCR engine used for the text-recognition path (exposed so the parent service can share/warm it).</summary>
+    /// <summary>
+    /// The OCR engine used for the text-recognition path (exposed so the parent service can share/warm it).
+    /// </summary>
     public PaddleOcrEngine OcrEngine => _ocrEngine;
 
     /// <summary>
@@ -233,7 +235,9 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
         }
     }
 
-    /// <summary>Smallest region side (px) worth cropping/recognizing; smaller regions yield an empty block.</summary>
+    /// <summary>
+    /// Smallest region side (px) worth cropping/recognizing; smaller regions yield an empty block.
+    /// </summary>
     private const int MinRegionPx = 2;
 
     /// <summary>
@@ -249,7 +253,9 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
         return await _ocrEngine.RecognizeAsync(crop, options.Languages.ToCodes(), recOptions, ct).ConfigureAwait(false);
     }
 
-    /// <summary>Clamps a (possibly out-of-bounds / inverted) bounding box to an integer pixel rectangle inside the page.</summary>
+    /// <summary>
+    /// Clamps a (possibly out-of-bounds / inverted) bounding box to an integer pixel rectangle inside the page.
+    /// </summary>
     private static Rectangle ClampToImage(OcrBoundingBox bounds, int width, int height)
     {
         int minX = (int)Math.Floor(Math.Min(bounds.MinX, bounds.MaxX));
@@ -286,7 +292,9 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
         return translated;
     }
 
-    /// <summary>Joins recognized lines into a single block-text string (newline-separated); null when empty.</summary>
+    /// <summary>
+    /// Joins recognized lines into a single block-text string (newline-separated); null when empty.
+    /// </summary>
     private static string? JoinText(IReadOnlyList<OcrLine> lines)
     {
         if (lines.Count == 0) return null;
@@ -300,7 +308,9 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
     // call these from AnalyzeAsync; the loaders themselves are complete.
     // ===============================================================================================
 
-    /// <summary>Loads (once) the document pre-processor, wiring the doc-orientation and UVDoc unwarp sessions.</summary>
+    /// <summary>
+    /// Loads (once) the document pre-processor, wiring the doc-orientation and UVDoc unwarp sessions.
+    /// </summary>
     public async Task<IDocPreprocessor> GetOrLoadPreprocessorAsync(StructureOptions options, CancellationToken ct)
     {
         if (_preprocessor is not null) return _preprocessor;
@@ -374,7 +384,9 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
         }
     }
 
-    /// <summary>Loads (once) the SLANet_plus table-structure recognizer + its structure-token vocab.</summary>
+    /// <summary>
+    /// Loads (once) the SLANet_plus table-structure recognizer + its structure-token vocab.
+    /// </summary>
     public async Task<ITableRecognizer> GetOrLoadTableRecognizerAsync(CancellationToken ct)
     {
         if (_tableRecognizer is not null) return _tableRecognizer;
@@ -407,7 +419,9 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
         }
     }
 
-    /// <summary>Loads (once) the LaTeX-OCR formula recognizer (image-resizer + encoder + decoder + tokenizer).</summary>
+    /// <summary>
+    /// Loads (once) the LaTeX-OCR formula recognizer (image-resizer + encoder + decoder + tokenizer).
+    /// </summary>
     public async Task<IFormulaRecognizer> GetOrLoadFormulaRecognizerAsync(CancellationToken ct)
     {
         if (_formulaRecognizer is not null) return _formulaRecognizer;
@@ -432,7 +446,9 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
         }
     }
 
-    /// <summary>Loads (once) the seal recognizer (PP-OCRv4 seal detector + the shared text recognizer).</summary>
+    /// <summary>
+    /// Loads (once) the seal recognizer (PP-OCRv4 seal detector + the shared text recognizer).
+    /// </summary>
     public async Task<ISealRecognizer> GetOrLoadSealRecognizerAsync(StructureOptions options, CancellationToken ct)
     {
         if (_sealRecognizer is not null) return _sealRecognizer;
@@ -465,7 +481,9 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
         return new InferenceSession(path, _sessionOptions);
     }
 
-    /// <summary>Reads a newline-delimited token list (e.g. <c>table_structure_dict.txt</c>) into an ordered list.</summary>
+    /// <summary>
+    /// Reads a newline-delimited token list (e.g. <c>table_structure_dict.txt</c>) into an ordered list.
+    /// </summary>
     private static IReadOnlyList<string> LoadTokenList(string path)
         => File.ReadAllLines(path);
 

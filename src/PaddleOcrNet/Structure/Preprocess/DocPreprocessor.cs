@@ -345,7 +345,9 @@ internal sealed class DocPreprocessor : IDocPreprocessor
         }
     }
 
-    /// <summary>Scales a [0,1] (clamped) float to a 0–255 byte.</summary>
+    /// <summary>
+    /// Scales a [0,1] (clamped) float to a 0–255 byte.
+    /// </summary>
     private static byte ToByte(float v)
     {
         float scaled = v * 255f;
@@ -354,7 +356,9 @@ internal sealed class DocPreprocessor : IDocPreprocessor
         return (byte)(scaled + 0.5f);
     }
 
-    /// <summary>Returns the index of the largest score in <paramref name="scores"/> (0 when empty).</summary>
+    /// <summary>
+    /// Returns the index of the largest score in <paramref name="scores"/> (0 when empty).
+    /// </summary>
     private static int ArgMax(ReadOnlySpan<float> scores)
     {
         if (scores.Length == 0) return 0;

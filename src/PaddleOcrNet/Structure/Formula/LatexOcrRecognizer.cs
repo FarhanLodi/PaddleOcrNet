@@ -44,39 +44,61 @@ internal sealed class LatexOcrRecognizer : IFormulaRecognizer
 {
     // --- Pre-processing constants (RapidLaTeXOCR PreProcess) ---
 
-    /// <summary>Per-pixel z-score mean applied over <c>x/255</c>.</summary>
+    /// <summary>
+    /// Per-pixel z-score mean applied over <c>x/255</c>.
+    /// </summary>
     private const float NormMean = 0.7931f;
 
-    /// <summary>Per-pixel z-score standard deviation applied over <c>x/255</c>.</summary>
+    /// <summary>
+    /// Per-pixel z-score standard deviation applied over <c>x/255</c>.
+    /// </summary>
     private const float NormStd = 0.1738f;
 
-    /// <summary>Binarization threshold (8-bit) used to find the content bounding box and to auto-invert.</summary>
+    /// <summary>
+    /// Binarization threshold (8-bit) used to find the content bounding box and to auto-invert.
+    /// </summary>
     private const int BinaryThreshold = 128;
 
-    /// <summary>All padded image dimensions are rounded up to a multiple of this (the ViT patch grid stride).</summary>
+    /// <summary>
+    /// All padded image dimensions are rounded up to a multiple of this (the ViT patch grid stride).
+    /// </summary>
     private const int SizeMultiple = 32;
 
-    /// <summary>Minimum padded width/height; degenerate crops are grown to at least this.</summary>
+    /// <summary>
+    /// Minimum padded width/height; degenerate crops are grown to at least this.
+    /// </summary>
     private const int MinSide = 32;
 
-    /// <summary>Maximum padded width before the crop is scaled down with bilinear sampling.</summary>
+    /// <summary>
+    /// Maximum padded width before the crop is scaled down with bilinear sampling.
+    /// </summary>
     private const int MaxWidth = 672;
 
-    /// <summary>Maximum padded height before the crop is scaled down with bilinear sampling.</summary>
+    /// <summary>
+    /// Maximum padded height before the crop is scaled down with bilinear sampling.
+    /// </summary>
     private const int MaxHeight = 192;
 
     // --- Decoder special token ids (RapidLaTeXOCR) ---
 
-    /// <summary>Begin-of-sequence token id that seeds the decode loop.</summary>
+    /// <summary>
+    /// Begin-of-sequence token id that seeds the decode loop.
+    /// </summary>
     private const int BosToken = 1;
 
-    /// <summary>End-of-sequence token id that terminates the decode loop.</summary>
+    /// <summary>
+    /// End-of-sequence token id that terminates the decode loop.
+    /// </summary>
     private const int EosToken = 2;
 
-    /// <summary>Hard cap on the number of decoded tokens.</summary>
+    /// <summary>
+    /// Hard cap on the number of decoded tokens.
+    /// </summary>
     private const int MaxSeqLen = 512;
 
-    /// <summary>Maximum number of image-resizer bucketing iterations.</summary>
+    /// <summary>
+    /// Maximum number of image-resizer bucketing iterations.
+    /// </summary>
     private const int MaxResizerIterations = 10;
 
     private readonly InferenceSession _encoder;
@@ -84,7 +106,9 @@ internal sealed class LatexOcrRecognizer : IFormulaRecognizer
     private readonly InferenceSession? _imageResizer;
     private readonly IReadOnlyDictionary<int, string> _vocab;
 
-    /// <summary>Encoder input tensor name (resolved once from the model's metadata).</summary>
+    /// <summary>
+    /// Encoder input tensor name (resolved once from the model's metadata).
+    /// </summary>
     private readonly string _encoderInputName;
 
     /// <summary>
@@ -93,7 +117,9 @@ internal sealed class LatexOcrRecognizer : IFormulaRecognizer
     /// </summary>
     private readonly string[] _decoderInputNames;
 
-    /// <summary>Image-resizer input tensor name (null when no resizer session was supplied).</summary>
+    /// <summary>
+    /// Image-resizer input tensor name (null when no resizer session was supplied).
+    /// </summary>
     private readonly string? _resizerInputName;
 
     /// <summary>
@@ -398,7 +424,9 @@ internal sealed class LatexOcrRecognizer : IFormulaRecognizer
         return Math.Max(MinSide, width);
     }
 
-    /// <summary>Rounds <paramref name="value"/> up to the nearest positive multiple of <paramref name="multiple"/>.</summary>
+    /// <summary>
+    /// Rounds <paramref name="value"/> up to the nearest positive multiple of <paramref name="multiple"/>.
+    /// </summary>
     private static int PadTo(int value, int multiple)
     {
         if (value < 1) value = 1;

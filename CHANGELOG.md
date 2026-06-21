@@ -42,6 +42,29 @@ All notable changes to PaddleOcrNet are documented here. The format is based on
   parsed document Markdown, and offers `ExtractKeyInformationAsync` (key→value extraction, JSON-mode) and
   `AskAsync` (document Q&A). DI: `AddOpenAiCompatibleChatModel(...)` / `AddChatModel(...)` +
   `AddPaddleOcrDocumentIntelligence(...)`.
+- **Chart-to-data parsing** — `IDocumentIntelligence.ParseChartsAsync` (image-path / `Image<Rgb24>` /
+  pre-computed `StructureResult` overloads) detects chart/plot regions and reconstructs each chart's
+  underlying data as a GitHub-flavored Markdown table via a **vision-capable** `IChatModel` — the
+  provider-agnostic equivalent of PaddleOCR's PP-Chart2Table (OpenAI `gpt-4o`, Azure, or local Ollama
+  `qwen2.5-vl` / `llama3.2-vision`; no local GPU, the provider does the vision inference). It crops each
+  detected region and sends only those pixels to the model; new `ChartParseResult` / `ParsedChart` result
+  types, plus `DocumentIntelligenceOptions.ChartExtractionSystemPromptOverride` to customize the prompt.
+  Throws `NotSupportedException` when the configured model isn't vision-capable and the document has charts.
+- **Offline (non-LLM) Key-Information Extraction** — `IOfflineKeyInformationExtractor` /
+  `OfflineKeyInformationExtractor`, a heuristic, geometry-based extractor (no LLM, no network, CPU-only) that
+  resolves each requested key from OCR layout — inline (`Key: value`), value-to-the-right, or value-below.
+  `Extract(OcrResult, keys)` plus `ExtractAsync(imagePath/Image, keys)` overloads return the same
+  `KeyInformationResult` as the LLM path (`Usage` / `Model` / `RawJson` left `null`). The offline alternative
+  to `ExtractKeyInformationAsync`; best-effort on clearly labeled forms/invoices. DI: `AddPaddleOcrOfflineKie()`
+  (requires `AddPaddleOcrNet()`).
+- **Image-embedding export overloads** — `StructureResult.ToDocx(Image<Rgb24>)` and
+  `ToHtml(Image<Rgb24>, title?)` crop figure/chart/seal regions from the supplied source image and embed them
+  as **real pixels** (DOCX inline `word/media/` image part; HTML `data:image/png;base64,…` `<img>`). The
+  existing no-image overloads keep their bbox-placeholder behavior.
+- **Native Word equations (OMML)** — the image-aware DOCX exporter renders recovered formula LaTeX as native
+  Word equations via a best-effort LaTeX→OMML converter (`PaddleOcrNet.Structure.Export.LatexToOmml.Convert`)
+  — fractions, sub/superscripts, roots, Greek letters, n-ary sum/integral/product, and common operators;
+  unsupported constructs degrade gracefully to text (previously `$$…$$` text).
 
 ## [1.0.0-alpha] - 2026-06-20
 

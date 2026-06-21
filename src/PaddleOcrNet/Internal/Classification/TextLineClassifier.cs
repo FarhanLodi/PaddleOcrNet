@@ -112,10 +112,14 @@ internal sealed class TextLineClassifier : IAngleClassifier
         return tensor;
     }
 
-    /// <summary>Normalizes an 8-bit channel value to <c>(v/255 − 0.5)/0.5</c>, i.e. the range [−1, 1].</summary>
+    /// <summary>
+    /// Normalizes an 8-bit channel value to <c>(v/255 − 0.5)/0.5</c>, i.e. the range [−1, 1].
+    /// </summary>
     private static float Normalize(byte value) => (value / 255f - 0.5f) / 0.5f;
 
-    /// <summary>Returns the index of the largest score and reports that score via <paramref name="max"/>.</summary>
+    /// <summary>
+    /// Returns the index of the largest score and reports that score via <paramref name="max"/>.
+    /// </summary>
     private static int ArgMax(ReadOnlySpan<float> scores, out float max)
     {
         int best = 0;

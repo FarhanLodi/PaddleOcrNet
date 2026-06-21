@@ -1,27 +1,14 @@
 namespace PaddleOcrNet.Models;
 
 /// <summary>
-/// How recognized text regions are grouped in the result.
-/// </summary>
-public enum TextGrouping
-{
-    /// <summary>One result per raw detected box (roughly per line/word). No further merging.</summary>
-    Word,
-
-    /// <summary>Adjacent boxes on the same line are merged into one result (the default).</summary>
-    Line,
-
-    /// <summary>Lines are further merged into paragraph blocks by vertical proximity.</summary>
-    Paragraph,
-}
-
-/// <summary>
 /// Tunable options for a recognition call. Pass to
 /// <see cref="Services.PaddleOcrService.ExtractTextFromImage(string, System.Collections.Generic.IEnumerable{string}, RecognitionOptions, System.Threading.CancellationToken)"/>.
 /// </summary>
 public sealed record RecognitionOptions
 {
-    /// <summary>How detected regions are grouped. Defaults to <see cref="TextGrouping.Line"/>.</summary>
+    /// <summary>
+    /// How detected regions are grouped. Defaults to <see cref="TextGrouping.Line"/>.
+    /// </summary>
     public TextGrouping Grouping { get; init; } = TextGrouping.Line;
 
     /// <summary>
@@ -145,6 +132,8 @@ public sealed record RecognitionOptions
     /// </summary>
     public DetectionOptions Detection { get; init; } = DetectionOptions.Default;
 
-    /// <summary>The default options (line grouping, full parallelism, drop_score 0.5).</summary>
+    /// <summary>
+    /// The default options (line grouping, full parallelism, drop_score 0.5).
+    /// </summary>
     public static RecognitionOptions Default { get; } = new();
 }

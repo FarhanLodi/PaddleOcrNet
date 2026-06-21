@@ -38,8 +38,10 @@ in-process, offline-capable, and trim/AOT-friendly.
   pulls the right model on demand (Python PaddleOCR requires you to name the language up front).
 - **Document understanding** — `AnalyzeDocumentAsync` returns layout regions, reading order, tables as
   HTML, and formulas as LaTeX, and serializes the whole document to **Markdown, HTML, JSON, Word, or Excel**.
-- **Ask your documents** — LLM-backed key-information extraction and Q&A, provider-agnostic: bring your own
-  `IChatModel` or use the built-in OpenAI-compatible adapter (OpenAI, Azure, Ollama, vLLM, Groq, …).
+- **Ask your documents** — LLM-backed key-information extraction, Q&A, and **chart-to-data** parsing,
+  provider-agnostic: bring your own `IChatModel` or use the built-in OpenAI-compatible adapter (OpenAI,
+  Azure, Ollama, vLLM, Groq, …). Charts are reconstructed to Markdown tables via a vision model — no local GPU.
+  Or extract labeled fields **offline** with the heuristic, layout-based KIE extractor — no LLM, no network.
 - **PDF in, searchable PDF out** — rasterize and OCR PDFs, or emit a searchable PDF with an invisible
   text layer.
 - **Robust by design** — singleton-safe, thread-safe ONNX sessions; DI + health checks; OpenTelemetry
@@ -138,6 +140,26 @@ string json     = doc.ToJson();      // structured blocks with bounding boxes + 
 | Orientation / unwarp | PP-LCNet · UVDoc | de-skewed, de-warped page |
 | Reading order | XY-cut | multi-column document order |
 
+### Exports with embedded figures & native equations
+
+The DOCX and HTML exporters take an optional image overload — pass the **same** image you analyzed and
+figure / chart / seal regions are cropped and embedded as **real pixels** (DOCX gets an inline `word/media/`
+image part; HTML gets a `data:image/png;base64,…` `<img>`). The no-image overloads keep their bbox-placeholder
+behavior. The image-aware DOCX path also renders recovered formula LaTeX as **native Word equations (OMML)**
+via a best-effort LaTeX→OMML converter (`PaddleOcrNet.Structure.Export.LatexToOmml`) — fractions,
+sub/superscripts, roots, Greek letters, n-ary sum/integral/product, and common operators; unsupported
+constructs degrade gracefully to text.
+
+```csharp
+using PaddleOcrNet.Structure.Export;
+
+StructureResult doc = await ocr.AnalyzeDocumentAsync("report.png");
+using var page = SixLabors.ImageSharp.Image.Load<SixLabors.ImageSharp.PixelFormats.Rgb24>("report.png");
+
+byte[] docx = doc.ToDocx(page);          // figures/charts/seals as inline images; formulas as OMML equations
+string html = doc.ToHtml(page, "Report"); // figures/charts/seals as inline <img data:image/png;base64,…>
+```
+
 ---
 
 ## Supported languages
@@ -216,8 +238,10 @@ share across threads. Call `WarmUp(...)` to pre-load models off the request path
 
 `OcrResult` exports to plain text, **JSON**, **hOCR**, **ALTO XML**, and TSV; documents export to
 **Markdown**, **HTML**, **JSON**, **Word (.docx)**, and **Excel (.xlsx)** (with native tables / merged
-cells); multi-page Markdown can be stitched with `ConcatenateMarkdownPages`; PDFs can be re-emitted as
-**searchable PDFs**. All exporters are AOT-safe via a source-generated JSON context.
+cells). The `ToDocx(image)` / `ToHtml(image)` overloads embed figure/chart/seal regions as **real pixels**,
+and DOCX formulas render as **native Word equations (OMML)**. Multi-page Markdown can be stitched with
+`ConcatenateMarkdownPages`; PDFs can be re-emitted as **searchable PDFs**. All exporters are AOT-safe via a
+source-generated JSON context.
 
 ---
 
@@ -248,6 +272,56 @@ DI: `services.AddOpenAiCompatibleChatModel(...)` (or `AddChatModel(myModel)`) + 
 The model is grounded on the parsed document Markdown by default; set `DocumentIntelligenceOptions.UseVision`
 to also attach the page image when the model is multimodal.
 
+### Chart → data (vision-LLM, PP-Chart2Table equivalent)
+
+`ParseChartsAsync` detects chart/plot regions in a document and reconstructs the data behind each one as a
+GitHub-flavored Markdown table — the provider-agnostic equivalent of PaddleOCR's PP-Chart2Table. It crops
+each detected chart region and sends **only those pixels** to a **vision-capable** model, so it works with
+any vision provider (OpenAI `gpt-4o`, Azure, or a local Ollama `qwen2.5-vl` / `llama3.2-vision`) and needs
+**no local GPU** — the provider performs the vision inference.
+
+```csharp
+using PaddleOcrNet.Intelligence;
+
+// Reconstruct the data behind every chart in a document (needs a vision-capable model).
+ChartParseResult charts = await docs.ParseChartsAsync("report.png");
+foreach (ParsedChart chart in charts.Charts)
+{
+    Console.WriteLine($"{chart.ChartType}: {chart.Title}");
+    Console.WriteLine(chart.DataMarkdown);   // a Markdown table of the chart's data
+}
+```
+
+With the built-in `OpenAiCompatibleChatModel`, vision is on by default
+(`OpenAiCompatibleOptions.SupportsVision` defaults to `true`); if the configured model isn't vision-capable
+and the document has charts, the call throws `NotSupportedException`. Customize the extraction prompt via
+`DocumentIntelligenceOptions.ChartExtractionSystemPromptOverride`. This is the vision-LLM path — there is no
+bundled offline chart ONNX model.
+
+### Offline (non-LLM) KIE
+
+`IOfflineKeyInformationExtractor` is the **offline alternative** to LLM-backed `ExtractKeyInformationAsync` —
+use it when you can't or don't want to call a model. It's a heuristic, geometry-based extractor (no LLM, no
+network, CPU-only): for each key it finds the label in the OCR text and reads the value inline (`Key: value`),
+to the right (same row), or below. It returns the same `KeyInformationResult` (with `Usage` / `Model` /
+`RawJson` left `null`). Best-effort — it works best on clearly labeled forms and invoices.
+
+```csharp
+using PaddleOcrNet.Intelligence.Offline;
+
+var extractor = new OfflineKeyInformationExtractor(ocrService);
+
+OcrResult ocr = await ocrService.ExtractTextFromImage("invoice.png");
+KeyInformationResult result = extractor.Extract(ocr, new[] { "Invoice Number", "Total" });
+Console.WriteLine(result["Total"]);
+
+// Or OCR + extract in one call (uses OcrLanguage.Auto):
+result = await extractor.ExtractAsync("invoice.png", new[] { "Invoice Number", "Total" });
+```
+
+DI: `services.AddPaddleOcrOfflineKie();` (requires `AddPaddleOcrNet()`), then inject
+`IOfflineKeyInformationExtractor`.
+
 ---
 
 ## Models & licensing
@@ -266,12 +340,14 @@ attribution. The library itself is **MIT** — see [LICENSE](LICENSE).
 ## Roadmap
 
 Already shipped: detection, recognition (multilingual + auto-detect), orientation, unwarp, layout, tables,
-formulas, reading order, Markdown/HTML/JSON/DOCX/XLSX export, the PDF pipeline, and LLM-backed document
-intelligence (key-information extraction + Q&A). Under consideration:
+formulas, reading order, Markdown/HTML/JSON/DOCX/XLSX export (with embedded figure/chart/seal pixels and
+native Word equations via OMML), the PDF pipeline, LLM-backed document intelligence (key-information
+extraction, Q&A, and chart-to-data parsing — the PP-Chart2Table-equivalent vision-LLM path), and a
+heuristic, layout-based **offline KIE** extractor as the non-LLM alternative. Under consideration:
 
 - Activate the table-recognition-v2 path (SLANeXt + RT-DETR cell detection) and seal recognition
   end-to-end — the ONNX assets are now hosted; the remaining work is wiring them into the active pipeline
-- On-device (ONNX) KIE as an offline alternative to the LLM path
+- A model-based on-device (ONNX VI-LayoutXLM) KIE path to complement the current heuristic offline extractor
 - PP-OCRv6 model line
 - Additional per-language recognizer packs
 

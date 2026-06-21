@@ -28,7 +28,9 @@ namespace PaddleOcrNet.Internal.Recognition;
 /// </summary>
 internal sealed class SvtrRecognizer : ITextRecognizer
 {
-    /// <summary>PaddleOCR's default recognition batch size (<c>rec_batch_num</c>).</summary>
+    /// <summary>
+    /// PaddleOCR's default recognition batch size (<c>rec_batch_num</c>).
+    /// </summary>
     private const int DefaultBatchSize = 6;
 
     private readonly InferenceSession _session;

@@ -14,7 +14,9 @@ public sealed class PaddleOcrHealthCheck : IHealthCheck
     private readonly string[] _languages;
     private readonly HealthStatus _failureStatus;
 
-    /// <summary>Creates a health check for the given service options and expected languages.</summary>
+    /// <summary>
+    /// Creates a health check for the given service options and expected languages.
+    /// </summary>
     public PaddleOcrHealthCheck(PaddleOcrServiceOptions options, IEnumerable<string>? languages = null, HealthStatus failureStatus = HealthStatus.Degraded)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));

@@ -7,22 +7,34 @@ namespace PaddleOcrNet.Models;
 /// </summary>
 public readonly record struct OcrRegion
 {
-    /// <summary>Left edge (pixels, or 0–1 fraction when <see cref="Normalized"/> is true).</summary>
+    /// <summary>
+    /// Left edge (pixels, or 0–1 fraction when <see cref="Normalized"/> is true).
+    /// </summary>
     public double X { get; init; }
 
-    /// <summary>Top edge (pixels, or 0–1 fraction when <see cref="Normalized"/> is true).</summary>
+    /// <summary>
+    /// Top edge (pixels, or 0–1 fraction when <see cref="Normalized"/> is true).
+    /// </summary>
     public double Y { get; init; }
 
-    /// <summary>Width (pixels, or 0–1 fraction when <see cref="Normalized"/> is true).</summary>
+    /// <summary>
+    /// Width (pixels, or 0–1 fraction when <see cref="Normalized"/> is true).
+    /// </summary>
     public double Width { get; init; }
 
-    /// <summary>Height (pixels, or 0–1 fraction when <see cref="Normalized"/> is true).</summary>
+    /// <summary>
+    /// Height (pixels, or 0–1 fraction when <see cref="Normalized"/> is true).
+    /// </summary>
     public double Height { get; init; }
 
-    /// <summary>When true, X/Y/Width/Height are fractions (0–1) of the image size.</summary>
+    /// <summary>
+    /// When true, X/Y/Width/Height are fractions (0–1) of the image size.
+    /// </summary>
     public bool Normalized { get; init; }
 
-    /// <summary>A region in absolute pixel coordinates.</summary>
+    /// <summary>
+    /// A region in absolute pixel coordinates.
+    /// </summary>
     public static OcrRegion Pixels(double x, double y, double width, double height)
         => new() { X = x, Y = y, Width = width, Height = height, Normalized = false };
 

@@ -7,13 +7,19 @@ namespace PaddleOcrNet.Models;
 /// </summary>
 public sealed record PreprocessingOptions
 {
-    /// <summary>Apply a light Gaussian denoise before detection. Default false.</summary>
+    /// <summary>
+    /// Apply a light Gaussian denoise before detection. Default false.
+    /// </summary>
     public bool Denoise { get; init; }
 
-    /// <summary>Estimate and correct a small skew angle via projection profiles. Default false.</summary>
+    /// <summary>
+    /// Estimate and correct a small skew angle via projection profiles. Default false.
+    /// </summary>
     public bool Deskew { get; init; }
 
-    /// <summary>Adaptive-threshold binarization (helpful for low-contrast scans). Default false.</summary>
+    /// <summary>
+    /// Adaptive-threshold binarization (helpful for low-contrast scans). Default false.
+    /// </summary>
     public bool Binarize { get; init; }
 
     /// <summary>
@@ -23,6 +29,8 @@ public sealed record PreprocessingOptions
     /// </summary>
     public bool DetectOrientation { get; init; }
 
-    /// <summary>No preprocessing (the default).</summary>
+    /// <summary>
+    /// No preprocessing (the default).
+    /// </summary>
     public static PreprocessingOptions None { get; } = new();
 }

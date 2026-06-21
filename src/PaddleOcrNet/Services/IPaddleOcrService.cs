@@ -11,28 +11,36 @@ namespace PaddleOcrNet.Services;
 /// </summary>
 public interface IPaddleOcrService : IAsyncDisposable, IDisposable
 {
-    /// <summary>OCR an image file on disk across the given <see cref="OcrLanguage"/> values.</summary>
+    /// <summary>
+    /// OCR an image file on disk across the given <see cref="OcrLanguage"/> values.
+    /// </summary>
     Task<OcrResult> ExtractTextFromImage(
         string imagePath,
         IReadOnlyList<OcrLanguage> languages,
         RecognitionOptions? options = null,
         CancellationToken cancellationToken = default);
 
-    /// <summary>OCR an image from a stream (format auto-detected) across the given <see cref="OcrLanguage"/> values.</summary>
+    /// <summary>
+    /// OCR an image from a stream (format auto-detected) across the given <see cref="OcrLanguage"/> values.
+    /// </summary>
     Task<OcrResult> ExtractTextFromImage(
         Stream imageStream,
         IReadOnlyList<OcrLanguage> languages,
         RecognitionOptions? options = null,
         CancellationToken cancellationToken = default);
 
-    /// <summary>OCR an image from an encoded byte array (PNG/JPEG/etc.) across the given <see cref="OcrLanguage"/> values.</summary>
+    /// <summary>
+    /// OCR an image from an encoded byte array (PNG/JPEG/etc.) across the given <see cref="OcrLanguage"/> values.
+    /// </summary>
     Task<OcrResult> ExtractTextFromImage(
         byte[] imageBytes,
         IReadOnlyList<OcrLanguage> languages,
         RecognitionOptions? options = null,
         CancellationToken cancellationToken = default);
 
-    /// <summary>OCR an image from encoded bytes across the given <see cref="OcrLanguage"/> values.</summary>
+    /// <summary>
+    /// OCR an image from encoded bytes across the given <see cref="OcrLanguage"/> values.
+    /// </summary>
     Task<OcrResult> ExtractTextFromImage(
         ReadOnlyMemory<byte> imageBytes,
         IReadOnlyList<OcrLanguage> languages,
@@ -49,7 +57,9 @@ public interface IPaddleOcrService : IAsyncDisposable, IDisposable
         RecognitionOptions? options = null,
         CancellationToken cancellationToken = default);
 
-    /// <summary>OCR an image file on disk in a single <see cref="OcrLanguage"/> (defaults to <see cref="OcrLanguage.Auto"/>).</summary>
+    /// <summary>
+    /// OCR an image file on disk in a single <see cref="OcrLanguage"/> (defaults to <see cref="OcrLanguage.Auto"/>).
+    /// </summary>
     Task<OcrResult> ExtractTextFromImage(
         string imagePath,
         OcrLanguage language = OcrLanguage.Auto,
@@ -57,7 +67,9 @@ public interface IPaddleOcrService : IAsyncDisposable, IDisposable
         CancellationToken cancellationToken = default)
         => ExtractTextFromImage(imagePath, new[] { language }, options, cancellationToken);
 
-    /// <summary>OCR an image from a stream in a single <see cref="OcrLanguage"/> (defaults to <see cref="OcrLanguage.Auto"/>).</summary>
+    /// <summary>
+    /// OCR an image from a stream in a single <see cref="OcrLanguage"/> (defaults to <see cref="OcrLanguage.Auto"/>).
+    /// </summary>
     Task<OcrResult> ExtractTextFromImage(
         Stream imageStream,
         OcrLanguage language = OcrLanguage.Auto,
@@ -65,7 +77,9 @@ public interface IPaddleOcrService : IAsyncDisposable, IDisposable
         CancellationToken cancellationToken = default)
         => ExtractTextFromImage(imageStream, new[] { language }, options, cancellationToken);
 
-    /// <summary>OCR an image from an encoded byte array in a single <see cref="OcrLanguage"/> (defaults to <see cref="OcrLanguage.Auto"/>).</summary>
+    /// <summary>
+    /// OCR an image from an encoded byte array in a single <see cref="OcrLanguage"/> (defaults to <see cref="OcrLanguage.Auto"/>).
+    /// </summary>
     Task<OcrResult> ExtractTextFromImage(
         byte[] imageBytes,
         OcrLanguage language = OcrLanguage.Auto,
@@ -73,7 +87,9 @@ public interface IPaddleOcrService : IAsyncDisposable, IDisposable
         CancellationToken cancellationToken = default)
         => ExtractTextFromImage(imageBytes, new[] { language }, options, cancellationToken);
 
-    /// <summary>OCR an image from encoded bytes in a single <see cref="OcrLanguage"/> (defaults to <see cref="OcrLanguage.Auto"/>).</summary>
+    /// <summary>
+    /// OCR an image from encoded bytes in a single <see cref="OcrLanguage"/> (defaults to <see cref="OcrLanguage.Auto"/>).
+    /// </summary>
     Task<OcrResult> ExtractTextFromImage(
         ReadOnlyMemory<byte> imageBytes,
         OcrLanguage language = OcrLanguage.Auto,
@@ -81,7 +97,9 @@ public interface IPaddleOcrService : IAsyncDisposable, IDisposable
         CancellationToken cancellationToken = default)
         => ExtractTextFromImage(imageBytes, new[] { language }, options, cancellationToken);
 
-    /// <summary>OCR an already-decoded image in a single <see cref="OcrLanguage"/> (defaults to <see cref="OcrLanguage.Auto"/>).</summary>
+    /// <summary>
+    /// OCR an already-decoded image in a single <see cref="OcrLanguage"/> (defaults to <see cref="OcrLanguage.Auto"/>).
+    /// </summary>
     Task<OcrResult> ExtractTextFromImage(
         Image<Rgb24> image,
         OcrLanguage language = OcrLanguage.Auto,
@@ -101,7 +119,9 @@ public interface IPaddleOcrService : IAsyncDisposable, IDisposable
         => throw new NotSupportedException(
             $"{GetType().Name} does not implement DetectRegionsAsync. Use {nameof(PaddleOcrService)}.");
 
-    /// <summary>Locates text regions in an image file without recognizing them.</summary>
+    /// <summary>
+    /// Locates text regions in an image file without recognizing them.
+    /// </summary>
     Task<IReadOnlyList<DetectedRegion>> DetectRegionsAsync(
         string imagePath,
         RecognitionOptions? options = null,
@@ -122,7 +142,9 @@ public interface IPaddleOcrService : IAsyncDisposable, IDisposable
         => throw new NotSupportedException(
             $"{GetType().Name} does not implement RecognizeRegionsAsync. Use {nameof(PaddleOcrService)}.");
 
-    /// <summary>Recognizes text inside regions located by a prior detection pass.</summary>
+    /// <summary>
+    /// Recognizes text inside regions located by a prior detection pass.
+    /// </summary>
     Task<OcrResult> RecognizeRegionsAsync(
         Image<Rgb24> image,
         IEnumerable<DetectedRegion> regions,
@@ -155,7 +177,9 @@ public interface IPaddleOcrService : IAsyncDisposable, IDisposable
         => throw new NotSupportedException(
             $"{GetType().Name} does not implement AnalyzeDocumentAsync. Use {nameof(PaddleOcrService)}.");
 
-    /// <summary>Analyzes the structure of a document image from a stream (format auto-detected).</summary>
+    /// <summary>
+    /// Analyzes the structure of a document image from a stream (format auto-detected).
+    /// </summary>
     Task<StructureResult> AnalyzeDocumentAsync(
         Stream imageStream,
         StructureOptions? options = null,
@@ -163,7 +187,9 @@ public interface IPaddleOcrService : IAsyncDisposable, IDisposable
         => throw new NotSupportedException(
             $"{GetType().Name} does not implement AnalyzeDocumentAsync. Use {nameof(PaddleOcrService)}.");
 
-    /// <summary>Analyzes the structure of a document image from an encoded byte array (PNG/JPEG/etc.).</summary>
+    /// <summary>
+    /// Analyzes the structure of a document image from an encoded byte array (PNG/JPEG/etc.).
+    /// </summary>
     Task<StructureResult> AnalyzeDocumentAsync(
         byte[] imageBytes,
         StructureOptions? options = null,
@@ -171,7 +197,9 @@ public interface IPaddleOcrService : IAsyncDisposable, IDisposable
         => throw new NotSupportedException(
             $"{GetType().Name} does not implement AnalyzeDocumentAsync. Use {nameof(PaddleOcrService)}.");
 
-    /// <summary>Analyzes the structure of a document image from encoded bytes.</summary>
+    /// <summary>
+    /// Analyzes the structure of a document image from encoded bytes.
+    /// </summary>
     Task<StructureResult> AnalyzeDocumentAsync(
         ReadOnlyMemory<byte> imageBytes,
         StructureOptions? options = null,

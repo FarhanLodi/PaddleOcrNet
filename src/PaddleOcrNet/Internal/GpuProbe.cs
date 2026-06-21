@@ -19,7 +19,9 @@ internal static class GpuProbe
     // Ordered by preference so the numeric comparison in DetectWindows picks the best vendor found.
     internal enum GpuVendor { None, Other, Intel, Amd, Nvidia }
 
-    /// <summary>Returns the most capable GPU vendor among the host's installed display adapters.</summary>
+    /// <summary>
+    /// Returns the most capable GPU vendor among the host's installed display adapters.
+    /// </summary>
     public static GpuVendor Detect()
     {
         if (!OperatingSystem.IsWindows()) return GpuVendor.None;
@@ -74,7 +76,9 @@ internal static class GpuProbe
     private static bool Has(string haystack, string needle) =>
         haystack.Contains(needle, StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>Reads a REG_SZ value at <paramref name="parent"/>\<paramref name="subKey"/>\<paramref name="value"/>.</summary>
+    /// <summary>
+    /// Reads a REG_SZ value at <paramref name="parent"/>\<paramref name="subKey"/>\<paramref name="value"/>.
+    /// </summary>
     private static string? ReadString(nint parent, string subKey, string value)
     {
         const int RRF_RT_REG_SZ = 0x00000002;

@@ -15,7 +15,9 @@ public sealed record DocumentIntelligenceOptions
     /// </summary>
     public double Temperature { get; init; } = 0;
 
-    /// <summary>Maximum tokens the model may generate; <c>null</c> leaves the provider default.</summary>
+    /// <summary>
+    /// Maximum tokens the model may generate; <c>null</c> leaves the provider default.
+    /// </summary>
     public int? MaxTokens { get; init; }
 
     /// <summary>
@@ -34,12 +36,21 @@ public sealed record DocumentIntelligenceOptions
     public string? SystemPromptOverride { get; init; }
 
     /// <summary>
+    /// Replaces the engine's built-in system instruction for chart-to-data parsing
+    /// (<see cref="IDocumentIntelligence.ParseChartsAsync(string, System.Threading.CancellationToken)"/>).
+    /// When null (default), the engine uses its built-in chart-extraction prompt.
+    /// </summary>
+    public string? ChartExtractionSystemPromptOverride { get; init; }
+
+    /// <summary>
     /// Options forwarded to <see cref="Services.IPaddleOcrService.AnalyzeDocumentAsync(string, StructureOptions?, System.Threading.CancellationToken)"/>
     /// when the engine has to analyze an image/path itself. <c>null</c> uses the analyzer's defaults.
     /// Ignored on the overloads that already receive a <see cref="StructureResult"/>.
     /// </summary>
     public StructureOptions? StructureOptions { get; init; }
 
-    /// <summary>Default options (temperature 0, text-only, analyzer defaults).</summary>
+    /// <summary>
+    /// Default options (temperature 0, text-only, analyzer defaults).
+    /// </summary>
     public static DocumentIntelligenceOptions Default { get; } = new();
 }

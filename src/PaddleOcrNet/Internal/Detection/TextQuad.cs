@@ -15,7 +15,9 @@ namespace PaddleOcrNet.Internal.Detection;
 /// <param name="Score">Detection confidence (0–1).</param>
 public readonly record struct TextQuad(PointF P0, PointF P1, PointF P2, PointF P3, float Score)
 {
-    /// <summary>Enumerates the four corners in clockwise order (P0, P1, P2, P3).</summary>
+    /// <summary>
+    /// Enumerates the four corners in clockwise order (P0, P1, P2, P3).
+    /// </summary>
     public IEnumerable<PointF> Points
     {
         get
@@ -27,7 +29,9 @@ public readonly record struct TextQuad(PointF P0, PointF P1, PointF P2, PointF P
         }
     }
 
-    /// <summary>The axis-aligned bounding box that contains all four corners.</summary>
+    /// <summary>
+    /// The axis-aligned bounding box that contains all four corners.
+    /// </summary>
     public RectangleF ToAxisAlignedBounds()
     {
         float minX = Math.Min(Math.Min(P0.X, P1.X), Math.Min(P2.X, P3.X));
@@ -37,7 +41,9 @@ public readonly record struct TextQuad(PointF P0, PointF P1, PointF P2, PointF P
         return new RectangleF(minX, minY, maxX - minX, maxY - minY);
     }
 
-    /// <summary>Converts the four corners to <see cref="OcrPoint"/>s (P0..P3, clockwise from top-left).</summary>
+    /// <summary>
+    /// Converts the four corners to <see cref="OcrPoint"/>s (P0..P3, clockwise from top-left).
+    /// </summary>
     public OcrPoint[] ToOcrPoints() => new[]
     {
         new OcrPoint(P0.X, P0.Y),
@@ -46,7 +52,9 @@ public readonly record struct TextQuad(PointF P0, PointF P1, PointF P2, PointF P
         new OcrPoint(P3.X, P3.Y),
     };
 
-    /// <summary>Builds a quad from four <see cref="OcrPoint"/>s and a score.</summary>
+    /// <summary>
+    /// Builds a quad from four <see cref="OcrPoint"/>s and a score.
+    /// </summary>
     public static TextQuad FromOcrPoints(OcrPoint p0, OcrPoint p1, OcrPoint p2, OcrPoint p3, float score)
         => new(
             new PointF((float)p0.X, (float)p0.Y),

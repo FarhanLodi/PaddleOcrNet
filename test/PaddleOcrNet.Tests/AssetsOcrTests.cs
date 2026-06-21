@@ -31,7 +31,9 @@ public sealed class AssetsOcrTests : IClassFixture<AssetsOcrTests.ServiceFixture
         _out = output;
     }
 
-    /// <summary>A single shared service for the whole class so models load once, not per test case.</summary>
+    /// <summary>
+    /// A single shared service for the whole class so models load once, not per test case.
+    /// </summary>
     public sealed class ServiceFixture : IDisposable
     {
         public PaddleOcrService Service { get; } = new();

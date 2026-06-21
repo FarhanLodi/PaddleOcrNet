@@ -19,7 +19,9 @@ internal sealed class SearchablePdfBuilder
 
     private readonly List<Page> _pages = new();
 
-    /// <summary>Adds one page: its rendered image and the OCR result whose text becomes the hidden layer.</summary>
+    /// <summary>
+    /// Adds one page: its rendered image and the OCR result whose text becomes the hidden layer.
+    /// </summary>
     public void AddPage(Image<Rgb24> image, OcrResult ocr, int dpi, int jpegQuality)
     {
         double scale = 72.0 / dpi;                 // points per pixel (PDF user space is 72 dpi)
@@ -33,7 +35,9 @@ internal sealed class SearchablePdfBuilder
         _pages.Add(new Page(ms.ToArray(), image.Width, image.Height, widthPt, heightPt, content));
     }
 
-    /// <summary>Serializes the accumulated pages to a complete PDF document.</summary>
+    /// <summary>
+    /// Serializes the accumulated pages to a complete PDF document.
+    /// </summary>
     public byte[] Build()
     {
         // Object numbering: 1=Catalog, 2=Pages, 3=Font, then per page (content, image, page).

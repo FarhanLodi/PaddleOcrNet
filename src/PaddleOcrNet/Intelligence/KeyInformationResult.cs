@@ -1,23 +1,15 @@
 namespace PaddleOcrNet.Intelligence;
 
 /// <summary>
-/// One extracted document field: a requested key together with the value the model found for it.
-/// <see cref="Value"/> is <c>null</c> when the field was absent from the document (or the model returned
-/// JSON <c>null</c> for it). No per-field confidence is exposed — chat LLMs do not reliably produce
-/// calibrated per-field confidences, so reporting one would be misleading.
-/// </summary>
-/// <param name="Key">The requested key, verbatim as passed to the extractor.</param>
-/// <param name="Value">The extracted string value, or <c>null</c> when not found in the document.</param>
-public sealed record ExtractedField(string Key, string? Value);
-
-/// <summary>
 /// The result of a key-information-extraction (KIE) call: one <see cref="ExtractedField"/> per requested
 /// key (in request order), plus the model's raw JSON reply and usage/model metadata. Index or
 /// <see cref="TryGet"/> by key for convenient access to a single value.
 /// </summary>
 public sealed record KeyInformationResult
 {
-    /// <summary>The extracted fields, one per requested key, in the order the keys were requested.</summary>
+    /// <summary>
+    /// The extracted fields, one per requested key, in the order the keys were requested.
+    /// </summary>
     public required IReadOnlyList<ExtractedField> Fields { get; init; }
 
     /// <summary>
@@ -26,10 +18,14 @@ public sealed record KeyInformationResult
     /// </summary>
     public string? RawJson { get; init; }
 
-    /// <summary>Token usage for the extraction call, when the provider reported it; otherwise <c>null</c>.</summary>
+    /// <summary>
+    /// Token usage for the extraction call, when the provider reported it; otherwise <c>null</c>.
+    /// </summary>
     public ChatUsage? Usage { get; init; }
 
-    /// <summary>The model that produced the extraction, when reported by the provider; otherwise <c>null</c>.</summary>
+    /// <summary>
+    /// The model that produced the extraction, when reported by the provider; otherwise <c>null</c>.
+    /// </summary>
     public string? Model { get; init; }
 
     /// <summary>

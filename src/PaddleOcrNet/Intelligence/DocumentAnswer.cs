@@ -8,12 +8,18 @@ namespace PaddleOcrNet.Intelligence;
 /// </summary>
 public sealed record DocumentAnswer
 {
-    /// <summary>The answer text the model produced from the document.</summary>
+    /// <summary>
+    /// The answer text the model produced from the document.
+    /// </summary>
     public required string Answer { get; init; }
 
-    /// <summary>Token usage for the answer call, when the provider reported it; otherwise <c>null</c>.</summary>
+    /// <summary>
+    /// Token usage for the answer call, when the provider reported it; otherwise <c>null</c>.
+    /// </summary>
     public ChatUsage? Usage { get; init; }
 
-    /// <summary>The model that produced the answer, when reported by the provider; otherwise <c>null</c>.</summary>
+    /// <summary>
+    /// The model that produced the answer, when reported by the provider; otherwise <c>null</c>.
+    /// </summary>
     public string? Model { get; init; }
 }

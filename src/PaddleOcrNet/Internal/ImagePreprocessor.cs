@@ -52,7 +52,9 @@ internal static class ImagePreprocessor
         }
     }
 
-    /// <summary>Rotates by an exact multiple of 90° (lossless, no fill needed). Returns a new image.</summary>
+    /// <summary>
+    /// Rotates by an exact multiple of 90° (lossless, no fill needed). Returns a new image.
+    /// </summary>
     public static Image<Rgb24> RotateRightAngle(Image<Rgb24> source, int degrees)
         => source.Clone(c => c.Rotate(degrees));
 
@@ -92,7 +94,9 @@ internal static class ImagePreprocessor
         return best;
     }
 
-    /// <summary>Variance across rows of the dark-pixel count per row (higher ⇒ text lines aligned).</summary>
+    /// <summary>
+    /// Variance across rows of the dark-pixel count per row (higher ⇒ text lines aligned).
+    /// </summary>
     private static double RowInkVariance(Image<Rgb24> binary)
     {
         int h = binary.Height, w = binary.Width;

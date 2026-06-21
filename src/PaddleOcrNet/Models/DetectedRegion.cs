@@ -7,9 +7,13 @@ namespace PaddleOcrNet.Models;
 /// </summary>
 public sealed record DetectedRegion
 {
-    /// <summary>The four corners of the detected region, in original-image coordinates.</summary>
+    /// <summary>
+    /// The four corners of the detected region, in original-image coordinates.
+    /// </summary>
     public IReadOnlyList<OcrPoint> BoundingPolygon { get; init; } = Array.Empty<OcrPoint>();
 
-    /// <summary>The axis-aligned bounding box computed from <see cref="BoundingPolygon"/>.</summary>
+    /// <summary>
+    /// The axis-aligned bounding box computed from <see cref="BoundingPolygon"/>.
+    /// </summary>
     public OcrBoundingBox BoundingBox { get; init; } = OcrBoundingBox.Empty;
 }

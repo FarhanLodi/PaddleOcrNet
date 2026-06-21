@@ -12,16 +12,24 @@ namespace PaddleOcrNet.Structure;
 /// </summary>
 public sealed class StructureResult
 {
-    /// <summary>The analyzed blocks, ordered by their reading-order <see cref="StructureBlock.Order"/>.</summary>
+    /// <summary>
+    /// The analyzed blocks, ordered by their reading-order <see cref="StructureBlock.Order"/>.
+    /// </summary>
     public required IReadOnlyList<StructureBlock> Blocks { get; init; }
 
-    /// <summary>Width (px) of the source image the block bounds are expressed in, or 0 if unknown.</summary>
+    /// <summary>
+    /// Width (px) of the source image the block bounds are expressed in, or 0 if unknown.
+    /// </summary>
     public int SourceWidth { get; init; }
 
-    /// <summary>Height (px) of the source image the block bounds are expressed in, or 0 if unknown.</summary>
+    /// <summary>
+    /// Height (px) of the source image the block bounds are expressed in, or 0 if unknown.
+    /// </summary>
     public int SourceHeight { get; init; }
 
-    /// <summary>An empty structure result.</summary>
+    /// <summary>
+    /// An empty structure result.
+    /// </summary>
     public static StructureResult Empty { get; } = new() { Blocks = Array.Empty<StructureBlock>() };
 
     /// <summary>
@@ -52,7 +60,9 @@ public sealed class StructureResult
         return sb.ToString().TrimEnd('\n');
     }
 
-    /// <summary>Renders a single block to its Markdown fragment (no trailing separator); empty when nothing to emit.</summary>
+    /// <summary>
+    /// Renders a single block to its Markdown fragment (no trailing separator); empty when nothing to emit.
+    /// </summary>
     private static string RenderMarkdown(StructureBlock block)
     {
         switch (block.Type)
@@ -92,7 +102,9 @@ public sealed class StructureResult
         }
     }
 
-    /// <summary>Formats an ATX heading at <paramref name="level"/> (#, ##, …); empty when the text is blank.</summary>
+    /// <summary>
+    /// Formats an ATX heading at <paramref name="level"/> (#, ##, …); empty when the text is blank.
+    /// </summary>
     private static string Heading(string? text, int level)
     {
         if (string.IsNullOrWhiteSpace(text)) return string.Empty;
@@ -117,88 +129,9 @@ public sealed class StructureResult
         return JsonSerializer.Serialize(dto, StructureJsonContext.Default.StructureResultDto);
     }
 
-    /// <summary>Returns the blocks sorted by reading-order <see cref="StructureBlock.Order"/> (stable).</summary>
+    /// <summary>
+    /// Returns the blocks sorted by reading-order <see cref="StructureBlock.Order"/> (stable).
+    /// </summary>
     private IEnumerable<StructureBlock> OrderedBlocks()
         => Blocks.OrderBy(b => b.Order);
-}
-
-/// <summary>
-/// Flat, serialization-friendly projection of a <see cref="StructureBlock"/> used by <see cref="StructureResult.ToJson"/>.
-/// Carries the block's semantic type (as its name), reading-order index, axis-aligned bounds and any
-/// recovered text / table-HTML / LaTeX; the heavy underlying OCR lines and polygons are dropped.
-/// </summary>
-internal sealed class StructureBlockDto
-{
-    /// <summary>The block's semantic type, as the <see cref="StructureBlockType"/> name.</summary>
-    public string Type { get; init; } = nameof(StructureBlockType.Unknown);
-
-    /// <summary>Zero-based reading-order index.</summary>
-    public int Order { get; init; }
-
-    /// <summary>Left edge of the axis-aligned bounds (source-image px).</summary>
-    public double MinX { get; init; }
-
-    /// <summary>Top edge of the axis-aligned bounds (source-image px).</summary>
-    public double MinY { get; init; }
-
-    /// <summary>Right edge of the axis-aligned bounds (source-image px).</summary>
-    public double MaxX { get; init; }
-
-    /// <summary>Bottom edge of the axis-aligned bounds (source-image px).</summary>
-    public double MaxY { get; init; }
-
-    /// <summary>Overall block confidence (0–1).</summary>
-    public float Score { get; init; }
-
-    /// <summary>Recognized text, when applicable; omitted otherwise.</summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Text { get; init; }
-
-    /// <summary>Recovered table HTML, for table blocks; omitted otherwise.</summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? TableHtml { get; init; }
-
-    /// <summary>Recovered LaTeX, for formula blocks; omitted otherwise.</summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Latex { get; init; }
-
-    /// <summary>Projects a <see cref="StructureBlock"/> onto its serializable DTO.</summary>
-    public static StructureBlockDto From(StructureBlock block) => new()
-    {
-        Type = block.Type.ToString(),
-        Order = block.Order,
-        MinX = block.Bounds.MinX,
-        MinY = block.Bounds.MinY,
-        MaxX = block.Bounds.MaxX,
-        MaxY = block.Bounds.MaxY,
-        Score = block.Score,
-        Text = block.Text,
-        TableHtml = block.TableHtml,
-        Latex = block.Latex,
-    };
-}
-
-/// <summary>Serializable projection of a <see cref="StructureResult"/> (blocks + source dimensions).</summary>
-internal sealed class StructureResultDto
-{
-    /// <summary>Width (px) of the source image, or 0 if unknown.</summary>
-    public int SourceWidth { get; init; }
-
-    /// <summary>Height (px) of the source image, or 0 if unknown.</summary>
-    public int SourceHeight { get; init; }
-
-    /// <summary>The analyzed blocks in reading order.</summary>
-    public IReadOnlyList<StructureBlockDto> Blocks { get; init; } = Array.Empty<StructureBlockDto>();
-}
-
-/// <summary>
-/// Source-generated <see cref="JsonSerializerContext"/> for the structure-export DTOs, so
-/// <see cref="StructureResult.ToJson"/> stays reflection-free / trim / Native-AOT safe.
-/// </summary>
-[JsonSourceGenerationOptions(WriteIndented = true)]
-[JsonSerializable(typeof(StructureResultDto))]
-[JsonSerializable(typeof(StructureBlockDto))]
-[JsonSerializable(typeof(IReadOnlyList<StructureBlockDto>))]
-internal partial class StructureJsonContext : JsonSerializerContext
-{
 }

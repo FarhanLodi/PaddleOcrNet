@@ -39,16 +39,24 @@ namespace PaddleOcrNet.Structure.Layout;
 /// </summary>
 internal sealed class PicoDetLayoutDetector : ILayoutDetector
 {
-    /// <summary>ImageNet mean, applied to <c>pixel/255</c> in RGB channel order (PaddleX <c>NormalizeImage</c>).</summary>
+    /// <summary>
+    /// ImageNet mean, applied to <c>pixel/255</c> in RGB channel order (PaddleX <c>NormalizeImage</c>).
+    /// </summary>
     private static readonly float[] Mean = { 0.485f, 0.456f, 0.406f };
 
-    /// <summary>ImageNet std, applied after mean-subtraction in RGB channel order.</summary>
+    /// <summary>
+    /// ImageNet std, applied after mean-subtraction in RGB channel order.
+    /// </summary>
     private static readonly float[] Std = { 0.229f, 0.224f, 0.225f };
 
-    /// <summary>Detections scoring at or below this confidence are discarded (PaddleX layout <c>threshold</c>).</summary>
+    /// <summary>
+    /// Detections scoring at or below this confidence are discarded (PaddleX layout <c>threshold</c>).
+    /// </summary>
     private const float ScoreThreshold = 0.5f;
 
-    /// <summary>Fallback square input edge when the graph declares a dynamic spatial dimension (PP-DocLayout-S default).</summary>
+    /// <summary>
+    /// Fallback square input edge when the graph declares a dynamic spatial dimension (PP-DocLayout-S default).
+    /// </summary>
     private const int DefaultInputSize = 480;
 
     private readonly InferenceSession _session;

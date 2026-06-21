@@ -63,4 +63,53 @@ public interface IDocumentIntelligence
     /// <param name="cancellationToken">Cancels the model call.</param>
     /// <returns>The model's answer, grounded in the document.</returns>
     Task<DocumentAnswer> AskAsync(StructureResult document, string question, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Extracts the underlying data of every chart/plot region in the document image at
+    /// <paramref name="imagePath"/>. Runs structure analysis first, then crops each detected chart region and
+    /// sends its pixels to the injected <see cref="IChatModel"/> to reconstruct the chart's data as a
+    /// Markdown table. This is the provider-agnostic equivalent of PaddleOCR's PP-Chart2Table.
+    /// <para>
+    /// Chart parsing REQUIRES a vision-capable <see cref="IChatModel"/> (the cropped chart pixels are sent to
+    /// the model): if the configured model reports <see cref="IChatModel.SupportsVision"/> = <c>false</c> and
+    /// the document contains at least one chart region, a <see cref="NotSupportedException"/> is thrown.
+    /// </para>
+    /// </summary>
+    /// <param name="imagePath">Path to the document image on disk.</param>
+    /// <param name="cancellationToken">Cancels the analysis and the model calls.</param>
+    /// <returns>One parsed entry per chart region, in reading order; <see cref="ChartParseResult.Empty"/> when none.</returns>
+    Task<ChartParseResult> ParseChartsAsync(string imagePath, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Extracts the underlying data of every chart/plot region in an already-decoded document
+    /// <paramref name="image"/>. The caller retains ownership of the image. Runs structure analysis first,
+    /// then crops each detected chart region and sends its pixels to the injected <see cref="IChatModel"/> to
+    /// reconstruct the chart's data as a Markdown table.
+    /// <para>
+    /// Chart parsing REQUIRES a vision-capable <see cref="IChatModel"/> (the cropped chart pixels are sent to
+    /// the model): if the configured model reports <see cref="IChatModel.SupportsVision"/> = <c>false</c> and
+    /// the document contains at least one chart region, a <see cref="NotSupportedException"/> is thrown.
+    /// </para>
+    /// </summary>
+    /// <param name="image">The decoded document image.</param>
+    /// <param name="cancellationToken">Cancels the analysis and the model calls.</param>
+    /// <returns>One parsed entry per chart region, in reading order; <see cref="ChartParseResult.Empty"/> when none.</returns>
+    Task<ChartParseResult> ParseChartsAsync(Image<Rgb24> image, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Extracts the underlying data of every chart/plot region in a document whose structure has already been
+    /// analyzed. The <paramref name="image"/> is still required because the chart pixels are cropped from it
+    /// and sent to the injected <see cref="IChatModel"/> to reconstruct the chart's data as a Markdown table;
+    /// reuse this overload to avoid re-analyzing a document you have already structured.
+    /// <para>
+    /// Chart parsing REQUIRES a vision-capable <see cref="IChatModel"/> (the cropped chart pixels are sent to
+    /// the model): if the configured model reports <see cref="IChatModel.SupportsVision"/> = <c>false</c> and
+    /// the document contains at least one chart region, a <see cref="NotSupportedException"/> is thrown.
+    /// </para>
+    /// </summary>
+    /// <param name="document">The analyzed document structure (its chart blocks are parsed).</param>
+    /// <param name="image">The decoded document image the chart pixels are cropped from. The caller retains ownership.</param>
+    /// <param name="cancellationToken">Cancels the model calls.</param>
+    /// <returns>One parsed entry per chart region, in reading order; <see cref="ChartParseResult.Empty"/> when none.</returns>
+    Task<ChartParseResult> ParseChartsAsync(StructureResult document, Image<Rgb24> image, CancellationToken cancellationToken = default);
 }

@@ -1,19 +1,6 @@
 namespace PaddleOcrNet.Models;
 
 /// <summary>
-/// How the binarized DB probability map is turned into text-box scores during detection post-processing.
-/// Mirrors PaddleOCR's <c>det_db_score_mode</c>.
-/// </summary>
-public enum DetectionScoreMode
-{
-    /// <summary>Average the probability map over the full min-area rectangle of the contour (PaddleOCR default).</summary>
-    Fast,
-
-    /// <summary>Average over the exact polygon mask — slightly slower, slightly more accurate.</summary>
-    Slow,
-}
-
-/// <summary>
 /// Low-level tuning for the DB (Differentiable Binarization) text-<b>detection</b> stage (where boxes
 /// are found), exposed for difficult inputs. The defaults mirror upstream PaddleOCR and are correct for
 /// most images — only change these when detection is missing or splitting text. Recognition accuracy is
@@ -68,7 +55,9 @@ public sealed record DetectionOptions
     // means emitting many-point polygons (poly mode) instead of 4-point quads, which ripples into the
     // shared output models (TextQuad / DetectedRegion) owned by other code. Deferred to a dedicated task.
 
-    /// <summary>Discard detected boxes smaller than this side length (px). PaddleOCR's <c>det_db_min_size</c>. Default 3.</summary>
+    /// <summary>
+    /// Discard detected boxes smaller than this side length (px). PaddleOCR's <c>det_db_min_size</c>. Default 3.
+    /// </summary>
     public int MinSize { get; init; } = 3;
 
     /// <summary>
@@ -77,6 +66,8 @@ public sealed record DetectionOptions
     /// </summary>
     public double NmsIouThreshold { get; init; } = 0.6;
 
-    /// <summary>The default detection thresholds (match PaddleOCR).</summary>
+    /// <summary>
+    /// The default detection thresholds (match PaddleOCR).
+    /// </summary>
     public static DetectionOptions Default { get; } = new();
 }

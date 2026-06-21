@@ -13,7 +13,9 @@ namespace PaddleOcrNet.Pdf;
 /// </summary>
 public static class PdfOcrExtensions
 {
-    /// <summary>OCRs every page of a PDF file and returns per-page results.</summary>
+    /// <summary>
+    /// OCRs every page of a PDF file and returns per-page results.
+    /// </summary>
     public static async Task<PdfOcrResult> ExtractTextFromPdfAsync(
         this IPaddleOcrService service,
         string pdfPath,
@@ -27,7 +29,9 @@ public static class PdfOcrExtensions
         return await ExtractTextFromPdfAsync(service, bytes, languages, options, pdfOptions, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>OCRs every page of a PDF file and returns per-page results.</summary>
+    /// <summary>
+    /// OCRs every page of a PDF file and returns per-page results.
+    /// </summary>
     public static Task<PdfOcrResult> ExtractTextFromPdfAsync(
         this IPaddleOcrService service,
         string pdfPath,
@@ -37,7 +41,9 @@ public static class PdfOcrExtensions
         CancellationToken cancellationToken = default)
         => ExtractTextFromPdfAsync(service, pdfPath, new[] { language }, options, pdfOptions, cancellationToken);
 
-    /// <summary>OCRs every page of an in-memory PDF and returns per-page results.</summary>
+    /// <summary>
+    /// OCRs every page of an in-memory PDF and returns per-page results.
+    /// </summary>
     public static async Task<PdfOcrResult> ExtractTextFromPdfAsync(
         this IPaddleOcrService service,
         byte[] pdfBytes,
@@ -70,7 +76,9 @@ public static class PdfOcrExtensions
         return new PdfOcrResult { Pages = pages };
     }
 
-    /// <summary>OCRs every page of an in-memory PDF and returns per-page results.</summary>
+    /// <summary>
+    /// OCRs every page of an in-memory PDF and returns per-page results.
+    /// </summary>
     public static Task<PdfOcrResult> ExtractTextFromPdfAsync(
         this IPaddleOcrService service,
         byte[] pdfBytes,

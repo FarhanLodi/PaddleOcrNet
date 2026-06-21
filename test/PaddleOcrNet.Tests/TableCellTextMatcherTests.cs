@@ -15,14 +15,18 @@ public class TableCellTextMatcherTests
 {
     private static OcrBoundingBox Box(double x1, double y1, double x2, double y2) => new(x1, y1, x2, y2);
 
-    /// <summary>Sum of absolute differences of the two boxes' corners (PaddleOCR TableMatch L1 term).</summary>
+    /// <summary>
+    /// Sum of absolute differences of the two boxes' corners (PaddleOCR TableMatch L1 term).
+    /// </summary>
     private static double L1(OcrBoundingBox a, OcrBoundingBox b)
         => System.Math.Abs(a.MinX - b.MinX)
          + System.Math.Abs(a.MinY - b.MinY)
          + System.Math.Abs(a.MaxX - b.MaxX)
          + System.Math.Abs(a.MaxY - b.MaxY);
 
-    /// <summary>Intersection-over-union of two axis-aligned boxes (0 when disjoint).</summary>
+    /// <summary>
+    /// Intersection-over-union of two axis-aligned boxes (0 when disjoint).
+    /// </summary>
     private static double Iou(OcrBoundingBox a, OcrBoundingBox b)
     {
         double ix1 = System.Math.Max(a.MinX, b.MinX);
@@ -39,10 +43,14 @@ public class TableCellTextMatcherTests
         return union <= 0 ? 0 : inter / union;
     }
 
-    /// <summary>The TableMatch cost: <c>L1 + (1 - IoU)</c>. Lower is a better cell for the OCR box.</summary>
+    /// <summary>
+    /// The TableMatch cost: <c>L1 + (1 - IoU)</c>. Lower is a better cell for the OCR box.
+    /// </summary>
     private static double MatchCost(OcrBoundingBox ocr, OcrBoundingBox cell) => L1(ocr, cell) + (1.0 - Iou(ocr, cell));
 
-    /// <summary>Index of the cell with the lowest match cost for <paramref name="ocr"/>.</summary>
+    /// <summary>
+    /// Index of the cell with the lowest match cost for <paramref name="ocr"/>.
+    /// </summary>
     private static int BestCell(OcrBoundingBox ocr, IReadOnlyList<OcrBoundingBox> cells)
     {
         int best = -1;

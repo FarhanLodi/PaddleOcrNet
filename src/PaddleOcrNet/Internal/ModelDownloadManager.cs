@@ -270,7 +270,9 @@ internal static class ModelDownloadManager
             "models");
     }
 
-    /// <summary>Resolves the effective model cache directory for the given (optional) override.</summary>
+    /// <summary>
+    /// Resolves the effective model cache directory for the given (optional) override.
+    /// </summary>
     public static string ResolveCacheRoot(string? customCachePath) => GetModelCachePath(customCachePath);
 
     public static string ModelCacheRootPath => GetModelCachePath(null);

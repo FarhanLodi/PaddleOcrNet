@@ -26,13 +26,19 @@ internal static class LayoutGraph
     /// </summary>
     public readonly struct Detections
     {
-        /// <summary>The contiguous <c>[Rows × RowWidth]</c> detection values, row-major.</summary>
+        /// <summary>
+        /// The contiguous <c>[Rows × RowWidth]</c> detection values, row-major.
+        /// </summary>
         public readonly float[] Data;
 
-        /// <summary>The number of valid detection rows.</summary>
+        /// <summary>
+        /// The number of valid detection rows.
+        /// </summary>
         public readonly int Rows;
 
-        /// <summary>The per-row stride: 6 for the PicoDet / RT-DETR-plus exports, 7 for PP-DocLayoutV3.</summary>
+        /// <summary>
+        /// The per-row stride: 6 for the PicoDet / RT-DETR-plus exports, 7 for PP-DocLayoutV3.
+        /// </summary>
         public readonly int RowWidth;
 
         public Detections(float[] data, int rows, int rowWidth)
@@ -89,7 +95,9 @@ internal static class LayoutGraph
         return null;
     }
 
-    /// <summary>The minimum detection row width: <c>[class_id, score, x1, y1, x2, y2]</c>.</summary>
+    /// <summary>
+    /// The minimum detection row width: <c>[class_id, score, x1, y1, x2, y2]</c>.
+    /// </summary>
     private const int MinRowWidth = 6;
 
     /// <summary>

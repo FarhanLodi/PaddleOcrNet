@@ -13,7 +13,9 @@ public static class OcrVisualizationExtensions
 {
     private static readonly Rgb24 DefaultColor = new(255, 0, 0);
 
-    /// <summary>Returns a copy of <paramref name="image"/> with each recognized line's polygon outlined.</summary>
+    /// <summary>
+    /// Returns a copy of <paramref name="image"/> with each recognized line's polygon outlined.
+    /// </summary>
     public static Image<Rgb24> DrawAnnotations(this Image<Rgb24> image, OcrResult result, Rgb24? color = null, int thickness = 2)
     {
         ArgumentNullException.ThrowIfNull(image);
@@ -21,7 +23,9 @@ public static class OcrVisualizationExtensions
         return Draw(image, result.Lines.Select(l => l.BoundingPolygon), color ?? DefaultColor, thickness);
     }
 
-    /// <summary>Returns a copy of <paramref name="image"/> with each detected region's polygon outlined.</summary>
+    /// <summary>
+    /// Returns a copy of <paramref name="image"/> with each detected region's polygon outlined.
+    /// </summary>
     public static Image<Rgb24> DrawAnnotations(this Image<Rgb24> image, IEnumerable<DetectedRegion> regions, Rgb24? color = null, int thickness = 2)
     {
         ArgumentNullException.ThrowIfNull(image);
@@ -46,7 +50,9 @@ public static class OcrVisualizationExtensions
         return clone;
     }
 
-    /// <summary>Bresenham line with a square brush of side <paramref name="thickness"/>.</summary>
+    /// <summary>
+    /// Bresenham line with a square brush of side <paramref name="thickness"/>.
+    /// </summary>
     private static void DrawLine(Image<Rgb24> img, int x0, int y0, int x1, int y1, Rgb24 color, int thickness)
     {
         int dx = Math.Abs(x1 - x0), sx = x0 < x1 ? 1 : -1;

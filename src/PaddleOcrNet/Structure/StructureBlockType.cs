@@ -9,69 +9,113 @@ namespace PaddleOcrNet.Structure;
 /// </summary>
 public enum StructureBlockType
 {
-    /// <summary>Generic body text / plain text region.</summary>
+    /// <summary>
+    /// Generic body text / plain text region.
+    /// </summary>
     Text,
 
-    /// <summary>A section or block title / heading.</summary>
+    /// <summary>
+    /// A section or block title / heading.
+    /// </summary>
     Title,
 
-    /// <summary>The document's top-level title.</summary>
+    /// <summary>
+    /// The document's top-level title.
+    /// </summary>
     DocTitle,
 
-    /// <summary>A paragraph of text (when the model distinguishes it from generic <see cref="Text"/>).</summary>
+    /// <summary>
+    /// A paragraph of text (when the model distinguishes it from generic <see cref="Text"/>).
+    /// </summary>
     Paragraph,
 
-    /// <summary>A bulleted or numbered list.</summary>
+    /// <summary>
+    /// A bulleted or numbered list.
+    /// </summary>
     List,
 
-    /// <summary>A table region (its cells/structure are recovered by the table recognizer).</summary>
+    /// <summary>
+    /// A table region (its cells/structure are recovered by the table recognizer).
+    /// </summary>
     Table,
 
-    /// <summary>A caption attached to a table.</summary>
+    /// <summary>
+    /// A caption attached to a table.
+    /// </summary>
     TableCaption,
 
-    /// <summary>A figure / image / picture region.</summary>
+    /// <summary>
+    /// A figure / image / picture region.
+    /// </summary>
     Figure,
 
-    /// <summary>A caption attached to a figure.</summary>
+    /// <summary>
+    /// A caption attached to a figure.
+    /// </summary>
     FigureCaption,
 
-    /// <summary>A mathematical formula / equation region (its LaTeX is recovered by the formula recognizer).</summary>
+    /// <summary>
+    /// A mathematical formula / equation region (its LaTeX is recovered by the formula recognizer).
+    /// </summary>
     Formula,
 
-    /// <summary>A formula's equation number (e.g. "(3)").</summary>
+    /// <summary>
+    /// A formula's equation number (e.g. "(3)").
+    /// </summary>
     FormulaNumber,
 
-    /// <summary>A seal / stamp region (its text is recovered by the seal recognizer).</summary>
+    /// <summary>
+    /// A seal / stamp region (its text is recovered by the seal recognizer).
+    /// </summary>
     Seal,
 
-    /// <summary>A chart / plot region.</summary>
+    /// <summary>
+    /// A chart / plot region.
+    /// </summary>
     Chart,
 
-    /// <summary>A page header.</summary>
+    /// <summary>
+    /// A page header.
+    /// </summary>
     Header,
 
-    /// <summary>A page footer.</summary>
+    /// <summary>
+    /// A page footer.
+    /// </summary>
     Footer,
 
-    /// <summary>A bibliographic reference / citation entry.</summary>
+    /// <summary>
+    /// A bibliographic reference / citation entry.
+    /// </summary>
     Reference,
 
-    /// <summary>A footnote.</summary>
+    /// <summary>
+    /// A footnote.
+    /// </summary>
     Footnote,
 
-    /// <summary>A page number.</summary>
+    /// <summary>
+    /// A page number.
+    /// </summary>
     PageNumber,
 
-    /// <summary>An abstract block.</summary>
+    /// <summary>
+    /// An abstract block.
+    /// </summary>
     Abstract,
 
-    /// <summary>An algorithm / pseudocode block.</summary>
+    /// <summary>
+    /// An algorithm / pseudocode block.
+    /// </summary>
     Algorithm,
 
-    /// <summary>An aside / sidebar / marginal note.</summary>
+    /// <summary>
+    /// An aside / sidebar / marginal note.
+    /// </summary>
     Aside,
 
-    /// <summary>An unmapped or unrecognized region type (the fallback for any unknown raw class ID).</summary>
+    /// <summary>
+    /// An unmapped or unrecognized region type (the fallback for any unknown raw class ID).
+    /// </summary>
     Unknown,
 }

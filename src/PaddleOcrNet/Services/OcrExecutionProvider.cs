@@ -7,10 +7,14 @@ namespace PaddleOcrNet.Services;
 /// </summary>
 public enum OcrExecutionProvider
 {
-    /// <summary>Pure CPU. Always available.</summary>
+    /// <summary>
+    /// Pure CPU. Always available.
+    /// </summary>
     Cpu = 0,
 
-    /// <summary>NVIDIA CUDA. Requires the <c>PaddleOcrNet.Gpu</c> package and CUDA 12+ on PATH.</summary>
+    /// <summary>
+    /// NVIDIA CUDA. Requires the <c>PaddleOcrNet.Gpu</c> package and CUDA 12+ on PATH.
+    /// </summary>
     Cuda = 1,
 
     /// <summary>
@@ -19,7 +23,9 @@ public enum OcrExecutionProvider
     /// </summary>
     DirectMl = 2,
 
-    /// <summary>Apple CoreML (macOS / Apple Silicon). Requires a CoreML-enabled ONNX Runtime build.</summary>
+    /// <summary>
+    /// Apple CoreML (macOS / Apple Silicon). Requires a CoreML-enabled ONNX Runtime build.
+    /// </summary>
     CoreMl = 3,
 
     /// <summary>

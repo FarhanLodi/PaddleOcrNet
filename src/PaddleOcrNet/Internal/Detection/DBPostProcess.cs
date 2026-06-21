@@ -118,7 +118,9 @@ internal static class DBPostProcess
         return results;
     }
 
-    /// <summary>Collects the (x,y) coordinates of every pixel belonging to <paramref name="label"/>.</summary>
+    /// <summary>
+    /// Collects the (x,y) coordinates of every pixel belonging to <paramref name="label"/>.
+    /// </summary>
     private static List<OcrPoint> CollectRegionPoints(int[] labels, int width, ConnectedComponents.Stats stats, int label)
     {
         var points = new List<OcrPoint>(stats.Area);
@@ -247,7 +249,9 @@ internal static class DBPostProcess
         return (float)(sum / regionPoints.Count);
     }
 
-    /// <summary>Even-odd ray-cast point-in-polygon test at pixel-center (x, y).</summary>
+    /// <summary>
+    /// Even-odd ray-cast point-in-polygon test at pixel-center (x, y).
+    /// </summary>
     private static bool PointInPolygon(double x, double y, (double X, double Y)[] poly)
     {
         bool inside = false;
@@ -319,7 +323,9 @@ internal static class DBPostProcess
         return result;
     }
 
-    /// <summary>Signed polygon area via the shoelace formula.</summary>
+    /// <summary>
+    /// Signed polygon area via the shoelace formula.
+    /// </summary>
     private static double PolygonArea(IReadOnlyList<OcrPoint> poly)
     {
         double area = 0;
@@ -333,7 +339,9 @@ internal static class DBPostProcess
         return area / 2.0;
     }
 
-    /// <summary>Sum of edge lengths around the polygon.</summary>
+    /// <summary>
+    /// Sum of edge lengths around the polygon.
+    /// </summary>
     private static double PolygonPerimeter(IReadOnlyList<OcrPoint> poly)
     {
         double perimeter = 0;

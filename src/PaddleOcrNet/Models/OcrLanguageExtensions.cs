@@ -87,7 +87,9 @@ public static class OcrLanguageExtensions
         _ => throw new ArgumentOutOfRangeException(nameof(language), language, "Unknown OCR language."),
     };
 
-    /// <summary>Converts a sequence of <see cref="OcrLanguage"/> values to their recognizer codes, in order.</summary>
+    /// <summary>
+    /// Converts a sequence of <see cref="OcrLanguage"/> values to their recognizer codes, in order.
+    /// </summary>
     /// <param name="languages">The languages to convert.</param>
     /// <returns>The codes, in order.</returns>
     public static string[] ToCodes(this IEnumerable<OcrLanguage> languages)
@@ -132,7 +134,9 @@ public static class OcrLanguageExtensions
         return language;
     }
 
-    /// <summary>Parses a sequence of recognizer language codes into <see cref="OcrLanguage"/> values, in order.</summary>
+    /// <summary>
+    /// Parses a sequence of recognizer language codes into <see cref="OcrLanguage"/> values, in order.
+    /// </summary>
     /// <param name="codes">The codes to parse.</param>
     /// <returns>The parsed languages, in order.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="codes"/> is null.</exception>

@@ -3,18 +3,6 @@ using System.Net.Http;
 namespace PaddleOcrNet.Services;
 
 /// <summary>
-/// Progress for a single model-file download, reported via <see cref="ModelDownloadOptions.Progress"/>.
-/// </summary>
-/// <param name="FileName">The asset being downloaded (e.g. <c>en_PP-OCRv4_rec_infer.onnx</c>).</param>
-/// <param name="BytesDownloaded">Bytes received so far (including any resumed prefix).</param>
-/// <param name="TotalBytes">Total size in bytes, or <c>-1</c> if the server didn't report it.</param>
-public readonly record struct ModelDownloadProgress(string FileName, long BytesDownloaded, long TotalBytes)
-{
-    /// <summary>Completion fraction (0–1), or <c>null</c> when the total size is unknown.</summary>
-    public double? Fraction => TotalBytes > 0 ? (double)BytesDownloaded / TotalBytes : null;
-}
-
-/// <summary>
 /// Controls how on-demand ONNX model files are fetched and cached. Sensible defaults are provided;
 /// override for proxies, air-gapped environments, progress UIs, or custom resilience.
 /// </summary>
@@ -26,7 +14,9 @@ public sealed class ModelDownloadOptions
     /// </summary>
     public int MaxRetries { get; set; } = 3;
 
-    /// <summary>Base delay for exponential backoff between retries. Default 2 seconds.</summary>
+    /// <summary>
+    /// Base delay for exponential backoff between retries. Default 2 seconds.
+    /// </summary>
     public TimeSpan RetryBaseDelay { get; set; } = TimeSpan.FromSeconds(2);
 
     /// <summary>

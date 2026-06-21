@@ -80,7 +80,9 @@ public static class StructureXlsxExporter
 
     // ---- sheet assembly --------------------------------------------------------------------------------
 
-    /// <summary>One worksheet's logical contents: its (sanitized, unique) name plus its cell grid.</summary>
+    /// <summary>
+    /// One worksheet's logical contents: its (sanitized, unique) name plus its cell grid.
+    /// </summary>
     private sealed record SheetModel(string Name, OoxmlTableGrid Grid);
 
     private static List<SheetModel> BuildSheets(StructureResult result)
@@ -122,7 +124,9 @@ public static class StructureXlsxExporter
         return new OoxmlTableGrid { Cells = cells, RowCount = 1, ColumnCount = 1 };
     }
 
-    /// <summary>Builds a single-column grid of every text-bearing block, used when no tables are present.</summary>
+    /// <summary>
+    /// Builds a single-column grid of every text-bearing block, used when no tables are present.
+    /// </summary>
     private static OoxmlTableGrid TextBlocksGrid(StructureResult result)
     {
         var texts = new List<string>();
@@ -151,7 +155,9 @@ public static class StructureXlsxExporter
         return new OoxmlTableGrid { Cells = cells, RowCount = texts.Count, ColumnCount = 1 };
     }
 
-    /// <summary>Sanitizes and de-duplicates a worksheet name to Excel's rules (≤31 chars, no <c>[]*?/\:</c>).</summary>
+    /// <summary>
+    /// Sanitizes and de-duplicates a worksheet name to Excel's rules (≤31 chars, no <c>[]*?/\:</c>).
+    /// </summary>
     private static string UniqueSheetName(string desired, HashSet<string> used)
     {
         var sb = new StringBuilder(desired.Length);
@@ -290,7 +296,9 @@ public static class StructureXlsxExporter
         return sb.ToString();
     }
 
-    /// <summary>Emits one cell as an inline string (or omits the value element entirely when empty).</summary>
+    /// <summary>
+    /// Emits one cell as an inline string (or omits the value element entirely when empty).
+    /// </summary>
     private static void AppendCell(StringBuilder sb, int row, int col, string text)
     {
         string reference = CellRef(row, col);
@@ -304,10 +312,14 @@ public static class StructureXlsxExporter
           .Append(StructureDocxExporter.Xml(text)).Append("</t></is></c>");
     }
 
-    /// <summary>Builds an A1-style cell reference from 1-based <paramref name="row"/>/<paramref name="col"/>.</summary>
+    /// <summary>
+    /// Builds an A1-style cell reference from 1-based <paramref name="row"/>/<paramref name="col"/>.
+    /// </summary>
     private static string CellRef(int row, int col) => ColumnName(col) + row.ToString();
 
-    /// <summary>Converts a 1-based column index to its Excel letter(s) (1→A, 26→Z, 27→AA …).</summary>
+    /// <summary>
+    /// Converts a 1-based column index to its Excel letter(s) (1→A, 26→Z, 27→AA …).
+    /// </summary>
     private static string ColumnName(int col)
     {
         Span<char> buffer = stackalloc char[8];

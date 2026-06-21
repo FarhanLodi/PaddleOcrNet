@@ -36,13 +36,19 @@ namespace PaddleOcrNet.Structure.Table;
 /// </summary>
 internal sealed class SlanetTableRecognizer : ITableRecognizer
 {
-    /// <summary>The fixed square input edge SLANet/SLANeXt are exported with (PaddleOCR's <c>table_max_len</c>).</summary>
+    /// <summary>
+    /// The fixed square input edge SLANet/SLANeXt are exported with (PaddleOCR's <c>table_max_len</c>).
+    /// </summary>
     private const int InputSize = 488;
 
-    /// <summary>ImageNet per-channel mean (RGB order), the SLANet normalization the model was trained with.</summary>
+    /// <summary>
+    /// ImageNet per-channel mean (RGB order), the SLANet normalization the model was trained with.
+    /// </summary>
     private static readonly float[] Mean = { 0.485f, 0.456f, 0.406f };
 
-    /// <summary>ImageNet per-channel std (RGB order).</summary>
+    /// <summary>
+    /// ImageNet per-channel std (RGB order).
+    /// </summary>
     private static readonly float[] Std = { 0.229f, 0.224f, 0.225f };
 
     /// <summary>
@@ -66,7 +72,9 @@ internal sealed class SlanetTableRecognizer : ITableRecognizer
     /// </summary>
     private static readonly string[] DefaultTableDict = BuildDefaultTableDict();
 
-    /// <summary>Builds <see cref="DefaultTableDict"/> (10 fixed HTML tags + colspan="2..20" + rowspan="2..20").</summary>
+    /// <summary>
+    /// Builds <see cref="DefaultTableDict"/> (10 fixed HTML tags + colspan="2..20" + rowspan="2..20").
+    /// </summary>
     private static string[] BuildDefaultTableDict()
     {
         var dict = new List<string>(48)
@@ -95,13 +103,19 @@ internal sealed class SlanetTableRecognizer : ITableRecognizer
     /// </summary>
     private readonly IReadOnlyList<string> _structureVocab;
 
-    /// <summary>Class id of the start-of-sequence token (always 0, the first vocab entry).</summary>
+    /// <summary>
+    /// Class id of the start-of-sequence token (always 0, the first vocab entry).
+    /// </summary>
     private readonly int _begIdx;
 
-    /// <summary>Class id of the end-of-sequence token (always the last vocab entry).</summary>
+    /// <summary>
+    /// Class id of the end-of-sequence token (always the last vocab entry).
+    /// </summary>
     private readonly int _endIdx;
 
-    /// <summary>The single graph input name (the real export calls it <c>x</c>).</summary>
+    /// <summary>
+    /// The single graph input name (the real export calls it <c>x</c>).
+    /// </summary>
     private readonly string _inputName;
 
     /// <summary>
@@ -310,7 +324,9 @@ internal sealed class SlanetTableRecognizer : ITableRecognizer
     // Decode
     // ===============================================================================================
 
-    /// <summary>The number of values the location head emits per cell: a 4-point polygon (x,y)×4.</summary>
+    /// <summary>
+    /// The number of values the location head emits per cell: a 4-point polygon (x,y)×4.
+    /// </summary>
     private const int LocStride = 8;
 
     /// <summary>
@@ -604,7 +620,9 @@ internal sealed class SlanetTableRecognizer : ITableRecognizer
         return sb.ToString();
     }
 
-    /// <summary>Appends the OCR text matched to <paramref name="cellIndex"/> (HTML-escaped), if any.</summary>
+    /// <summary>
+    /// Appends the OCR text matched to <paramref name="cellIndex"/> (HTML-escaped), if any.
+    /// </summary>
     private static void AppendCellText(StringBuilder sb, IReadOnlyDictionary<int, List<string>> matched, int cellIndex)
     {
         if (cellIndex < 0 || !matched.TryGetValue(cellIndex, out var texts) || texts.Count == 0)
@@ -623,7 +641,9 @@ internal sealed class SlanetTableRecognizer : ITableRecognizer
         }
     }
 
-    /// <summary>Minimal HTML entity escaping for the cell text (so OCR text never breaks the markup).</summary>
+    /// <summary>
+    /// Minimal HTML entity escaping for the cell text (so OCR text never breaks the markup).
+    /// </summary>
     private static string HtmlEscape(string text)
     {
         if (string.IsNullOrEmpty(text))

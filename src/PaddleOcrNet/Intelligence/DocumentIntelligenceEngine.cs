@@ -1,10 +1,12 @@
 using System.Text;
 using System.Text.Json;
+using PaddleOcrNet.Models;
 using PaddleOcrNet.Services;
 using PaddleOcrNet.Structure;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats.Png;
 using SixLabors.ImageSharp.PixelFormats;
+using SixLabors.ImageSharp.Processing;
 
 namespace PaddleOcrNet.Intelligence;
 
@@ -21,7 +23,9 @@ public sealed class DocumentIntelligenceEngine : IDocumentIntelligence
     private readonly IChatModel _chatModel;
     private readonly DocumentIntelligenceOptions _options;
 
-    /// <summary>Built-in system prompt for key-information extraction.</summary>
+    /// <summary>
+    /// Built-in system prompt for key-information extraction.
+    /// </summary>
     private const string DefaultExtractionSystemPrompt =
         "You are a precise document field extractor. You are given a document rendered as Markdown and a " +
         "list of field names to extract. Return ONLY a single JSON object that maps each requested field " +
@@ -30,11 +34,24 @@ public sealed class DocumentIntelligenceEngine : IDocumentIntelligence
         "the document. Do not include any field that was not requested. Do not output any prose, " +
         "explanation, or Markdown code fences — output the raw JSON object only.";
 
-    /// <summary>Built-in system prompt for document question-answering.</summary>
+    /// <summary>
+    /// Built-in system prompt for document question-answering.
+    /// </summary>
     private const string DefaultQaSystemPrompt =
         "You are a careful document question-answering assistant. Answer the user's question using ONLY the " +
         "information contained in the supplied document. Do not use outside knowledge and do not guess. If " +
         "the document does not contain the answer, say that you cannot find the answer in the document.";
+
+    /// <summary>
+    /// Built-in system prompt for chart-to-data parsing (sent with a single cropped chart image).
+    /// </summary>
+    private const string DefaultChartSystemPrompt =
+        "You are a precise chart-data extractor. You are given an image of a single chart (bar, line, pie, " +
+        "scatter, area, etc.). Return ONLY a single JSON object with exactly these fields: \"chart_type\" " +
+        "(string), \"title\" (string or null), \"data_markdown\" (a GitHub-flavored Markdown table that " +
+        "reconstructs the chart's underlying data — category/axis labels as columns, one row per data point " +
+        "or series), and \"description\" (a one-sentence summary). Use only values visible in the chart; do " +
+        "not invent data. Output the raw JSON object only — no prose, no Markdown code fences.";
 
     /// <summary>
     /// Creates the engine.
@@ -122,7 +139,9 @@ public sealed class DocumentIntelligenceEngine : IDocumentIntelligence
         };
     }
 
-    /// <summary>Builds the KIE user message: the document Markdown plus the explicit list of keys to extract.</summary>
+    /// <summary>
+    /// Builds the KIE user message: the document Markdown plus the explicit list of keys to extract.
+    /// </summary>
     private static string BuildExtractionUserPrompt(string markdown, IReadOnlyList<string> keys)
     {
         var sb = new StringBuilder();
@@ -180,7 +199,9 @@ public sealed class DocumentIntelligenceEngine : IDocumentIntelligence
         return fields;
     }
 
-    /// <summary>Renders a JSON value to its string form, or <c>null</c> for JSON null / undefined.</summary>
+    /// <summary>
+    /// Renders a JSON value to its string form, or <c>null</c> for JSON null / undefined.
+    /// </summary>
     private static string? ValueToString(JsonElement element) => element.ValueKind switch
     {
         JsonValueKind.Null or JsonValueKind.Undefined => null,
@@ -253,10 +274,214 @@ public sealed class DocumentIntelligenceEngine : IDocumentIntelligence
     }
 
     // ----------------------------------------------------------------------------------------------------
+    // Chart-to-data parsing
+    // ----------------------------------------------------------------------------------------------------
+
+    /// <inheritdoc />
+    public async Task<ChartParseResult> ParseChartsAsync(string imagePath, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(imagePath);
+
+        using var image = await Image.LoadAsync<Rgb24>(Path.GetFullPath(imagePath), cancellationToken).ConfigureAwait(false);
+        var document = await _ocr.AnalyzeDocumentAsync(image, _options.StructureOptions, cancellationToken).ConfigureAwait(false);
+        return await ParseChartsCoreAsync(document, image, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<ChartParseResult> ParseChartsAsync(Image<Rgb24> image, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(image);
+
+        // Caller retains ownership of the image — do NOT dispose it here.
+        var document = await _ocr.AnalyzeDocumentAsync(image, _options.StructureOptions, cancellationToken).ConfigureAwait(false);
+        return await ParseChartsCoreAsync(document, image, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public Task<ChartParseResult> ParseChartsAsync(StructureResult document, Image<Rgb24> image, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(image);
+
+        return ParseChartsCoreAsync(document, image, cancellationToken);
+    }
+
+    /// <summary>
+    /// Parses every <see cref="StructureBlockType.Chart"/> block in <paramref name="document"/>: crops the
+    /// region from <paramref name="image"/>, PNG-encodes it, and asks the vision-capable
+    /// <see cref="IChatModel"/> to reconstruct the chart's data. Degenerate crops (clamped width/height
+    /// &lt; 2 px) are skipped. Returns <see cref="ChartParseResult.Empty"/> when the document has no charts.
+    /// </summary>
+    /// <exception cref="NotSupportedException">
+    /// The document contains a chart region but the configured <see cref="IChatModel"/> does not support vision.
+    /// </exception>
+    private async Task<ChartParseResult> ParseChartsCoreAsync(StructureResult document, Image<Rgb24> image, CancellationToken cancellationToken)
+    {
+        var chartBlocks = document.Blocks
+            .Where(b => b.Type == StructureBlockType.Chart)
+            .OrderBy(b => b.Order)
+            .ToList();
+
+        if (chartBlocks.Count == 0)
+            return ChartParseResult.Empty;
+
+        if (!_chatModel.SupportsVision)
+            throw new NotSupportedException(
+                "Chart parsing requires a vision-capable IChatModel (configure a multimodal model such as " +
+                "gpt-4o or qwen2.5-vl / llama3.2-vision via Ollama). The configured chat model reports " +
+                "SupportsVision = false.");
+
+        string systemPrompt = _options.ChartExtractionSystemPromptOverride ?? DefaultChartSystemPrompt;
+        var parsed = new List<ParsedChart>(chartBlocks.Count);
+
+        foreach (var block in chartBlocks)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            byte[]? pngBytes = CropChartToPng(image, block.Bounds);
+            if (pngBytes is null)
+                continue; // Degenerate crop — skip this block.
+
+            var request = new ChatRequest
+            {
+                Messages = new[]
+                {
+                    ChatMessage.System(systemPrompt),
+                    ChatMessage.User(
+                        "Extract the underlying data from this chart as specified.",
+                        new[] { new ChatImage(pngBytes, "image/png") }),
+                },
+                Temperature = _options.Temperature,
+                MaxTokens = _options.MaxTokens,
+                JsonMode = true,
+            };
+
+            var response = await _chatModel.CompleteAsync(request, cancellationToken).ConfigureAwait(false);
+
+            string? rawJson = ExtractJsonObject(response.Text);
+            ParseChartFields(rawJson, out string? chartType, out string? title, out string? dataMarkdown, out string? description);
+
+            parsed.Add(new ParsedChart
+            {
+                Order = block.Order,
+                Bounds = block.Bounds,
+                ChartType = chartType,
+                Title = title,
+                DataMarkdown = dataMarkdown ?? string.Empty,
+                Description = description,
+                RawJson = rawJson,
+                Usage = response.Usage,
+                Model = response.Model,
+            });
+        }
+
+        ChatUsage? aggregate = AggregateUsage(parsed);
+        string? model = parsed.Select(p => p.Model).FirstOrDefault(m => m is not null);
+
+        return new ChartParseResult
+        {
+            Charts = parsed,
+            Usage = aggregate,
+            Model = model,
+        };
+    }
+
+    /// <summary>
+    /// Reads the optional <c>chart_type</c>, <c>title</c>, <c>data_markdown</c> and <c>description</c> string
+    /// fields out of the model's JSON reply. Missing properties, JSON <c>null</c>, non-string values, or an
+    /// unparseable reply all yield <c>null</c> for that field.
+    /// </summary>
+    private static void ParseChartFields(
+        string? rawJson,
+        out string? chartType,
+        out string? title,
+        out string? dataMarkdown,
+        out string? description)
+    {
+        chartType = title = dataMarkdown = description = null;
+
+        if (string.IsNullOrWhiteSpace(rawJson))
+            return;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(rawJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                return;
+
+            var root = doc.RootElement;
+            chartType = ReadStringField(root, "chart_type");
+            title = ReadStringField(root, "title");
+            dataMarkdown = ReadStringField(root, "data_markdown");
+            description = ReadStringField(root, "description");
+        }
+        catch (JsonException)
+        {
+            // Malformed reply — leave every field null.
+        }
+    }
+
+    /// <summary>
+    /// Returns the property's value only when it exists and is a JSON string; otherwise <c>null</c>.
+    /// </summary>
+    private static string? ReadStringField(JsonElement root, string name)
+        => root.TryGetProperty(name, out var element) && element.ValueKind == JsonValueKind.String
+            ? element.GetString()
+            : null;
+
+    /// <summary>
+    /// Sums <see cref="ChatUsage.PromptTokens"/> and <see cref="ChatUsage.CompletionTokens"/> across every
+    /// parsed chart whose usage the provider reported; returns <c>null</c> when no chart reported usage.
+    /// </summary>
+    private static ChatUsage? AggregateUsage(IReadOnlyList<ParsedChart> charts)
+    {
+        int prompt = 0;
+        int completion = 0;
+        bool any = false;
+
+        foreach (var chart in charts)
+        {
+            if (chart.Usage is { } usage)
+            {
+                prompt += usage.PromptTokens;
+                completion += usage.CompletionTokens;
+                any = true;
+            }
+        }
+
+        return any ? new ChatUsage(prompt, completion) : null;
+    }
+
+    /// <summary>
+    /// Crops the chart region described by <paramref name="bounds"/> out of <paramref name="image"/> and
+    /// PNG-encodes it. Bounds are clamped to the image and the crop is skipped (returns <c>null</c>) when the
+    /// clamped region is degenerate (width or height &lt; 2 px).
+    /// </summary>
+    private static byte[]? CropChartToPng(Image<Rgb24> image, OcrBoundingBox bounds)
+    {
+        int x = Math.Clamp((int)Math.Floor(bounds.MinX), 0, image.Width - 1);
+        int y = Math.Clamp((int)Math.Floor(bounds.MinY), 0, image.Height - 1);
+        int right = Math.Clamp((int)Math.Ceiling(bounds.MaxX), 0, image.Width);
+        int bottom = Math.Clamp((int)Math.Ceiling(bounds.MaxY), 0, image.Height);
+        int w = right - x;
+        int h = bottom - y;
+
+        if (w < 2 || h < 2)
+            return null;
+
+        using var crop = image.Clone(ctx => ctx.Crop(new Rectangle(x, y, w, h)));
+        using var stream = new MemoryStream();
+        crop.Save(stream, new PngEncoder());
+        return stream.ToArray();
+    }
+
+    // ----------------------------------------------------------------------------------------------------
     // Helpers
     // ----------------------------------------------------------------------------------------------------
 
-    /// <summary>Validates the requested key list (non-null, non-empty, every key non-blank).</summary>
+    /// <summary>
+    /// Validates the requested key list (non-null, non-empty, every key non-blank).
+    /// </summary>
     private static void ValidateKeys(IReadOnlyList<string> keys)
     {
         ArgumentNullException.ThrowIfNull(keys);
@@ -340,7 +565,9 @@ public sealed class DocumentIntelligenceEngine : IDocumentIntelligence
         return s.Substring(start);
     }
 
-    /// <summary>Removes leading/trailing Markdown code fences (<c>```json</c> … <c>```</c>) if present.</summary>
+    /// <summary>
+    /// Removes leading/trailing Markdown code fences (<c>```json</c> … <c>```</c>) if present.
+    /// </summary>
     private static string StripCodeFences(string text)
     {
         string t = text.Trim();

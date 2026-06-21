@@ -45,7 +45,9 @@ public static class StructureMarkdownExtensions
         return Concatenate(pages);
     }
 
-    /// <summary>Joins the non-empty, trimmed pages with <see cref="PageSeparator"/> in order.</summary>
+    /// <summary>
+    /// Joins the non-empty, trimmed pages with <see cref="PageSeparator"/> in order.
+    /// </summary>
     private static string Concatenate(IEnumerable<string?> pages)
     {
         var sb = new StringBuilder();

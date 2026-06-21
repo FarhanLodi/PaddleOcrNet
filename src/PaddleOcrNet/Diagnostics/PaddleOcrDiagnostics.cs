@@ -15,15 +15,21 @@ namespace PaddleOcrNet.Diagnostics;
 /// </summary>
 public static class PaddleOcrDiagnostics
 {
-    /// <summary>Meter name to register with your metrics pipeline.</summary>
+    /// <summary>
+    /// Meter name to register with your metrics pipeline.
+    /// </summary>
     public const string MeterName = "PaddleOcrNet";
 
-    /// <summary>ActivitySource name to register with your tracing pipeline.</summary>
+    /// <summary>
+    /// ActivitySource name to register with your tracing pipeline.
+    /// </summary>
     public const string ActivitySourceName = "PaddleOcrNet";
 
     private const string Version = "1.0.0";
 
-    /// <summary>Activity source for per-operation OCR spans.</summary>
+    /// <summary>
+    /// Activity source for per-operation OCR spans.
+    /// </summary>
     public static readonly ActivitySource ActivitySource = new(ActivitySourceName, Version);
 
     internal static readonly Meter Meter = new(MeterName, Version);

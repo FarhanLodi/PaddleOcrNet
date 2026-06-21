@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using PaddleOcrNet.Intelligence.Offline;
 using PaddleOcrNet.Services;
 
 namespace PaddleOcrNet.Intelligence;
@@ -62,6 +63,26 @@ public static class IntelligenceServiceCollectionExtensions
             var ocr = sp.GetRequiredService<IPaddleOcrService>();
             var chat = sp.GetRequiredService<IChatModel>();
             return new DocumentIntelligenceEngine(ocr, chat, options);
+        });
+        return services;
+    }
+
+    /// <summary>
+    /// Registers <see cref="IOfflineKeyInformationExtractor"/> (implemented by
+    /// <see cref="OfflineKeyInformationExtractor"/>) as a singleton — the heuristic, non-LLM KIE path. Resolves
+    /// values from OCR layout geometry only, with no network or model call, so it needs no <see cref="IChatModel"/>.
+    /// Requires an <see cref="IPaddleOcrService"/> (from <see cref="ServiceCollectionExtensions.AddPaddleOcrNet"/>)
+    /// for the image/path overloads.
+    /// </summary>
+    /// <param name="services">The service collection.</param>
+    /// <returns>The same <paramref name="services"/> for chaining.</returns>
+    public static IServiceCollection AddPaddleOcrOfflineKie(this IServiceCollection services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        services.AddSingleton<IOfflineKeyInformationExtractor>(sp =>
+        {
+            var ocr = sp.GetRequiredService<IPaddleOcrService>();
+            return new OfflineKeyInformationExtractor(ocr);
         });
         return services;
     }

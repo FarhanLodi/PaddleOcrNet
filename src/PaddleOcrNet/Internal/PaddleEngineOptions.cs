@@ -10,19 +10,29 @@ namespace PaddleOcrNet.Internal;
 /// </summary>
 internal sealed record PaddleEngineOptions
 {
-    /// <summary>Optional model cache directory (defaults to LocalAppData or PADDLEOCRNET_CACHE).</summary>
+    /// <summary>
+    /// Optional model cache directory (defaults to LocalAppData or PADDLEOCRNET_CACHE).
+    /// </summary>
     public string? ModelCachePath { get; init; }
 
-    /// <summary>The execution provider to attempt. Defaults to <see cref="OcrExecutionProvider.Auto"/>.</summary>
+    /// <summary>
+    /// The execution provider to attempt. Defaults to <see cref="OcrExecutionProvider.Auto"/>.
+    /// </summary>
     public OcrExecutionProvider ExecutionProvider { get; init; } = OcrExecutionProvider.Auto;
 
-    /// <summary>Intra-op thread count for ONNX Runtime (null = runtime default). 1 = single-threaded ops.</summary>
+    /// <summary>
+    /// Intra-op thread count for ONNX Runtime (null = runtime default). 1 = single-threaded ops.
+    /// </summary>
     public int? IntraOpNumThreads { get; init; }
 
-    /// <summary>Inter-op thread count for ONNX Runtime (null = runtime default).</summary>
+    /// <summary>
+    /// Inter-op thread count for ONNX Runtime (null = runtime default).
+    /// </summary>
     public int? InterOpNumThreads { get; init; }
 
-    /// <summary>How model files are downloaded and cached.</summary>
+    /// <summary>
+    /// How model files are downloaded and cached.
+    /// </summary>
     public ModelDownloadOptions Download { get; init; } = new();
 
     /// <summary>

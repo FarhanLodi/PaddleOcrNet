@@ -1,5 +1,10 @@
+using System.Globalization;
 using System.IO.Compression;
 using System.Text;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Formats.Png;
+using SixLabors.ImageSharp.PixelFormats;
+using SixLabors.ImageSharp.Processing;
 
 namespace PaddleOcrNet.Structure.Export;
 
@@ -13,25 +18,47 @@ namespace PaddleOcrNet.Structure.Export;
 ///   <item>body text / lists / captions → normal paragraphs;</item>
 ///   <item>tables → native Word <c>&lt;w:tbl&gt;</c> recovered from the block's HTML grid, honoring
 ///         <c>colspan</c> (via <c>&lt;w:gridSpan&gt;</c>) and <c>rowspan</c> (via <c>&lt;w:vMerge&gt;</c>);</item>
-///   <item>formulas → a paragraph carrying the recovered LaTeX as <c>$$…$$</c> text;</item>
-///   <item>figures/charts/seals → a placeholder paragraph noting the figure region (the pixels are not
-///         embedded in v1).</item>
+///   <item>formulas → a native Word equation (Office MathML / OMML) when a <c>sourceImage</c>-bearing
+///         overload is used and the LaTeX converts cleanly; otherwise the recovered LaTeX as <c>$$…$$</c> text;</item>
+///   <item>figures/charts/seals → an inline image (the cropped region pixels) when a <c>sourceImage</c> is
+///         supplied; otherwise a placeholder paragraph noting the figure region.</item>
 /// </list>
-/// The package is built by hand (a <c>.docx</c> is a ZIP of XML parts) using only the BCL, so the library
-/// stays dependency-free and Native-AOT safe. All emitted text is XML-escaped.
+/// The package is built by hand (a <c>.docx</c> is a ZIP of XML parts) using only the BCL plus ImageSharp
+/// (already a core dependency, used for the PNG crop encode), so the library stays Native-AOT safe. All
+/// emitted text is XML-escaped.
+/// <para>
+/// Image-aware overloads (<see cref="ToDocx(StructureResult, Image{Rgb24})"/> and the matching
+/// <c>WriteDocx</c>/<c>SaveAsDocx</c>) embed the actual figure/chart/seal pixels and render formulas as OMML.
+/// The caller MUST pass the SAME image that was analyzed: block bounds are interpreted in that image's pixel
+/// space. The original no-image overloads keep their exact placeholder/text behavior.
+/// </para>
 /// </summary>
 public static class StructureDocxExporter
 {
     // The minimal WordprocessingML namespaces. Only the main "w" namespace and the relationship namespace
-    // are required for the parts this exporter emits.
+    // are required for the text/table parts; the drawing/picture/math namespaces below are declared on the
+    // <w:document> root so the inline-image and OMML fragments can reference them without re-declaring.
     private const string WNs = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
     private const string RNs = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+    // DrawingML namespaces used by the inline-image (<w:drawing>) fragment.
+    private const string WpNs = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+    private const string ANs = "http://schemas.openxmlformats.org/drawingml/2006/main";
+    private const string PicNs = "http://schemas.openxmlformats.org/drawingml/2006/picture";
+
+    // EMUs (English Metric Units) per pixel at 96 DPI: 914400 EMU/inch ÷ 96 px/inch = 9525.
+    private const long EmuPerPixel = 9525L;
+
+    // Cap an embedded image's rendered width to 6 inches so a large crop doesn't overrun the page; the
+    // height is scaled proportionally. 6 in × 914400 EMU/in = 5486400 EMU.
+    private const long MaxImageWidthEmu = 5486400L;
 
     // UTF-8 without a BOM: OOXML parts must not carry a byte-order mark.
     private static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
 
     /// <summary>
-    /// Renders the structure result to an in-memory WordprocessingML <c>.docx</c> package.
+    /// Renders the structure result to an in-memory WordprocessingML <c>.docx</c> package. Figures/charts/seals
+    /// are written as textual placeholders and formulas as <c>$$…$$</c> text (no pixels are embedded).
     /// </summary>
     /// <param name="result">The analyzed document to export. Must not be <c>null</c>.</param>
     /// <returns>The bytes of a valid <c>.docx</c> ZIP package.</returns>
@@ -40,7 +67,28 @@ public static class StructureDocxExporter
         ArgumentNullException.ThrowIfNull(result);
 
         using var buffer = new MemoryStream();
-        WriteDocx(result, buffer);
+        WriteDocx(result, buffer, leaveOpen: true, sourceImage: null);
+        return buffer.ToArray();
+    }
+
+    /// <summary>
+    /// Renders the structure result to an in-memory WordprocessingML <c>.docx</c> package, embedding the actual
+    /// pixels of each figure/chart/seal region as an inline image and rendering recovered formula LaTeX as a
+    /// native Word equation (OMML).
+    /// </summary>
+    /// <param name="result">The analyzed document to export. Must not be <c>null</c>.</param>
+    /// <param name="sourceImage">
+    /// The SAME image that was analyzed to produce <paramref name="result"/>. Block <c>Bounds</c> are
+    /// interpreted in this image's pixel space; passing a different image yields wrong crops. Must not be <c>null</c>.
+    /// </param>
+    /// <returns>The bytes of a valid <c>.docx</c> ZIP package with embedded media.</returns>
+    public static byte[] ToDocx(this StructureResult result, Image<Rgb24> sourceImage)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        ArgumentNullException.ThrowIfNull(sourceImage);
+
+        using var buffer = new MemoryStream();
+        WriteDocx(result, buffer, leaveOpen: true, sourceImage);
         return buffer.ToArray();
     }
 
@@ -54,7 +102,22 @@ public static class StructureDocxExporter
     {
         ArgumentNullException.ThrowIfNull(result);
         ArgumentNullException.ThrowIfNull(destination);
-        WriteDocx(result, destination, leaveOpen: true);
+        WriteDocx(result, destination, leaveOpen: true, sourceImage: null);
+    }
+
+    /// <summary>
+    /// Writes the structure result as a WordprocessingML <c>.docx</c> package into <paramref name="destination"/>,
+    /// embedding figure/chart/seal pixels and rendering formulas as OMML. The stream is left open.
+    /// </summary>
+    /// <param name="result">The analyzed document to export. Must not be <c>null</c>.</param>
+    /// <param name="destination">The writable, seekable stream to receive the package. Must not be <c>null</c>.</param>
+    /// <param name="sourceImage">The SAME image that was analyzed; block bounds are in its pixel space. Must not be <c>null</c>.</param>
+    public static void WriteDocx(this StructureResult result, Stream destination, Image<Rgb24> sourceImage)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        ArgumentNullException.ThrowIfNull(destination);
+        ArgumentNullException.ThrowIfNull(sourceImage);
+        WriteDocx(result, destination, leaveOpen: true, sourceImage);
     }
 
     /// <summary>
@@ -68,26 +131,64 @@ public static class StructureDocxExporter
         ArgumentException.ThrowIfNullOrEmpty(path);
 
         using var file = File.Create(path);
-        WriteDocx(result, file, leaveOpen: false);
+        WriteDocx(result, file, leaveOpen: false, sourceImage: null);
     }
 
-    private static void WriteDocx(StructureResult result, Stream destination, bool leaveOpen)
+    /// <summary>
+    /// Renders the structure result and saves it to <paramref name="path"/> as a <c>.docx</c> file, embedding
+    /// figure/chart/seal pixels and rendering formulas as OMML.
+    /// </summary>
+    /// <param name="result">The analyzed document to export. Must not be <c>null</c>.</param>
+    /// <param name="path">The destination file path. Must not be <c>null</c> or empty.</param>
+    /// <param name="sourceImage">The SAME image that was analyzed; block bounds are in its pixel space. Must not be <c>null</c>.</param>
+    public static void SaveAsDocx(this StructureResult result, string path, Image<Rgb24> sourceImage)
     {
+        ArgumentNullException.ThrowIfNull(result);
+        ArgumentException.ThrowIfNullOrEmpty(path);
+        ArgumentNullException.ThrowIfNull(sourceImage);
+
+        using var file = File.Create(path);
+        WriteDocx(result, file, leaveOpen: false, sourceImage);
+    }
+
+    private static void WriteDocx(StructureResult result, Stream destination, bool leaveOpen, Image<Rgb24>? sourceImage)
+    {
+        // Pass 1: build the document body. When a source image is supplied, this also crops each
+        // figure/chart/seal region to a PNG and records a media part for it; the returned media list drives
+        // the media parts, relationships and the png content-type declaration below.
+        var media = new List<MediaPart>();
+        string documentXml = DocumentXml(result, sourceImage, media);
+
         using var zip = new ZipArchive(destination, ZipArchiveMode.Create, leaveOpen);
 
-        WriteEntry(zip, "[Content_Types].xml", ContentTypesXml());
+        WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(includePng: media.Count > 0));
         WriteEntry(zip, "_rels/.rels", RootRelsXml());
-        WriteEntry(zip, "word/_rels/document.xml.rels", DocumentRelsXml());
-        WriteEntry(zip, "word/document.xml", DocumentXml(result));
+        WriteEntry(zip, "word/_rels/document.xml.rels", DocumentRelsXml(media));
+        WriteEntry(zip, "word/document.xml", documentXml);
+
+        // Binary media parts (PNG crops). These are stored after the XML parts; order in the ZIP is irrelevant.
+        foreach (var part in media)
+        {
+            WriteBinaryEntry(zip, "word/media/" + part.FileName, part.Png);
+        }
     }
+
+    /// <summary>
+    /// A cropped figure/chart/seal region staged for embedding: its PNG bytes, the relationship id
+    /// (<c>rId{N}</c>) the drawing run references, the media file name, and the rendered extent in EMUs.
+    /// </summary>
+    private sealed record MediaPart(string RelId, string FileName, byte[] Png, long ExtentWidthEmu, long ExtentHeightEmu);
 
     // ---- top-level OOXML parts -------------------------------------------------------------------------
 
-    private static string ContentTypesXml() =>
+    private static string ContentTypesXml(bool includePng) =>
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
         "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">" +
         "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>" +
         "<Default Extension=\"xml\" ContentType=\"application/xml\"/>" +
+        // Only declared when at least one PNG media part is embedded, so the no-image package is byte-for-byte
+        // unchanged from before.
+        (includePng ? "<Default Extension=\"png\" ContentType=\"image/png\"/>" : "") +
         "<Override PartName=\"/word/document.xml\" " +
         "ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/>" +
         "</Types>";
@@ -101,23 +202,46 @@ public static class StructureDocxExporter
         "</Relationships>";
 
     // No relationships are required by the document body itself (no styles/numbering parts are emitted),
-    // but Word expects the document part's .rels to exist. An empty relationship set is valid.
-    private static string DocumentRelsXml() =>
-        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
-        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"/>";
-
-    // ---- document body ---------------------------------------------------------------------------------
-
-    private static string DocumentXml(StructureResult result)
+    // but Word expects the document part's .rels to exist. An empty relationship set is valid. Each embedded
+    // image adds one relationship: rId{N} -> media/image{N}.png (image relationship type).
+    private static string DocumentRelsXml(IReadOnlyList<MediaPart> media)
     {
         var sb = new StringBuilder();
         sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
-        sb.Append("<w:document xmlns:w=\"").Append(WNs).Append("\">");
+        sb.Append("<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">");
+        foreach (var part in media)
+        {
+            sb.Append("<Relationship Id=\"").Append(part.RelId).Append("\" ")
+              .Append("Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" ")
+              .Append("Target=\"media/").Append(part.FileName).Append("\"/>");
+        }
+        sb.Append("</Relationships>");
+        return sb.ToString();
+    }
+
+    // ---- document body ---------------------------------------------------------------------------------
+
+    // Builds word/document.xml. When sourceImage is non-null, figure/chart/seal regions are cropped to PNGs,
+    // appended to <paramref name="media"/> (which the caller turns into media parts + relationships), and
+    // emitted as inline-image drawings; formulas are rendered as OMML when the LaTeX converts. When null, the
+    // original placeholder/text behavior is used and <paramref name="media"/> stays empty.
+    private static string DocumentXml(StructureResult result, Image<Rgb24>? sourceImage, List<MediaPart> media)
+    {
+        var sb = new StringBuilder();
+        sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
+        // Declare every namespace the body may use at the root so inline-image and OMML fragments stay terse.
+        sb.Append("<w:document")
+          .Append(" xmlns:w=\"").Append(WNs).Append('"')
+          .Append(" xmlns:r=\"").Append(RNs).Append('"')
+          .Append(" xmlns:wp=\"").Append(WpNs).Append('"')
+          .Append(" xmlns:a=\"").Append(ANs).Append('"')
+          .Append(" xmlns:pic=\"").Append(PicNs).Append('"')
+          .Append('>');
         sb.Append("<w:body>");
 
         foreach (var block in OrderedBlocks(result))
         {
-            AppendBlock(sb, block);
+            AppendBlock(sb, block, sourceImage, media);
         }
 
         // A trailing section-properties element is conventional and keeps Word happy about page setup.
@@ -127,7 +251,7 @@ public static class StructureDocxExporter
         return sb.ToString();
     }
 
-    private static void AppendBlock(StringBuilder sb, StructureBlock block)
+    private static void AppendBlock(StringBuilder sb, StructureBlock block, Image<Rgb24>? sourceImage, List<MediaPart> media)
     {
         switch (block.Type)
         {
@@ -148,20 +272,13 @@ public static class StructureDocxExporter
                 break;
 
             case StructureBlockType.Formula:
-                // Word has no native LaTeX; emit the recovered LaTeX as $$…$$ text for a faithful, honest v1.
-                // TODO(omml): convert the LaTeX to Office MathML (OMML) so Word renders the equation natively.
-                if (!string.IsNullOrWhiteSpace(block.Latex))
-                {
-                    AppendParagraph(sb, "$$ " + block.Latex!.Trim() + " $$", styleId: null);
-                }
+                AppendFormula(sb, block, sourceImage is not null);
                 break;
 
             case StructureBlockType.Figure:
             case StructureBlockType.Chart:
             case StructureBlockType.Seal:
-                // TODO(docx-image-embed): embed the figure pixels as a media part + drawing run. v1 records
-                // only a textual placeholder so the figure region is never silently dropped.
-                AppendFigurePlaceholder(sb, block);
+                AppendFigure(sb, block, sourceImage, media);
                 break;
 
             default:
@@ -171,7 +288,61 @@ public static class StructureDocxExporter
         }
     }
 
-    /// <summary>Emits a single <c>&lt;w:p&gt;</c> with one run of <paramref name="text"/>; skips blank text.</summary>
+    /// <summary>
+    /// Emits a formula block. When an image is supplied (image-aware overload) and the LaTeX converts to OMML,
+    /// renders a native Word equation; otherwise falls back to the recovered LaTeX as <c>$$…$$</c> text.
+    /// </summary>
+    private static void AppendFormula(StringBuilder sb, StructureBlock block, bool allowOmml)
+    {
+        if (string.IsNullOrWhiteSpace(block.Latex)) return;
+
+        if (allowOmml)
+        {
+            // LatexToOmml.Convert returns a self-contained <m:oMath xmlns:m="…">…</m:oMath> (or string.Empty)
+            // and never throws. As a child of <w:p> it renders as a native Word equation.
+            var omml = LatexToOmml.Convert(block.Latex);
+            if (!string.IsNullOrEmpty(omml))
+            {
+                sb.Append("<w:p>").Append(omml).Append("</w:p>");
+                return;
+            }
+        }
+
+        // No image, or the LaTeX did not convert: keep the faithful, honest $$…$$ text rendering.
+        AppendParagraph(sb, "$$ " + block.Latex!.Trim() + " $$", styleId: null);
+    }
+
+    /// <summary>
+    /// Emits a figure/chart/seal block. When an image is supplied and the region crops to a usable PNG, embeds
+    /// the pixels as an inline image (staging a media part for the caller); otherwise emits the textual placeholder.
+    /// </summary>
+    private static void AppendFigure(StringBuilder sb, StructureBlock block, Image<Rgb24>? sourceImage, List<MediaPart> media)
+    {
+        if (sourceImage is not null)
+        {
+            var part = TryCropToMediaPart(block, sourceImage, media.Count);
+            if (part is not null)
+            {
+                media.Add(part);
+                AppendInlineImage(sb, part);
+                // Keep any recovered caption/text under the image, mirroring the placeholder's behavior.
+                var caption = block.Text?.Trim();
+                if (!string.IsNullOrEmpty(caption))
+                {
+                    AppendParagraph(sb, caption, styleId: null);
+                }
+                return;
+            }
+            // Crop was degenerate (region too small / off-image): fall through to the placeholder so the
+            // figure region is still recorded rather than silently dropped.
+        }
+
+        AppendFigurePlaceholder(sb, block);
+    }
+
+    /// <summary>
+    /// Emits a single <c>&lt;w:p&gt;</c> with one run of <paramref name="text"/>; skips blank text.
+    /// </summary>
     private static void AppendParagraph(StringBuilder sb, string? text, string? styleId)
     {
         if (string.IsNullOrWhiteSpace(text)) return;
@@ -191,6 +362,90 @@ public static class StructureDocxExporter
         var label = "[" + block.Type + " region]";
         var text = string.IsNullOrEmpty(caption) ? label : label + " " + caption;
         AppendParagraph(sb, text, styleId: null);
+    }
+
+    // ---- inline-image embedding ------------------------------------------------------------------------
+
+    /// <summary>
+    /// Crops <paramref name="block"/>'s <c>Bounds</c> (source-image pixels) out of <paramref name="image"/>,
+    /// PNG-encodes the region and stages it as a <see cref="MediaPart"/> with a fresh relationship id derived
+    /// from <paramref name="mediaIndex"/> (the count of already-staged parts). Returns <c>null</c> when the
+    /// clamped region is degenerate (width or height &lt; 2 px) so the caller can fall back to a placeholder.
+    /// </summary>
+    private static MediaPart? TryCropToMediaPart(StructureBlock block, Image<Rgb24> image, int mediaIndex)
+    {
+        var b = block.Bounds;
+        int x = Math.Clamp((int)Math.Floor(b.MinX), 0, image.Width - 1);
+        int y = Math.Clamp((int)Math.Floor(b.MinY), 0, image.Height - 1);
+        int right = Math.Clamp((int)Math.Ceiling(b.MaxX), 0, image.Width);
+        int bottom = Math.Clamp((int)Math.Ceiling(b.MaxY), 0, image.Height);
+        int w = right - x;
+        int h = bottom - y;
+
+        if (w < 2 || h < 2) return null;
+
+        byte[] png;
+        using (var crop = image.Clone(ctx => ctx.Crop(new Rectangle(x, y, w, h))))
+        using (var stream = new MemoryStream())
+        {
+            crop.Save(stream, new PngEncoder());
+            png = stream.ToArray();
+        }
+
+        // The crop dimensions (w, h) are the image's natural pixel size; compute the rendered extent in EMUs,
+        // capping width to a sane page width and scaling height proportionally.
+        long widthEmu = w * EmuPerPixel;
+        long heightEmu = h * EmuPerPixel;
+        if (widthEmu > MaxImageWidthEmu)
+        {
+            heightEmu = (long)Math.Round(heightEmu * (MaxImageWidthEmu / (double)widthEmu));
+            widthEmu = MaxImageWidthEmu;
+            if (heightEmu < 1) heightEmu = 1;
+        }
+
+        // The exporter emits no other document.xml relationships, so a 1-based sequence is collision-free.
+        int n = mediaIndex + 1;
+        return new MediaPart($"rId{n}", $"image{n}.png", png, widthEmu, heightEmu);
+    }
+
+    /// <summary>
+    /// Emits an inline-image paragraph: <c>&lt;w:drawing&gt;&lt;wp:inline&gt;…&lt;a:blip r:embed="rId{N}"/&gt;…</c>.
+    /// All referenced namespaces (<c>wp</c>, <c>a</c>, <c>pic</c>, <c>r</c>) are declared on the <c>&lt;w:document&gt;</c>
+    /// root, so this fragment only needs the relationship id and the rendered extent.
+    /// </summary>
+    private static void AppendInlineImage(StringBuilder sb, MediaPart part)
+    {
+        string cx = part.ExtentWidthEmu.ToString(CultureInfo.InvariantCulture);
+        string cy = part.ExtentHeightEmu.ToString(CultureInfo.InvariantCulture);
+        // A unique non-zero drawing-object id. The relationship id is "rId{N}"; reuse N for the docPr id.
+        string id = part.RelId.Substring("rId".Length);
+
+        sb.Append("<w:p><w:r><w:drawing>");
+        sb.Append("<wp:inline distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\">");
+        sb.Append("<wp:extent cx=\"").Append(cx).Append("\" cy=\"").Append(cy).Append("\"/>");
+        sb.Append("<wp:effectExtent l=\"0\" t=\"0\" r=\"0\" b=\"0\"/>");
+        sb.Append("<wp:docPr id=\"").Append(id).Append("\" name=\"Picture ").Append(id).Append("\"/>");
+        sb.Append("<wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect=\"1\"/></wp:cNvGraphicFramePr>");
+        sb.Append("<a:graphic>");
+        sb.Append("<a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">");
+        sb.Append("<pic:pic>");
+        sb.Append("<pic:nvPicPr>");
+        sb.Append("<pic:cNvPr id=\"").Append(id).Append("\" name=\"image").Append(id).Append(".png\"/>");
+        sb.Append("<pic:cNvPicPr/>");
+        sb.Append("</pic:nvPicPr>");
+        sb.Append("<pic:blipFill>");
+        sb.Append("<a:blip r:embed=\"").Append(part.RelId).Append("\"/>");
+        sb.Append("<a:stretch><a:fillRect/></a:stretch>");
+        sb.Append("</pic:blipFill>");
+        sb.Append("<pic:spPr>");
+        sb.Append("<a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"").Append(cx).Append("\" cy=\"").Append(cy).Append("\"/></a:xfrm>");
+        sb.Append("<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom>");
+        sb.Append("</pic:spPr>");
+        sb.Append("</pic:pic>");
+        sb.Append("</a:graphicData>");
+        sb.Append("</a:graphic>");
+        sb.Append("</wp:inline>");
+        sb.Append("</w:drawing></w:r></w:p>");
     }
 
     /// <summary>
@@ -319,7 +574,9 @@ public static class StructureDocxExporter
     private static IEnumerable<StructureBlock> OrderedBlocks(StructureResult result)
         => result.Blocks.OrderBy(b => b.Order);
 
-    /// <summary>Escapes XML's five predefined entities so arbitrary OCR text is safe in element content.</summary>
+    /// <summary>
+    /// Escapes XML's five predefined entities so arbitrary OCR text is safe in element content.
+    /// </summary>
     internal static string Xml(string s) => s
         .Replace("&", "&amp;")
         .Replace("<", "&lt;")
@@ -327,7 +584,9 @@ public static class StructureDocxExporter
         .Replace("\"", "&quot;")
         .Replace("'", "&apos;");
 
-    /// <summary>Adds a ZIP entry with the given (forward-slash, no leading slash) name and UTF-8 (no BOM) text.</summary>
+    /// <summary>
+    /// Adds a ZIP entry with the given (forward-slash, no leading slash) name and UTF-8 (no BOM) text.
+    /// </summary>
     internal static void WriteEntry(ZipArchive zip, string entryName, string content)
     {
         var entry = zip.CreateEntry(entryName, CompressionLevel.Optimal);
@@ -335,239 +594,15 @@ public static class StructureDocxExporter
         using var writer = new StreamWriter(stream, Utf8NoBom);
         writer.Write(content);
     }
-}
 
-// =======================================================================================================
-//  Shared lightweight HTML-<table> parser
-// =======================================================================================================
-
-/// <summary>
-/// A minimal forgiving parser for the recovered table HTML carried on a
-/// <see cref="StructureBlock.TableHtml"/>. PaddleOCR's table recognizer emits well-formed (if attribute-light)
-/// <c>&lt;table&gt;…&lt;/table&gt;</c> markup whose cells may carry <c>rowspan</c>/<c>colspan</c>; this parser
-/// materializes that into a rectangular <see cref="OoxmlTableGrid"/> with merge information so both the Word
-/// and Excel exporters can lay the cells out faithfully. It is intentionally tolerant: it scans for
-/// <c>&lt;tr&gt;</c> / <c>&lt;td&gt;</c> / <c>&lt;th&gt;</c> tags, ignores anything it does not understand, and
-/// strips inner tags from cell content.
-/// </summary>
-internal static class OoxmlHtmlTable
-{
-    public static OoxmlTableGrid? Parse(string? html)
+    /// <summary>
+    /// Adds a ZIP entry with raw binary content (e.g. an already-compressed PNG media part). PNG bytes are
+    /// stored with no further compression — re-deflating compressed image data wastes CPU for no size win.
+    /// </summary>
+    private static void WriteBinaryEntry(ZipArchive zip, string entryName, byte[] content)
     {
-        if (string.IsNullOrWhiteSpace(html)) return null;
-
-        var rows = new List<List<OoxmlRawCell>>();
-        int i = 0;
-        int n = html.Length;
-
-        while (i < n)
-        {
-            int lt = html.IndexOf('<', i);
-            if (lt < 0) break;
-            int gt = html.IndexOf('>', lt + 1);
-            if (gt < 0) break;
-
-            string tag = html.Substring(lt + 1, gt - lt - 1).Trim();
-            string lower = tag.ToLowerInvariant();
-
-            if (lower == "tr" || lower.StartsWith("tr ") || lower.StartsWith("tr\t") || lower.StartsWith("tr\n"))
-            {
-                rows.Add(new List<OoxmlRawCell>());
-                i = gt + 1;
-                continue;
-            }
-
-            if (IsCellOpen(lower))
-            {
-                int colSpan = ReadSpan(tag, "colspan");
-                int rowSpan = ReadSpan(tag, "rowspan");
-
-                // The cell content runs from just after this open tag to its matching close tag.
-                int contentStart = gt + 1;
-                int close = FindCellClose(html, contentStart);
-                int contentEnd = close < 0 ? n : close;
-                string raw = html.Substring(contentStart, contentEnd - contentStart);
-                string text = CleanCellText(raw);
-
-                if (rows.Count == 0) rows.Add(new List<OoxmlRawCell>());
-                rows[^1].Add(new OoxmlRawCell(text, Math.Max(1, colSpan), Math.Max(1, rowSpan)));
-
-                // Resume scanning after the cell content (the close tag, if any, is re-scanned harmlessly).
-                i = close < 0 ? n : close;
-                continue;
-            }
-
-            i = gt + 1;
-        }
-
-        // Drop trailing empty rows produced by stray <tr> with no cells.
-        rows.RemoveAll(r => r.Count == 0);
-        if (rows.Count == 0) return null;
-
-        return OoxmlTableGrid.FromRows(rows);
-    }
-
-    private static bool IsCellOpen(string lowerTag)
-        => lowerTag == "td" || lowerTag == "th"
-           || lowerTag.StartsWith("td ") || lowerTag.StartsWith("th ")
-           || lowerTag.StartsWith("td\t") || lowerTag.StartsWith("th\t")
-           || lowerTag.StartsWith("td\n") || lowerTag.StartsWith("th\n");
-
-    /// <summary>Finds the index of the next <c>&lt;/td&gt;</c> or <c>&lt;/th&gt;</c> from <paramref name="from"/>.</summary>
-    private static int FindCellClose(string html, int from)
-    {
-        int i = from;
-        while (i < html.Length)
-        {
-            int lt = html.IndexOf("</", i, StringComparison.Ordinal);
-            if (lt < 0) return -1;
-            int gt = html.IndexOf('>', lt + 2);
-            if (gt < 0) return -1;
-            string name = html.Substring(lt + 2, gt - lt - 2).Trim().ToLowerInvariant();
-            if (name == "td" || name == "th") return lt;
-            i = gt + 1;
-        }
-        return -1;
-    }
-
-    private static int ReadSpan(string tag, string attr)
-    {
-        int idx = tag.IndexOf(attr, StringComparison.OrdinalIgnoreCase);
-        if (idx < 0) return 1;
-        int eq = tag.IndexOf('=', idx);
-        if (eq < 0) return 1;
-
-        int j = eq + 1;
-        while (j < tag.Length && (tag[j] == ' ' || tag[j] == '"' || tag[j] == '\'')) j++;
-        int start = j;
-        while (j < tag.Length && char.IsDigit(tag[j])) j++;
-        if (j == start) return 1;
-        return int.TryParse(tag.AsSpan(start, j - start), out int v) && v > 0 ? v : 1;
-    }
-
-    /// <summary>Strips any nested tags and decodes the handful of HTML entities PaddleOCR emits.</summary>
-    private static string CleanCellText(string raw)
-    {
-        if (raw.Length == 0) return string.Empty;
-
-        var sb = new StringBuilder(raw.Length);
-        bool inTag = false;
-        foreach (char ch in raw)
-        {
-            if (ch == '<') { inTag = true; continue; }
-            if (ch == '>') { inTag = false; continue; }
-            if (!inTag) sb.Append(ch);
-        }
-
-        return DecodeEntities(sb.ToString()).Trim();
-    }
-
-    private static string DecodeEntities(string s)
-    {
-        if (s.IndexOf('&') < 0) return s;
-        return s
-            .Replace("&nbsp;", " ")
-            .Replace("&lt;", "<")
-            .Replace("&gt;", ">")
-            .Replace("&quot;", "\"")
-            .Replace("&#39;", "'")
-            .Replace("&apos;", "'")
-            .Replace("&amp;", "&");
-    }
-}
-
-/// <summary>A raw cell as scanned from the HTML, before placement into the rectangular grid.</summary>
-internal sealed record OoxmlRawCell(string Text, int ColSpan, int RowSpan);
-
-/// <summary>A placed grid cell, carrying its text, its spans and whether it is a rowspan continuation slot.</summary>
-internal sealed class OoxmlGridCell
-{
-    public string Text { get; init; } = string.Empty;
-    public int ColSpan { get; init; } = 1;
-    public int RowSpan { get; init; } = 1;
-
-    /// <summary>True when this slot is occupied by a <c>rowspan</c> from a cell in an earlier row.</summary>
-    public bool IsRowSpanContinuation { get; init; }
-}
-
-/// <summary>
-/// A rectangular table grid recovered from HTML. <see cref="Cells"/> is <c>[row, col]</c>; a <c>null</c> slot
-/// is one folded into a preceding cell's <c>colspan</c> (no element should be emitted for it), whereas a
-/// <see cref="OoxmlGridCell.IsRowSpanContinuation"/> slot is a vertical-merge continuation that an exporter
-/// renders as a merged/empty cell.
-/// </summary>
-internal sealed class OoxmlTableGrid
-{
-    public required OoxmlGridCell?[,] Cells { get; init; }
-    public required int RowCount { get; init; }
-    public required int ColumnCount { get; init; }
-
-    public static OoxmlTableGrid FromRows(List<List<OoxmlRawCell>> rows)
-    {
-        int rowCount = rows.Count;
-
-        // Column count is the widest row once colspans are accounted for. Because rowspans push cells down
-        // into later rows, we resolve placement with an occupancy map and grow the column count as needed.
-        // First pass: an upper bound on columns.
-        int maxCols = 0;
-        foreach (var row in rows)
-        {
-            int width = 0;
-            foreach (var cell in row) width += cell.ColSpan;
-            if (width > maxCols) maxCols = width;
-        }
-        if (maxCols == 0) maxCols = 1;
-
-        // occupied[r,c] marks slots already taken by a rowspan/colspan placed earlier.
-        var occupied = new bool[rowCount, maxCols];
-        var cells = new OoxmlGridCell?[rowCount, maxCols];
-
-        for (int r = 0; r < rowCount; r++)
-        {
-            int c = 0;
-            foreach (var raw in rows[r])
-            {
-                // Skip to the next free slot in this row (one occupied by a rowspan from above).
-                while (c < maxCols && occupied[r, c]) c++;
-                if (c >= maxCols) break; // row overflows the grid; ignore extra cells defensively
-
-                int colSpan = Math.Min(raw.ColSpan, maxCols - c);
-                int rowSpan = Math.Min(raw.RowSpan, rowCount - r);
-
-                cells[r, c] = new OoxmlGridCell
-                {
-                    Text = raw.Text,
-                    ColSpan = colSpan,
-                    RowSpan = rowSpan,
-                    IsRowSpanContinuation = false,
-                };
-
-                // Mark the full span as occupied; for rows below the origin, plant continuation cells so the
-                // exporters can emit vertical-merge placeholders that span the same columns.
-                for (int dr = 0; dr < rowSpan; dr++)
-                {
-                    for (int dc = 0; dc < colSpan; dc++)
-                    {
-                        int rr = r + dr;
-                        int cc = c + dc;
-                        occupied[rr, cc] = true;
-                        if (dr > 0 && dc == 0)
-                        {
-                            cells[rr, cc] = new OoxmlGridCell
-                            {
-                                Text = string.Empty,
-                                ColSpan = colSpan,
-                                RowSpan = 1,
-                                IsRowSpanContinuation = true,
-                            };
-                        }
-                    }
-                }
-
-                c += colSpan;
-            }
-        }
-
-        return new OoxmlTableGrid { Cells = cells, RowCount = rowCount, ColumnCount = maxCols };
+        var entry = zip.CreateEntry(entryName, CompressionLevel.NoCompression);
+        using var stream = entry.Open();
+        stream.Write(content, 0, content.Length);
     }
 }

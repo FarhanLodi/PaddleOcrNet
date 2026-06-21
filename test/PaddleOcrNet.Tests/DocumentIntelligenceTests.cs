@@ -13,6 +13,8 @@ namespace PaddleOcrNet.Tests;
 /// A <see cref="FakeChatModel"/> returns canned JSON / answers and records the <see cref="ChatRequest"/> it
 /// received, so the tests assert the engine's prompt strategy (JSON mode set, keys present), its robust JSON
 /// parsing (object mapped to fields, missing key -> null, code-fence tolerance), and the Q&amp;A return value.
+/// The chart-parsing tests additionally cover cropping each <see cref="StructureBlockType.Chart"/> region to a
+/// JSON-mode vision call, the no-chart short-circuit, and the vision-required guard.
 /// The <see cref="StructureResult"/> overloads are used so the fake OCR service is never invoked.
 /// </summary>
 public class DocumentIntelligenceTests
@@ -21,28 +23,38 @@ public class DocumentIntelligenceTests
     // Test doubles
     // -----------------------------------------------------------------------------------------------------
 
-    /// <summary>An <see cref="IChatModel"/> that returns a canned reply and records the last request.</summary>
+    /// <summary>
+    /// An <see cref="IChatModel"/> that returns a canned reply and records the last request.
+    /// </summary>
     private sealed class FakeChatModel : IChatModel
     {
         private readonly string _reply;
+        private readonly ChatUsage _usage;
 
-        public FakeChatModel(string reply, bool supportsVision = false)
+        public FakeChatModel(string reply, bool supportsVision = false, ChatUsage? usage = null)
         {
             _reply = reply;
             SupportsVision = supportsVision;
+            _usage = usage ?? new ChatUsage(11, 7);
         }
 
         public ChatRequest? LastRequest { get; private set; }
+
+        /// <summary>
+        /// Number of times <see cref="CompleteAsync"/> has been invoked (used to assert no-call paths).
+        /// </summary>
+        public int Invocations { get; private set; }
 
         public bool SupportsVision { get; }
 
         public Task<ChatResponse> CompleteAsync(ChatRequest request, CancellationToken cancellationToken = default)
         {
+            Invocations++;
             LastRequest = request;
             var response = new ChatResponse
             {
                 Text = _reply,
-                Usage = new ChatUsage(11, 7),
+                Usage = _usage,
                 Model = "fake-model",
             };
             return Task.FromResult(response);
@@ -93,6 +105,16 @@ public class DocumentIntelligenceTests
             new StructureBlock(StructureBlockType.Text, Box(0, 50, 600, 120), Order: 1,
                 Text: "Invoice Number: INV-42\nVendor: Acme Corp\nTotal: $99.50"),
         },
+        SourceWidth = 600,
+        SourceHeight = 800,
+    };
+
+    /// <summary>
+    /// A document whose only blocks are <paramref name="chartBlocks"/> Chart regions (in <c>Order</c>).
+    /// </summary>
+    private static StructureResult ChartDocument(params StructureBlock[] chartBlocks) => new()
+    {
+        Blocks = chartBlocks,
         SourceWidth = 600,
         SourceHeight = 800,
     };
@@ -307,5 +329,94 @@ public class DocumentIntelligenceTests
         await Engine(chat, options).ExtractKeyInformationAsync(image, new[] { "Vendor" });
 
         Assert.Null(chat.LastRequest!.Messages[1].Images);
+    }
+
+    // -----------------------------------------------------------------------------------------------------
+    // Chart -> data parsing
+    // -----------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ParseCharts_parses_chart_block_into_data()
+    {
+        var reply =
+            "{\"chart_type\":\"bar\"," +
+            "\"title\":\"Revenue by Quarter\"," +
+            "\"data_markdown\":\"| Quarter | Revenue |\\n| --- | --- |\\n| Q1 | 10 |\\n| Q2 | 14 |\"," +
+            "\"description\":\"Quarterly revenue.\"}";
+        var chat = new FakeChatModel(reply, supportsVision: true);
+        var block = new StructureBlock(StructureBlockType.Chart, Box(10, 10, 200, 150), Order: 0);
+        var document = ChartDocument(block);
+        using var image = new Image<Rgb24>(220, 170);
+
+        var result = await Engine(chat).ParseChartsAsync(document, image);
+
+        var chart = Assert.Single(result.Charts);
+        Assert.Equal("bar", chart.ChartType);
+        Assert.Equal("Revenue by Quarter", chart.Title);
+        Assert.Contains("Q1", chart.DataMarkdown);
+        Assert.Contains("Revenue", chart.DataMarkdown);
+        Assert.False(string.IsNullOrWhiteSpace(chart.Description));
+        Assert.Equal(block.Order, chart.Order);
+        Assert.Equal(block.Bounds, chart.Bounds);
+
+        // The crop was sent as a JSON-mode vision request carrying an image attachment.
+        var req = chat.LastRequest;
+        Assert.NotNull(req);
+        Assert.True(req!.JsonMode);
+        var images = req.Messages[^1].Images;
+        Assert.NotNull(images);
+        var attached = Assert.Single(images!);
+        Assert.True(attached.Data.Length > 0);
+    }
+
+    [Fact]
+    public async Task ParseCharts_no_chart_blocks_returns_empty_without_calling_model()
+    {
+        var chat = new FakeChatModel("{}", supportsVision: true);
+        using var image = new Image<Rgb24>(220, 170);
+
+        var result = await Engine(chat).ParseChartsAsync(Document(), image);
+
+        Assert.Empty(result.Charts);
+        Assert.Equal(0, chat.Invocations);
+        Assert.Null(chat.LastRequest);
+    }
+
+    [Fact]
+    public async Task ParseCharts_throws_when_model_lacks_vision()
+    {
+        // Chart blocks exist but the model cannot accept image attachments.
+        var chat = new FakeChatModel("{}", supportsVision: false);
+        var document = ChartDocument(new StructureBlock(StructureBlockType.Chart, Box(10, 10, 200, 150), Order: 0));
+        using var image = new Image<Rgb24>(220, 170);
+
+        await Assert.ThrowsAsync<NotSupportedException>(
+            () => Engine(chat).ParseChartsAsync(document, image));
+    }
+
+    [Fact]
+    public async Task ParseCharts_parses_multiple_charts_in_order_and_aggregates_usage()
+    {
+        var reply =
+            "{\"chart_type\":\"line\"," +
+            "\"title\":\"Trend\"," +
+            "\"data_markdown\":\"| X | Y |\\n| --- | --- |\\n| 1 | 2 |\"," +
+            "\"description\":\"A trend.\"}";
+        var chat = new FakeChatModel(reply, supportsVision: true, usage: new ChatUsage(5, 3));
+        var document = ChartDocument(
+            new StructureBlock(StructureBlockType.Chart, Box(10, 10, 200, 150), Order: 0),
+            new StructureBlock(StructureBlockType.Chart, Box(10, 200, 200, 350), Order: 1));
+        using var image = new Image<Rgb24>(220, 400);
+
+        var result = await Engine(chat).ParseChartsAsync(document, image);
+
+        Assert.Equal(2, result.Charts.Count);
+        Assert.Equal(0, result.Charts[0].Order);
+        Assert.Equal(1, result.Charts[1].Order);
+        Assert.Equal(2, chat.Invocations);
+
+        // Aggregate usage sums the two per-chart calls (8 tokens each -> 16 total).
+        Assert.NotNull(result.Usage);
+        Assert.Equal(16, result.Usage!.TotalTokens);
     }
 }

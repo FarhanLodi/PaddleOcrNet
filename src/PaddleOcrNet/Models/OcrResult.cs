@@ -47,7 +47,9 @@ public sealed record OcrResult
     /// </summary>
     public int SourceWidth { get; init; }
 
-    /// <summary>Gets the height (px) of the image OCR ran on, or 0 if unknown.</summary>
+    /// <summary>
+    /// Gets the height (px) of the image OCR ran on, or 0 if unknown.
+    /// </summary>
     public int SourceHeight { get; init; }
 
     /// <summary>

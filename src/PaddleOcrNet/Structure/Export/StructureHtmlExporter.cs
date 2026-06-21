@@ -1,6 +1,10 @@
 using System.Globalization;
 using System.Text;
 using PaddleOcrNet.Models;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Formats.Png;
+using SixLabors.ImageSharp.PixelFormats;
+using SixLabors.ImageSharp.Processing;
 
 namespace PaddleOcrNet.Structure;
 
@@ -9,9 +13,10 @@ namespace PaddleOcrNet.Structure;
 /// HTML5 document — the C# parity for Python PP-StructureV3's <c>save_to_html()</c>. The exporter walks
 /// <see cref="StructureResult.Blocks"/> in reading order and maps each block kind to the most natural
 /// HTML element (headings, paragraphs, tables, MathJax-wrapped formulas, figure placeholders), escaping
-/// all recovered text while emitting pre-built table markup verbatim. Both a string-returning
-/// <see cref="ToHtml"/> and a file-writing <see cref="SaveAsHtml"/> are provided. The exporter is pure
-/// (apart from <see cref="SaveAsHtml"/>'s single write) and Native-AOT friendly.
+/// all recovered text while emitting pre-built table markup verbatim. Both string-returning
+/// <c>ToHtml</c> and file-writing <c>SaveAsHtml</c> overloads are provided, each with an image-aware variant
+/// that embeds the actual figure/chart/seal pixels. The exporter is pure (apart from <c>SaveAsHtml</c>'s
+/// single write) and Native-AOT friendly.
 /// </summary>
 public static class StructureHtmlExporter
 {
@@ -40,7 +45,30 @@ public static class StructureHtmlExporter
     public static string ToHtml(this StructureResult result, string? title = null)
     {
         ArgumentNullException.ThrowIfNull(result);
+        return RenderDocument(result, sourceImage: null, title);
+    }
 
+    /// <summary>
+    /// Renders the analyzed document as a single, self-contained HTML5 document, embedding the actual pixels of
+    /// each figure/chart/seal region as an inline <c>data:image/png;base64,…</c> <c>&lt;img&gt;</c> (instead of
+    /// the bbox placeholder). All other block kinds render exactly as in <see cref="ToHtml(StructureResult, string?)"/>.
+    /// </summary>
+    /// <param name="result">The analyzed document to render. Must not be <c>null</c>.</param>
+    /// <param name="sourceImage">
+    /// The SAME image that was analyzed to produce <paramref name="result"/>. Block <c>Bounds</c> are
+    /// interpreted in this image's pixel space; passing a different image yields wrong crops. Must not be <c>null</c>.
+    /// </param>
+    /// <param name="title">Optional document title; see <see cref="ToHtml(StructureResult, string?)"/>.</param>
+    /// <returns>The complete HTML document as a UTF-8-encodable string, with embedded figure images.</returns>
+    public static string ToHtml(this StructureResult result, Image<Rgb24> sourceImage, string? title = null)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        ArgumentNullException.ThrowIfNull(sourceImage);
+        return RenderDocument(result, sourceImage, title);
+    }
+
+    private static string RenderDocument(StructureResult result, Image<Rgb24>? sourceImage, string? title)
+    {
         var ordered = result.Blocks.OrderBy(b => b.Order).ToList();
         string docTitle = title ?? FirstTitle(ordered) ?? "Document";
 
@@ -70,7 +98,7 @@ public static class StructureHtmlExporter
 
         foreach (var block in ordered)
         {
-            string chunk = RenderHtml(block);
+            string chunk = RenderHtml(block, sourceImage);
             if (chunk.Length == 0) continue;
             sb.Append("  ").AppendLine(chunk);
         }
@@ -81,12 +109,12 @@ public static class StructureHtmlExporter
     }
 
     /// <summary>
-    /// Renders the document via <see cref="ToHtml"/> and writes it to <paramref name="path"/> as UTF-8
-    /// (without a byte-order mark, so the file is a clean, portable HTML document).
+    /// Renders the document via <see cref="ToHtml(StructureResult, string?)"/> and writes it to
+    /// <paramref name="path"/> as UTF-8 (without a byte-order mark, so the file is a clean, portable HTML document).
     /// </summary>
     /// <param name="result">The analyzed document to render. Must not be <c>null</c>.</param>
     /// <param name="path">Destination file path. Must not be <c>null</c> or empty.</param>
-    /// <param name="title">Optional document title; see <see cref="ToHtml"/>.</param>
+    /// <param name="title">Optional document title; see <see cref="ToHtml(StructureResult, string?)"/>.</param>
     public static void SaveAsHtml(this StructureResult result, string path, string? title = null)
     {
         ArgumentNullException.ThrowIfNull(result);
@@ -94,8 +122,26 @@ public static class StructureHtmlExporter
         File.WriteAllText(path, result.ToHtml(title), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
     }
 
-    /// <summary>Renders a single block to its HTML fragment (no surrounding whitespace); empty when nothing to emit.</summary>
-    private static string RenderHtml(StructureBlock block)
+    /// <summary>
+    /// Renders the document via <see cref="ToHtml(StructureResult, Image{Rgb24}, string?)"/> (embedding figure
+    /// pixels) and writes it to <paramref name="path"/> as UTF-8 (without a byte-order mark).
+    /// </summary>
+    /// <param name="result">The analyzed document to render. Must not be <c>null</c>.</param>
+    /// <param name="sourceImage">The SAME image that was analyzed; block bounds are in its pixel space. Must not be <c>null</c>.</param>
+    /// <param name="path">Destination file path. Must not be <c>null</c> or empty.</param>
+    /// <param name="title">Optional document title; see <see cref="ToHtml(StructureResult, string?)"/>.</param>
+    public static void SaveAsHtml(this StructureResult result, Image<Rgb24> sourceImage, string path, string? title = null)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        ArgumentNullException.ThrowIfNull(sourceImage);
+        ArgumentException.ThrowIfNullOrEmpty(path);
+        File.WriteAllText(path, result.ToHtml(sourceImage, title), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+    }
+
+    /// <summary>
+    /// Renders a single block to its HTML fragment (no surrounding whitespace); empty when nothing to emit.
+    /// </summary>
+    private static string RenderHtml(StructureBlock block, Image<Rgb24>? sourceImage)
     {
         switch (block.Type)
         {
@@ -115,7 +161,7 @@ public static class StructureHtmlExporter
             case StructureBlockType.Figure:
             case StructureBlockType.Chart:
             case StructureBlockType.Seal:
-                return RenderFigure(block);
+                return RenderFigure(block, sourceImage);
 
             default:
                 // Text, Paragraph, List, captions, headers/footers, references, etc.: plain paragraph text.
@@ -124,7 +170,9 @@ public static class StructureHtmlExporter
         }
     }
 
-    /// <summary>Formats an <c>&lt;hN&gt;</c> heading; empty when the text is blank.</summary>
+    /// <summary>
+    /// Formats an <c>&lt;hN&gt;</c> heading; empty when the text is blank.
+    /// </summary>
     private static string Heading(string? text, int level)
     {
         if (string.IsNullOrWhiteSpace(text)) return string.Empty;
@@ -164,27 +212,74 @@ public static class StructureHtmlExporter
     }
 
     /// <summary>
-    /// Renders a figure / chart / seal as a <c>&lt;figure&gt;</c> placeholder (we have no inline image bytes),
-    /// carrying the region label and source-image bbox in <c>data-*</c> attributes and any recovered
-    /// caption/text in a <c>&lt;figcaption&gt;</c>.
+    /// Renders a figure / chart / seal. When a <paramref name="sourceImage"/> is supplied and the region crops
+    /// to a usable PNG, embeds the actual pixels as a base64 <c>data:image/png</c> <c>&lt;img&gt;</c>; otherwise
+    /// (no image, or a degenerate crop) falls back to the <c>&lt;figure&gt;</c> placeholder carrying the region
+    /// label and source-image bbox in <c>data-*</c> attributes. Any recovered caption/text becomes a
+    /// <c>&lt;figcaption&gt;</c>.
     /// </summary>
-    private static string RenderFigure(StructureBlock block)
+    private static string RenderFigure(StructureBlock block, Image<Rgb24>? sourceImage)
     {
         var label = block.Type.ToString();
         var caption = block.Text?.Trim();
+
+        if (sourceImage is not null)
+        {
+            var png = TryCropToPng(block, sourceImage);
+            if (png is not null)
+            {
+                var sb = new StringBuilder();
+                sb.Append("<figure>");
+                sb.Append("<img src=\"data:image/png;base64,").Append(Convert.ToBase64String(png))
+                  .Append("\" alt=\"").Append(Esc(label)).Append("\"/>");
+                if (!string.IsNullOrEmpty(caption))
+                {
+                    sb.Append("<figcaption>").Append(Esc(caption)).Append("</figcaption>");
+                }
+                sb.Append("</figure>");
+                return sb.ToString();
+            }
+            // Degenerate crop: fall through to the placeholder so the figure region is still recorded.
+        }
+
         var b = block.Bounds;
-        var sb = new StringBuilder();
-        sb.Append("<figure data-type=\"").Append(Esc(label)).Append("\" data-bbox=\"")
+        var ph = new StringBuilder();
+        ph.Append("<figure data-type=\"").Append(Esc(label)).Append("\" data-bbox=\"")
           .Append(Num(b.MinX)).Append(' ').Append(Num(b.MinY)).Append(' ')
           .Append(Num(b.MaxX)).Append(' ').Append(Num(b.MaxY)).Append("\">");
-        sb.Append("<figcaption>").Append(Esc(string.IsNullOrEmpty(caption) ? label : caption)).Append("</figcaption>");
-        sb.Append("</figure>");
-        return sb.ToString();
+        ph.Append("<figcaption>").Append(Esc(string.IsNullOrEmpty(caption) ? label : caption)).Append("</figcaption>");
+        ph.Append("</figure>");
+        return ph.ToString();
+    }
+
+    /// <summary>
+    /// Crops <paramref name="block"/>'s <c>Bounds</c> (source-image pixels) out of <paramref name="image"/> and
+    /// PNG-encodes the region. Bounds are clamped to the image; returns <c>null</c> when the clamped region is
+    /// degenerate (width or height &lt; 2 px).
+    /// </summary>
+    private static byte[]? TryCropToPng(StructureBlock block, Image<Rgb24> image)
+    {
+        var b = block.Bounds;
+        int x = Math.Clamp((int)Math.Floor(b.MinX), 0, image.Width - 1);
+        int y = Math.Clamp((int)Math.Floor(b.MinY), 0, image.Height - 1);
+        int right = Math.Clamp((int)Math.Ceiling(b.MaxX), 0, image.Width);
+        int bottom = Math.Clamp((int)Math.Ceiling(b.MaxY), 0, image.Height);
+        int w = right - x;
+        int h = bottom - y;
+
+        if (w < 2 || h < 2) return null;
+
+        using var crop = image.Clone(ctx => ctx.Crop(new Rectangle(x, y, w, h)));
+        using var stream = new MemoryStream();
+        crop.Save(stream, new PngEncoder());
+        return stream.ToArray();
     }
 
     // ---- helpers ----
 
-    /// <summary>Returns the text of the first heading-like block, used to seed the document <c>&lt;title&gt;</c>.</summary>
+    /// <summary>
+    /// Returns the text of the first heading-like block, used to seed the document <c>&lt;title&gt;</c>.
+    /// </summary>
     private static string? FirstTitle(IEnumerable<StructureBlock> ordered)
     {
         foreach (var b in ordered)
@@ -232,7 +327,9 @@ public static class StructureHtmlExporter
 
     private static string Num(double v) => ((int)Math.Round(v)).ToString(CultureInfo.InvariantCulture);
 
-    /// <summary>HTML-escapes text content / attribute values (the five XML-significant characters).</summary>
+    /// <summary>
+    /// HTML-escapes text content / attribute values (the five XML-significant characters).
+    /// </summary>
     private static string Esc(string s) => s
         .Replace("&", "&amp;")
         .Replace("<", "&lt;")

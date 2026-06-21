@@ -19,7 +19,9 @@ namespace PaddleOcrNet.Internal.Recognition;
 /// </summary>
 internal static class CharacterDictionary
 {
-    /// <summary>The token placed at index 0 of every Paddle recognizer vocabulary (the CTC blank).</summary>
+    /// <summary>
+    /// The token placed at index 0 of every Paddle recognizer vocabulary (the CTC blank).
+    /// </summary>
     public const string Blank = "blank";
 
     /// <summary>

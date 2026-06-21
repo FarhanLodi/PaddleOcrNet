@@ -164,7 +164,9 @@ public sealed class PaddleOcrService : IPaddleOcrService
         return RunPipelineAsync(image, codes, options, cancellationToken);
     }
 
-    /// <summary>OCR an already-decoded image across several <see cref="OcrLanguage"/> values (the in-memory entry point).</summary>
+    /// <summary>
+    /// OCR an already-decoded image across several <see cref="OcrLanguage"/> values (the in-memory entry point).
+    /// </summary>
     public Task<OcrResult> ExtractTextFromImage(
         Image<Rgb24> image,
         IReadOnlyList<OcrLanguage> languages,
@@ -177,7 +179,9 @@ public sealed class PaddleOcrService : IPaddleOcrService
     // PaddleOcrService reference — e.g. new PaddleOcrService().ExtractTextFromImage("x.png", OcrLanguage.English).
     // Default of OcrLanguage.Auto makes the zero-config call (ExtractTextFromImage("x.png")) just work.
 
-    /// <summary>OCR an image file in a single <see cref="OcrLanguage"/> (defaults to <see cref="OcrLanguage.Auto"/>).</summary>
+    /// <summary>
+    /// OCR an image file in a single <see cref="OcrLanguage"/> (defaults to <see cref="OcrLanguage.Auto"/>).
+    /// </summary>
     public Task<OcrResult> ExtractTextFromImage(
         string imagePath,
         OcrLanguage language = OcrLanguage.Auto,
@@ -185,7 +189,9 @@ public sealed class PaddleOcrService : IPaddleOcrService
         CancellationToken cancellationToken = default)
         => ExtractTextFromImage(imagePath, new[] { language }, options, cancellationToken);
 
-    /// <summary>OCR an image stream in a single <see cref="OcrLanguage"/> (defaults to <see cref="OcrLanguage.Auto"/>).</summary>
+    /// <summary>
+    /// OCR an image stream in a single <see cref="OcrLanguage"/> (defaults to <see cref="OcrLanguage.Auto"/>).
+    /// </summary>
     public Task<OcrResult> ExtractTextFromImage(
         Stream imageStream,
         OcrLanguage language = OcrLanguage.Auto,
@@ -193,7 +199,9 @@ public sealed class PaddleOcrService : IPaddleOcrService
         CancellationToken cancellationToken = default)
         => ExtractTextFromImage(imageStream, new[] { language }, options, cancellationToken);
 
-    /// <summary>OCR an encoded image byte array in a single <see cref="OcrLanguage"/> (defaults to <see cref="OcrLanguage.Auto"/>).</summary>
+    /// <summary>
+    /// OCR an encoded image byte array in a single <see cref="OcrLanguage"/> (defaults to <see cref="OcrLanguage.Auto"/>).
+    /// </summary>
     public Task<OcrResult> ExtractTextFromImage(
         byte[] imageBytes,
         OcrLanguage language = OcrLanguage.Auto,
@@ -201,7 +209,9 @@ public sealed class PaddleOcrService : IPaddleOcrService
         CancellationToken cancellationToken = default)
         => ExtractTextFromImage(imageBytes, new[] { language }, options, cancellationToken);
 
-    /// <summary>OCR encoded image bytes in a single <see cref="OcrLanguage"/> (defaults to <see cref="OcrLanguage.Auto"/>).</summary>
+    /// <summary>
+    /// OCR encoded image bytes in a single <see cref="OcrLanguage"/> (defaults to <see cref="OcrLanguage.Auto"/>).
+    /// </summary>
     public Task<OcrResult> ExtractTextFromImage(
         ReadOnlyMemory<byte> imageBytes,
         OcrLanguage language = OcrLanguage.Auto,
@@ -209,7 +219,9 @@ public sealed class PaddleOcrService : IPaddleOcrService
         CancellationToken cancellationToken = default)
         => ExtractTextFromImage(imageBytes, new[] { language }, options, cancellationToken);
 
-    /// <summary>OCR an already-decoded image in a single <see cref="OcrLanguage"/> (defaults to <see cref="OcrLanguage.Auto"/>).</summary>
+    /// <summary>
+    /// OCR an already-decoded image in a single <see cref="OcrLanguage"/> (defaults to <see cref="OcrLanguage.Auto"/>).
+    /// </summary>
     public Task<OcrResult> ExtractTextFromImage(
         Image<Rgb24> image,
         OcrLanguage language = OcrLanguage.Auto,
@@ -245,7 +257,9 @@ public sealed class PaddleOcrService : IPaddleOcrService
         return TranslateRegions(regions, rx, ry);
     }
 
-    /// <summary>Locates text regions in an image file without recognizing them.</summary>
+    /// <summary>
+    /// Locates text regions in an image file without recognizing them.
+    /// </summary>
     public async Task<IReadOnlyList<DetectedRegion>> DetectRegionsAsync(
         string imagePath,
         RecognitionOptions? options = null,
@@ -291,7 +305,9 @@ public sealed class PaddleOcrService : IPaddleOcrService
         return BuildResult(lines, langs, sw, activity, image.Width, image.Height);
     }
 
-    /// <summary>Recognizes text inside regions located by a prior detection pass.</summary>
+    /// <summary>
+    /// Recognizes text inside regions located by a prior detection pass.
+    /// </summary>
     public Task<OcrResult> RecognizeRegionsAsync(
         Image<Rgb24> image,
         IEnumerable<DetectedRegion> regions,
@@ -393,7 +409,9 @@ public sealed class PaddleOcrService : IPaddleOcrService
         return await engine.AnalyzeAsync(image, options ?? StructureOptions.Default, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Lazily creates (once) the structure engine, sharing the OCR engine's configuration.</summary>
+    /// <summary>
+    /// Lazily creates (once) the structure engine, sharing the OCR engine's configuration.
+    /// </summary>
     private PaddleStructureEngine GetOrCreateStructureEngine()
     {
         var existing = Volatile.Read(ref _structureEngine);
@@ -432,7 +450,9 @@ public sealed class PaddleOcrService : IPaddleOcrService
         return BuildResult(outcome.Lines, outcome.Languages, sw, activity, image.Width, image.Height, outcome.Detected);
     }
 
-    /// <summary>Sorts into reading order, records metrics/trace tags, and assembles the result.</summary>
+    /// <summary>
+    /// Sorts into reading order, records metrics/trace tags, and assembles the result.
+    /// </summary>
     private OcrResult BuildResult(IReadOnlyList<OcrLine> lines, string[] languages, Stopwatch sw, Activity? activity, int sourceWidth = 0, int sourceHeight = 0, IReadOnlyList<string>? detectedLanguages = null)
     {
         var ordered = SortLinesByReadingOrder(lines);
@@ -462,7 +482,9 @@ public sealed class PaddleOcrService : IPaddleOcrService
         };
     }
 
-    /// <summary>Runs OCR at 0/90/180/270° and keeps the orientation with the strongest result.</summary>
+    /// <summary>
+    /// Runs OCR at 0/90/180/270° and keeps the orientation with the strongest result.
+    /// </summary>
     private async Task<(IReadOnlyList<OcrLine>, string[], IReadOnlyList<string>)> RecognizeBestOrientationAsync(
         Image<Rgb24> image, IEnumerable<string> languages, RecognitionOptions options, CancellationToken ct)
     {
@@ -528,7 +550,9 @@ public sealed class PaddleOcrService : IPaddleOcrService
         => options.AutoDetectLanguage
            || languages.Any(l => string.Equals(l?.Trim(), "auto", StringComparison.OrdinalIgnoreCase));
 
-    /// <summary>Applies the optional region-of-interest crop and translates boxes back to image coordinates.</summary>
+    /// <summary>
+    /// Applies the optional region-of-interest crop and translates boxes back to image coordinates.
+    /// </summary>
     private async Task<(IReadOnlyList<OcrLine> Lines, IReadOnlyList<string> Detected)> RecognizeWithRegionAsync(
         Image<Rgb24> image, string[] langs, RecognitionOptions options, CancellationToken ct)
     {
@@ -722,14 +746,18 @@ public sealed class PaddleOcrService : IPaddleOcrService
                 "the image. This guard protects against decompression-bomb / pixel-flood denial of service.");
     }
 
-    /// <summary>Releases the underlying ONNX sessions. Prefer <see cref="DisposeAsync"/>.</summary>
+    /// <summary>
+    /// Releases the underlying ONNX sessions. Prefer <see cref="DisposeAsync"/>.
+    /// </summary>
     public void Dispose()
     {
         DisposeAsync().AsTask().GetAwaiter().GetResult();
         GC.SuppressFinalize(this);
     }
 
-    /// <summary>Asynchronously releases the underlying ONNX detector, classifier and recognizer sessions.</summary>
+    /// <summary>
+    /// Asynchronously releases the underlying ONNX detector, classifier and recognizer sessions.
+    /// </summary>
     public async ValueTask DisposeAsync()
     {
         // Dispose-once: a second concurrent or repeated call is a no-op.

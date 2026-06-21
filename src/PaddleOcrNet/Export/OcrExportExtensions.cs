@@ -18,7 +18,9 @@ public static class OcrExportExtensions
 
     private static readonly PaddleOcrJsonContext IndentedJson = new(new JsonSerializerOptions { WriteIndented = true });
 
-    /// <summary>Serializes the result to JSON using the source-generated (AOT-safe) context.</summary>
+    /// <summary>
+    /// Serializes the result to JSON using the source-generated (AOT-safe) context.
+    /// </summary>
     public static string ToJson(this OcrResult result, bool indented = false)
     {
         ArgumentNullException.ThrowIfNull(result);

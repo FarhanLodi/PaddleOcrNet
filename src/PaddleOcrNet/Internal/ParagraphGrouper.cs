@@ -11,10 +11,14 @@ namespace PaddleOcrNet.Internal;
 /// </summary>
 internal static class ParagraphGrouper
 {
-    /// <summary>Default vertical join distance, as a multiple of line height.</summary>
+    /// <summary>
+    /// Default vertical join distance, as a multiple of line height.
+    /// </summary>
     public const double DefaultYThreshold = 0.5;
 
-    /// <summary>Default horizontal join distance, as a multiple of line height.</summary>
+    /// <summary>
+    /// Default horizontal join distance, as a multiple of line height.
+    /// </summary>
     public const double DefaultXThreshold = 1.0;
 
     public static List<OcrLine> Merge(

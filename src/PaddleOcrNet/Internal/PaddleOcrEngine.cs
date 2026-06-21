@@ -128,7 +128,9 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
         CancellationToken cancellationToken)
         => RecognizePolygonsAsync(image, languages, polygons, options, detectedLanguagesSink: null, cancellationToken);
 
-    /// <summary>Runs only the detector (no recognition) and returns the located regions in reading order.</summary>
+    /// <summary>
+    /// Runs only the detector (no recognition) and returns the located regions in reading order.
+    /// </summary>
     public async Task<IReadOnlyList<DetectedRegion>> DetectRegionsAsync(
         Image<Rgb24> image,
         DetectionOptions detection,
@@ -259,7 +261,9 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
 
     // ---- language auto-detection ----
 
-    /// <summary>The mean default-pack confidence at/above which the Latin/CJK fast path accepts without trying other packs.</summary>
+    /// <summary>
+    /// The mean default-pack confidence at/above which the Latin/CJK fast path accepts without trying other packs.
+    /// </summary>
     private const double AutoFastPathConfidence = 0.85;
 
     /// <summary>
@@ -459,7 +463,9 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
         return GetOrLoadRecognizerAsync(pack, cancellationToken);
     }
 
-    /// <summary>Resolves the distinct recognizer packs for the requested languages (unsupported codes are skipped).</summary>
+    /// <summary>
+    /// Resolves the distinct recognizer packs for the requested languages (unsupported codes are skipped).
+    /// </summary>
     private IReadOnlyList<RecognizerPack> ResolvePacks(IReadOnlyList<string> languages)
     {
         var packs = new Dictionary<string, RecognizerPack>(StringComparer.OrdinalIgnoreCase);

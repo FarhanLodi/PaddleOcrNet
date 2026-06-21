@@ -3,35 +3,6 @@ using System.Collections.Frozen;
 namespace PaddleOcrNet.Internal;
 
 /// <summary>
-/// Defines a downloadable model asset (an ONNX network or a character dictionary file).
-/// </summary>
-/// <param name="FileName">The single-segment file name cached on disk (e.g. <c>PP-OCRv5_mobile_rec.onnx</c>).</param>
-/// <param name="Url">The absolute HTTPS URL the asset is fetched from when not cached.</param>
-/// <param name="Sha256">
-/// Expected upper-case-hex SHA256, or <c>null</c> when no checksum is published yet. A <c>null</c>
-/// checksum makes <see cref="ModelDownloadManager"/> take its fail-open path: the asset is only accepted
-/// when <see cref="Services.ModelDownloadOptions.AllowUnverifiedModels"/> is set, otherwise the download
-/// is rejected. See <see cref="PaddleModelRegistry.Checksums"/> for why these are currently empty.
-/// </param>
-internal sealed record ModelAsset(string FileName, string Url, string? Sha256);
-
-/// <summary>
-/// Describes a recognizer "pack": the recognition ONNX network plus the character
-/// <see cref="Dictionary"/> sidecar holding the ordered ppocr key set the network's CTC head emits.
-/// PaddleOCR ships one recognizer (and a matching dictionary) per language/script family, so a pack is
-/// exactly the (recognition model, dictionary) pair selected for a requested language.
-/// </summary>
-/// <param name="Name">Stable pack identifier, also the recognizer session cache key (e.g. <c>latin_PP-OCRv5_mobile</c>).</param>
-/// <param name="Model">The recognition ONNX model asset.</param>
-/// <param name="Dictionary">The ppocr character-dictionary asset (one key per line).</param>
-/// <param name="Languages">Language codes this pack serves; the first is its representative code.</param>
-internal sealed record RecognizerPack(
-    string Name,
-    ModelAsset Model,
-    ModelAsset Dictionary,
-    string[] Languages);
-
-/// <summary>
 /// Static catalogue of the PaddleOCR <b>PP-OCRv5</b> model set exported to ONNX, plus the character
 /// dictionaries each recognizer needs. It covers:
 /// <list type="bullet">
@@ -211,10 +182,14 @@ internal static class PaddleModelRegistry
     // Detection
     // ===============================================================================================
 
-    /// <summary>PP-OCRv5 <b>mobile</b> DB text-detection model — the lightweight default detector.</summary>
+    /// <summary>
+    /// PP-OCRv5 <b>mobile</b> DB text-detection model — the lightweight default detector.
+    /// </summary>
     public static readonly ModelAsset MobileDetector = Asset(MobileDetFile);
 
-    /// <summary>PP-OCRv5 <b>server</b> DB text-detection model — higher accuracy, heavier than mobile.</summary>
+    /// <summary>
+    /// PP-OCRv5 <b>server</b> DB text-detection model — higher accuracy, heavier than mobile.
+    /// </summary>
     public static readonly ModelAsset ServerDetector = Asset(ServerDetFile);
 
     /// <summary>
@@ -252,28 +227,44 @@ internal static class PaddleModelRegistry
 
     // ----- Layout detection (PP-DocLayout) -----
 
-    /// <summary>PP-DocLayout-S layout detector (PicoDet) ONNX network — the lightweight layout model.</summary>
+    /// <summary>
+    /// PP-DocLayout-S layout detector (PicoDet) ONNX network — the lightweight layout model.
+    /// </summary>
     public static readonly ModelAsset DocLayoutS = Asset(DocLayoutSFile);
 
-    /// <summary>PP-DocLayout-M layout detector (PicoDet) ONNX network — the medium layout model.</summary>
+    /// <summary>
+    /// PP-DocLayout-M layout detector (PicoDet) ONNX network — the medium layout model.
+    /// </summary>
     public static readonly ModelAsset DocLayoutM = Asset(DocLayoutMFile);
 
-    /// <summary>PP-DocLayout_plus-L layout detector (RT-DETR) ONNX network — the high-accuracy layout model.</summary>
+    /// <summary>
+    /// PP-DocLayout_plus-L layout detector (RT-DETR) ONNX network — the high-accuracy layout model.
+    /// </summary>
     public static readonly ModelAsset DocLayoutPlusL = Asset(DocLayoutPlusLFile);
 
-    /// <summary>Label sidecar (.yml: raw-class-id → label name) for <see cref="DocLayoutS"/>.</summary>
+    /// <summary>
+    /// Label sidecar (.yml: raw-class-id → label name) for <see cref="DocLayoutS"/>.
+    /// </summary>
     public static readonly ModelAsset DocLayoutSLabels = Asset(DocLayoutSLabelsFile);
 
-    /// <summary>Label sidecar (.yml: raw-class-id → label name) for <see cref="DocLayoutM"/>.</summary>
+    /// <summary>
+    /// Label sidecar (.yml: raw-class-id → label name) for <see cref="DocLayoutM"/>.
+    /// </summary>
     public static readonly ModelAsset DocLayoutMLabels = Asset(DocLayoutMLabelsFile);
 
-    /// <summary>Label sidecar (.yml: raw-class-id → label name) for <see cref="DocLayoutPlusL"/>.</summary>
+    /// <summary>
+    /// Label sidecar (.yml: raw-class-id → label name) for <see cref="DocLayoutPlusL"/>.
+    /// </summary>
     public static readonly ModelAsset DocLayoutPlusLLabels = Asset(DocLayoutPlusLLabelsFile);
 
-    /// <summary>PP-DocLayoutV3 layout detector (RT-DETR, 25-class) ONNX — the RT-DETR layout model actually published.</summary>
+    /// <summary>
+    /// PP-DocLayoutV3 layout detector (RT-DETR, 25-class) ONNX — the RT-DETR layout model actually published.
+    /// </summary>
     public static readonly ModelAsset DocLayoutV3 = Asset(DocLayoutV3File);
 
-    /// <summary>PP-DocLayoutV3 label sidecar (one label per line; id = line index).</summary>
+    /// <summary>
+    /// PP-DocLayoutV3 label sidecar (one label per line; id = line index).
+    /// </summary>
     public static readonly ModelAsset DocLayoutV3Labels = Asset(DocLayoutV3LabelsFile);
 
     // ----- Document pre-processing (orientation + unwarp) -----
@@ -285,36 +276,56 @@ internal static class PaddleModelRegistry
     /// </summary>
     public static readonly ModelAsset DocImageOrientation = Asset(DocImageOriFile);
 
-    /// <summary>UVDoc document-unwarp (dewarp) ONNX network, used by the structure pre-processor.</summary>
+    /// <summary>
+    /// UVDoc document-unwarp (dewarp) ONNX network, used by the structure pre-processor.
+    /// </summary>
     public static readonly ModelAsset DocUnwarp = Asset(UVDocUnwarpFile);
 
     // ----- Table structure recognition -----
 
-    /// <summary>PP-LCNet table classifier (wired vs wireless table) — gates which structure model to run.</summary>
+    /// <summary>
+    /// PP-LCNet table classifier (wired vs wireless table) — gates which structure model to run.
+    /// </summary>
     public static readonly ModelAsset TableClassifier = Asset(TableClsFile);
 
-    /// <summary>SLANet_plus wired-table structure recognizer ONNX network.</summary>
-    /// <summary>The single published SLANet_plus table-structure model (50-class head).</summary>
+    /// <summary>
+    /// SLANet_plus wired-table structure recognizer ONNX network.
+    /// </summary>
+    /// <summary>
+    /// The single published SLANet_plus table-structure model (50-class head).
+    /// </summary>
     public static readonly ModelAsset SlanetPlus = Asset(SlanetPlusFile);
 
     public static readonly ModelAsset SlanetPlusWired = Asset(SlanetPlusWiredFile);
 
-    /// <summary>SLANet_plus wireless-table structure recognizer ONNX network.</summary>
+    /// <summary>
+    /// SLANet_plus wireless-table structure recognizer ONNX network.
+    /// </summary>
     public static readonly ModelAsset SlanetPlusWireless = Asset(SlanetPlusWirelessFile);
 
-    /// <summary>SLANeXt wired-table structure recognizer ONNX network.</summary>
+    /// <summary>
+    /// SLANeXt wired-table structure recognizer ONNX network.
+    /// </summary>
     public static readonly ModelAsset SlaNeXtWired = Asset(SlaNeXtWiredFile);
 
-    /// <summary>SLANeXt wireless-table structure recognizer ONNX network.</summary>
+    /// <summary>
+    /// SLANeXt wireless-table structure recognizer ONNX network.
+    /// </summary>
     public static readonly ModelAsset SlaNeXtWireless = Asset(SlaNeXtWirelessFile);
 
-    /// <summary>Shared table-structure-token dictionary (HTML tag tokens), one token per line.</summary>
+    /// <summary>
+    /// Shared table-structure-token dictionary (HTML tag tokens), one token per line.
+    /// </summary>
     public static readonly ModelAsset TableStructureDict = Asset(TableStructureDictFile);
 
-    /// <summary>RT-DETR-L wired-table cell-detection ONNX network (per-cell bounding boxes).</summary>
+    /// <summary>
+    /// RT-DETR-L wired-table cell-detection ONNX network (per-cell bounding boxes).
+    /// </summary>
     public static readonly ModelAsset RtDetrWiredTableCell = Asset(RtDetrWiredCellFile);
 
-    /// <summary>RT-DETR-L wireless-table cell-detection ONNX network (per-cell bounding boxes).</summary>
+    /// <summary>
+    /// RT-DETR-L wireless-table cell-detection ONNX network (per-cell bounding boxes).
+    /// </summary>
     public static readonly ModelAsset RtDetrWirelessTableCell = Asset(RtDetrWirelessCellFile);
 
     // ----- Seal text recognition -----
@@ -329,16 +340,24 @@ internal static class PaddleModelRegistry
     // NOTE: formula recognition uses LaTeX-OCR (RapidLaTeXOCR) ONNX, NOT PP-FormulaNet — PP-FormulaNet has
     // no ONNX export path and therefore cannot run on the ONNX-Runtime-only stack used here.
 
-    /// <summary>LaTeX-OCR pre-encode image-resizer ONNX network (normalizes the formula crop size).</summary>
+    /// <summary>
+    /// LaTeX-OCR pre-encode image-resizer ONNX network (normalizes the formula crop size).
+    /// </summary>
     public static readonly ModelAsset FormulaImageResizer = Asset(LatexImageResizerFile);
 
-    /// <summary>LaTeX-OCR ViT image-encoder ONNX network.</summary>
+    /// <summary>
+    /// LaTeX-OCR ViT image-encoder ONNX network.
+    /// </summary>
     public static readonly ModelAsset FormulaEncoder = Asset(LatexEncoderFile);
 
-    /// <summary>LaTeX-OCR autoregressive transformer-decoder ONNX network.</summary>
+    /// <summary>
+    /// LaTeX-OCR autoregressive transformer-decoder ONNX network.
+    /// </summary>
     public static readonly ModelAsset FormulaDecoder = Asset(LatexDecoderFile);
 
-    /// <summary>LaTeX-OCR tokenizer sidecar (<c>tokenizer.json</c>: token-id → token string).</summary>
+    /// <summary>
+    /// LaTeX-OCR tokenizer sidecar (<c>tokenizer.json</c>: token-id → token string).
+    /// </summary>
     public static readonly ModelAsset FormulaTokenizer = Asset(LatexTokenizerFile);
 
     // ===============================================================================================
@@ -370,55 +389,75 @@ internal static class PaddleModelRegistry
     // --- Per-script multilingual language packs (PP-OCRv5 mobile rec + the script's ppocr dict) ---
     // Language code lists follow PaddleOCR's per-script grouping; the first code is the representative.
 
-    /// <summary>Latin-script pack (en, fr, de, es, it, pt, nl, …) on <c>latin_dict.txt</c>.</summary>
+    /// <summary>
+    /// Latin-script pack (en, fr, de, es, it, pt, nl, …) on <c>latin_dict.txt</c>.
+    /// </summary>
     public static readonly RecognizerPack Latin = Pack(
         "latin_PP-OCRv5_mobile", "latin_PP-OCRv5_mobile_rec.onnx", "latin_dict.txt",
         "latin", "fr", "de", "es", "it", "pt", "nl", "af", "az", "bs", "cs", "cy", "da", "et", "ga",
         "hr", "hu", "id", "is", "ku", "la", "lt", "lv", "mi", "ms", "mt", "no", "oc", "pi", "pl", "ro",
         "rs_latin", "sk", "sl", "sq", "sv", "sw", "tl", "tr", "uz", "vi");
 
-    /// <summary>Cyrillic-script pack (ru, uk, bg, sr, …) on <c>cyrillic_dict.txt</c>.</summary>
+    /// <summary>
+    /// Cyrillic-script pack (ru, uk, bg, sr, …) on <c>cyrillic_dict.txt</c>.
+    /// </summary>
     public static readonly RecognizerPack Cyrillic = Pack(
         "cyrillic_PP-OCRv5_mobile", "cyrillic_PP-OCRv5_mobile_rec.onnx", "cyrillic_dict.txt",
         "cyrillic", "ru", "rs_cyrillic", "be", "bg", "uk", "mn", "abq", "ady", "kbd", "ava", "dar",
         "inh", "che", "lbe", "lez", "tab", "tjk");
 
-    /// <summary>Arabic-script pack (ar, fa, ur, ug) on <c>arabic_dict.txt</c>.</summary>
+    /// <summary>
+    /// Arabic-script pack (ar, fa, ur, ug) on <c>arabic_dict.txt</c>.
+    /// </summary>
     public static readonly RecognizerPack Arabic = Pack(
         "arabic_PP-OCRv5_mobile", "arabic_PP-OCRv5_mobile_rec.onnx", "arabic_dict.txt",
         "arabic", "ar", "fa", "ug", "ur");
 
-    /// <summary>Devanagari-script pack (hi, mr, ne, sa, …) on <c>devanagari_dict.txt</c>.</summary>
+    /// <summary>
+    /// Devanagari-script pack (hi, mr, ne, sa, …) on <c>devanagari_dict.txt</c>.
+    /// </summary>
     public static readonly RecognizerPack Devanagari = Pack(
         "devanagari_PP-OCRv5_mobile", "devanagari_PP-OCRv5_mobile_rec.onnx", "devanagari_dict.txt",
         "devanagari", "hi", "mr", "ne", "bh", "mai", "ang", "bho", "mah", "sck", "new", "gom", "sa", "bgc");
 
-    /// <summary>Korean pack on <c>korean_dict.txt</c>.</summary>
+    /// <summary>
+    /// Korean pack on <c>korean_dict.txt</c>.
+    /// </summary>
     public static readonly RecognizerPack Korean = Pack(
         "korean_PP-OCRv5_mobile", "korean_PP-OCRv5_mobile_rec.onnx", "korean_dict.txt",
         "korean", "ko");
 
-    /// <summary>Japanese pack on <c>japan_dict.txt</c>.</summary>
+    /// <summary>
+    /// Japanese pack on <c>japan_dict.txt</c>.
+    /// </summary>
     public static readonly RecognizerPack Japanese = Pack(
         "japan_PP-OCRv5_mobile", "japan_PP-OCRv5_mobile_rec.onnx", "japan_dict.txt",
         "japan", "ja_full");
 
-    /// <summary>Thai pack on <c>th_dict.txt</c>.</summary>
+    /// <summary>
+    /// Thai pack on <c>th_dict.txt</c>.
+    /// </summary>
     public static readonly RecognizerPack Thai = Pack(
         "th_PP-OCRv5_mobile", "th_PP-OCRv5_mobile_rec.onnx", "th_dict.txt",
         "thai", "th");
 
-    /// <summary>Greek pack on <c>ppocrv5_el_dict.txt</c> (the PP-OCRv5 Greek dictionary).</summary>
+    /// <summary>
+    /// Greek pack on <c>ppocrv5_el_dict.txt</c> (the PP-OCRv5 Greek dictionary).
+    /// </summary>
     public static readonly RecognizerPack Greek = Pack(
         "el_PP-OCRv5_mobile", "el_PP-OCRv5_mobile_rec.onnx", "ppocrv5_el_dict.txt",
         "greek", "el");
 
-    /// <summary>Telugu pack on <c>te_dict.txt</c>.</summary>
+    /// <summary>
+    /// Telugu pack on <c>te_dict.txt</c>.
+    /// </summary>
     public static readonly RecognizerPack Telugu = Pack(
         "te_PP-OCRv5_mobile", "te_PP-OCRv5_mobile_rec.onnx", "te_dict.txt",
         "telugu", "te");
 
-    /// <summary>Tamil pack on <c>ta_dict.txt</c>.</summary>
+    /// <summary>
+    /// Tamil pack on <c>ta_dict.txt</c>.
+    /// </summary>
     public static readonly RecognizerPack Tamil = Pack(
         "ta_PP-OCRv5_mobile", "ta_PP-OCRv5_mobile_rec.onnx", "ta_dict.txt",
         "tamil", "ta");
@@ -432,7 +471,9 @@ internal static class PaddleModelRegistry
         "PP-OCRv5_mobile_cht", MobileRecFile, "ppocrv5_dict.txt",
         "chinese_cht", "ch_tra", "zh_tra", "cht");
 
-    /// <summary>East-Slavic pack on <c>ppocrv5_eslav_dict.txt</c> (the PP-OCRv5 East-Slavic dictionary).</summary>
+    /// <summary>
+    /// East-Slavic pack on <c>ppocrv5_eslav_dict.txt</c> (the PP-OCRv5 East-Slavic dictionary).
+    /// </summary>
     public static readonly RecognizerPack EastSlavic = Pack(
         "eslav_PP-OCRv5_mobile", "eslav_PP-OCRv5_mobile_rec.onnx", "ppocrv5_eslav_dict.txt",
         "eslav", "ru_eslav", "uk_eslav", "be_eslav");

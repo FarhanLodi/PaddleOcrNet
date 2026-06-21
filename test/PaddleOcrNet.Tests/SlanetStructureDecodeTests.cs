@@ -33,10 +33,14 @@ public class SlanetStructureDecodeTests
     private const int Sos = 0;
     private const int Eos = 1;
 
-    /// <summary>True for the cell-open tokens that carry a bounding box at their decode step.</summary>
+    /// <summary>
+    /// True for the cell-open tokens that carry a bounding box at their decode step.
+    /// </summary>
     private static bool IsCellToken(string tok) => tok is "<td>" or "<td></td>";
 
-    /// <summary>Asserts a decoded box's corners with a tolerance (the model emits float-precision values).</summary>
+    /// <summary>
+    /// Asserts a decoded box's corners with a tolerance (the model emits float-precision values).
+    /// </summary>
     private static void AssertBox(double x1, double y1, double x2, double y2, OcrBoundingBox actual, double tol = 1e-5)
     {
         Assert.Equal(x1, actual.MinX, tol);
@@ -91,7 +95,9 @@ public class SlanetStructureDecodeTests
         return new DecodeResult(html.ToString(), boxes);
     }
 
-    /// <summary>Builds a one-hot <c>structure_probs[T,V]</c> from a token-id sequence (each step certain).</summary>
+    /// <summary>
+    /// Builds a one-hot <c>structure_probs[T,V]</c> from a token-id sequence (each step certain).
+    /// </summary>
     private static float[,] OneHot(int[] tokenIds, int vocabSize)
     {
         var probs = new float[tokenIds.Length, vocabSize];

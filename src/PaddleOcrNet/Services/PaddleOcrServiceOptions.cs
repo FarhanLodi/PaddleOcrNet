@@ -9,7 +9,9 @@ namespace PaddleOcrNet.Services;
 /// </summary>
 public sealed class PaddleOcrServiceOptions
 {
-    /// <summary>Optional model cache directory (defaults to LocalAppData or PADDLEOCRNET_CACHE).</summary>
+    /// <summary>
+    /// Optional model cache directory (defaults to LocalAppData or PADDLEOCRNET_CACHE).
+    /// </summary>
     public string? ModelCachePath { get; set; }
 
     /// <summary>
@@ -42,10 +44,14 @@ public sealed class PaddleOcrServiceOptions
     /// </summary>
     public int? IntraOpNumThreads { get; set; }
 
-    /// <summary>ONNX Runtime inter-op thread count. Null = runtime default.</summary>
+    /// <summary>
+    /// ONNX Runtime inter-op thread count. Null = runtime default.
+    /// </summary>
     public int? InterOpNumThreads { get; set; }
 
-    /// <summary>How model files are downloaded and cached (retries, progress, offline, proxy, mirror).</summary>
+    /// <summary>
+    /// How model files are downloaded and cached (retries, progress, offline, proxy, mirror).
+    /// </summary>
     public ModelDownloadOptions Download { get; set; } = new();
 
     /// <summary>
@@ -64,7 +70,9 @@ public sealed class PaddleOcrServiceOptions
     /// </summary>
     public bool LogGpuHint { get; set; }
 
-    /// <summary>Maps the public options to the engine's internal configuration record.</summary>
+    /// <summary>
+    /// Maps the public options to the engine's internal configuration record.
+    /// </summary>
     internal PaddleEngineOptions ToEngineOptions()
     {
         var provider = ExecutionProvider;

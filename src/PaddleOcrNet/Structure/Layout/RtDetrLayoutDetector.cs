@@ -38,10 +38,14 @@ namespace PaddleOcrNet.Structure.Layout;
 /// </summary>
 internal sealed class RtDetrLayoutDetector : ILayoutDetector
 {
-    /// <summary>Detections scoring at or below this confidence are discarded (PaddleX layout <c>threshold</c>).</summary>
+    /// <summary>
+    /// Detections scoring at or below this confidence are discarded (PaddleX layout <c>threshold</c>).
+    /// </summary>
     private const float ScoreThreshold = 0.5f;
 
-    /// <summary>Fallback square input edge when the graph declares a dynamic spatial dimension (PP-DocLayout_plus-L default).</summary>
+    /// <summary>
+    /// Fallback square input edge when the graph declares a dynamic spatial dimension (PP-DocLayout_plus-L default).
+    /// </summary>
     private const int DefaultInputSize = 800;
 
     private readonly InferenceSession _session;

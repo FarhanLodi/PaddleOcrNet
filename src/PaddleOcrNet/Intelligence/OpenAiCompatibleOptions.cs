@@ -22,7 +22,9 @@ public sealed record OpenAiCompatibleOptions
     /// </summary>
     public string? ApiKey { get; init; }
 
-    /// <summary>The default model (or Azure deployment) used when a <see cref="ChatRequest.Model"/> is not set.</summary>
+    /// <summary>
+    /// The default model (or Azure deployment) used when a <see cref="ChatRequest.Model"/> is not set.
+    /// </summary>
     public required string DefaultModel { get; init; }
 
     /// <summary>
@@ -37,7 +39,9 @@ public sealed record OpenAiCompatibleOptions
     /// </summary>
     public string ApiKeyPrefix { get; init; } = "Bearer ";
 
-    /// <summary>Extra headers sent with every request (e.g. <c>OpenAI-Organization</c>); <c>null</c> for none.</summary>
+    /// <summary>
+    /// Extra headers sent with every request (e.g. <c>OpenAI-Organization</c>); <c>null</c> for none.
+    /// </summary>
     public IReadOnlyDictionary<string, string>? AdditionalHeaders { get; init; }
 
     /// <summary>
@@ -53,7 +57,9 @@ public sealed record OpenAiCompatibleOptions
     /// </summary>
     public TimeSpan? Timeout { get; init; }
 
-    /// <summary>Whether the configured model accepts image attachments. Default <c>true</c>.</summary>
+    /// <summary>
+    /// Whether the configured model accepts image attachments. Default <c>true</c>.
+    /// </summary>
     public bool SupportsVision { get; init; } = true;
 
     /// <summary>
