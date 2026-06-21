@@ -135,10 +135,15 @@ string json     = doc.ToJson();      // structured blocks with bounding boxes + 
 | Stage | Model | Output |
 | --- | --- | --- |
 | Layout analysis | PP-DocLayoutV3 (RT-DETR) | region boxes + 25 block types |
-| Table recognition | SLANet_plus | `<table>` HTML with cell text matched into the grid |
+| Table recognition | SLANet_plus (default) · SLANeXt v2 | `<table>` HTML with cell text matched into the grid |
 | Formula recognition | LaTeX-OCR | LaTeX string |
 | Orientation / unwarp | PP-LCNet · UVDoc | de-skewed, de-warped page |
 | Reading order | XY-cut | multi-column document order |
+
+For tables, set `StructureOptions.TableModel = TableRecognitionModel.SlaNeXt` to use the PP-StructureV3 **v2**
+path: a `PP-LCNet` classifier decides wired (bordered) vs wireless (borderless) and runs the matching
+**SLANeXt** model — often more accurate on clearly bordered/borderless tables (downloads three small models on
+first use). The default, `SlanetPlus`, is a single end-to-end model.
 
 ### Exports with embedded figures & native equations
 
@@ -345,8 +350,8 @@ native Word equations via OMML), the PDF pipeline, LLM-backed document intellige
 extraction, Q&A, and chart-to-data parsing — the PP-Chart2Table-equivalent vision-LLM path), and a
 heuristic, layout-based **offline KIE** extractor as the non-LLM alternative. Under consideration:
 
-- Activate the table-recognition-v2 path (SLANeXt + RT-DETR cell detection) and seal recognition
-  end-to-end — the ONNX assets are now hosted; the remaining work is wiring them into the active pipeline
+- Optional RT-DETR table-cell detector path for table recognition (SLANeXt already recovers cells from its
+  own location head, so this is an accuracy enhancement rather than a gap)
 - A model-based on-device (ONNX VI-LayoutXLM) KIE path to complement the current heuristic offline extractor
 - PP-OCRv6 model line
 - Additional per-language recognizer packs

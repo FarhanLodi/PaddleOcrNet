@@ -42,6 +42,15 @@ public sealed record StructureOptions
     public LayoutModel LayoutModel { get; init; } = LayoutModel.RtDetrL;
 
     /// <summary>
+    /// Which table-structure model recovers <see cref="StructureBlockType.Table"/> regions. Default
+    /// <see cref="TableRecognitionModel.SlanetPlus"/> (single end-to-end model). Set
+    /// <see cref="TableRecognitionModel.SlaNeXt"/> to use the PP-StructureV3 v2 path (a wired/wireless
+    /// classifier picks the matching SLANeXt model) — more accurate on clearly bordered/borderless tables;
+    /// downloads three extra models on first use. Only consulted when <see cref="RecognizeTables"/> is true.
+    /// </summary>
+    public TableRecognitionModel TableModel { get; init; } = TableRecognitionModel.SlanetPlus;
+
+    /// <summary>
     /// Recognition languages passed through to the text recognizer for text/caption/seal regions. Takes
     /// strongly-typed <see cref="OcrLanguage"/> values. Defaults to a single-element list of
     /// <see cref="OcrLanguage.ChineseSimplified"/> (code <c>"ch"</c>, which also covers English/Japanese).

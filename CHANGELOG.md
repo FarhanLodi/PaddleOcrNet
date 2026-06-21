@@ -8,6 +8,11 @@ All notable changes to PaddleOcrNet are documented here. The format is based on
 
 ### Added
 
+- **Table recognition v2 (SLANeXt)** — `StructureOptions.TableModel = TableRecognitionModel.SlaNeXt` opts
+  into the PP-StructureV3 v2 table path: a `PP-LCNet_x1_0_table_cls` classifier picks wired (bordered) vs
+  wireless (borderless) and runs the matching `SLANeXt` structure model (512×512). SLANeXt shares SLANet's
+  output heads, so it reuses the validated recognizer via `SlaNeXtTableRouter` + `TableClassifier`. The
+  default stays `SlanetPlus` (single end-to-end model). Validated end-to-end against the hosted models.
 - **Detection tuning now functional** — `DetectionOptions.UseDilation` (2×2 bitmap dilation before
   contour extraction), `ScoreMode` (`Fast` box-crop vs `Slow` polygon-mask scoring), and `limit_type`
   min/max resize are now honored by `DbTextDetector` / `DBPostProcess` (previously declared but inert).

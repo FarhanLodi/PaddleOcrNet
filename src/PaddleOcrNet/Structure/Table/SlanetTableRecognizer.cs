@@ -37,9 +37,12 @@ namespace PaddleOcrNet.Structure.Table;
 internal sealed class SlanetTableRecognizer : ITableRecognizer
 {
     /// <summary>
-    /// The fixed square input edge SLANet/SLANeXt are exported with (PaddleOCR's <c>table_max_len</c>).
+    /// The fixed square input edge the structure model was exported with (PaddleOCR's <c>table_max_len</c>):
+    /// <b>488</b> for SLANet_plus, <b>512</b> for SLANeXt wired/wireless. Set via the constructor; the rest of
+    /// the pipeline (decode, box rescale, match, HTML) is identical across both models — verified by running
+    /// the live graphs (both emit the same <c>[.,.,8]</c> location + <c>[.,.,50]</c> structure heads).
     /// </summary>
-    private const int InputSize = 488;
+    private readonly int _inputSize;
 
     /// <summary>
     /// ImageNet per-channel mean (RGB order), the SLANet normalization the model was trained with.
@@ -140,10 +143,15 @@ internal sealed class SlanetTableRecognizer : ITableRecognizer
     /// recognizer embeds the canonical 48-token dictionary as a fallback (see <see cref="DefaultTableDict"/>),
     /// and replaces any supplied vocab whose class count does not match the model's structure head.
     /// </param>
-    public SlanetTableRecognizer(InferenceSession session, IReadOnlyList<string> structureVocab)
+    /// <param name="inputSize">
+    /// The square input edge the model expects: <b>488</b> for SLANet_plus (the default), <b>512</b> for
+    /// SLANeXt wired/wireless.
+    /// </param>
+    public SlanetTableRecognizer(InferenceSession session, IReadOnlyList<string> structureVocab, int inputSize = 488)
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
         ArgumentNullException.ThrowIfNull(structureVocab);
+        _inputSize = inputSize > 0 ? inputSize : 488;
 
         _inputName = _session.InputMetadata.Keys.First();
         (_locOutputName, _probOutputName) = ResolveOutputNames(_session);
@@ -225,7 +233,7 @@ internal sealed class SlanetTableRecognizer : ITableRecognizer
         // 1. Pre-process: aspect-preserving resize → ImageNet normalize → CHW → top-left pad to 488×488. The
         //    real graph takes a SINGLE input `x` (no shape_list side-input); we keep origW/origH/ratio host-side
         //    so the location head's [0,1] polygons can be mapped back into the crop's pixel coordinates.
-        var input = Preprocess(tableCrop, out int origW, out int origH, out float ratio);
+        var input = Preprocess(tableCrop, _inputSize, out int origW, out int origH, out float ratio);
 
         // 2. Run the unrolled decoder graph once — it returns BOTH the location polygons and the structure
         //    probs. We request the two heads BY NAME (resolved in the ctor) so output order can't bite us.
@@ -270,17 +278,17 @@ internal sealed class SlanetTableRecognizer : ITableRecognizer
     /// <param name="origW">The crop's original pixel width (for the shape_list / box rescale).</param>
     /// <param name="origH">The crop's original pixel height.</param>
     /// <param name="ratio">The applied resize ratio (long-edge scale).</param>
-    private static DenseTensor<float> Preprocess(Image<Rgb24> crop, out int origW, out int origH, out float ratio)
+    private static DenseTensor<float> Preprocess(Image<Rgb24> crop, int inputSize, out int origW, out int origH, out float ratio)
     {
         origW = crop.Width;
         origH = crop.Height;
 
         int longEdge = Math.Max(origH, origW);
-        ratio = longEdge > 0 ? InputSize / (float)longEdge : 1f;
+        ratio = longEdge > 0 ? inputSize / (float)longEdge : 1f;
 
         // PaddleOCR uses int(ratio * dim) for the resized extent, clamped to at least 1px.
-        int resizeW = Math.Max(1, Math.Min(InputSize, (int)(ratio * origW)));
-        int resizeH = Math.Max(1, Math.Min(InputSize, (int)(ratio * origH)));
+        int resizeW = Math.Max(1, Math.Min(inputSize, (int)(ratio * origW)));
+        int resizeH = Math.Max(1, Math.Min(inputSize, (int)(ratio * origH)));
 
         using var resized = crop.Clone(c => c.Resize(new ResizeOptions
         {
@@ -292,7 +300,7 @@ internal sealed class SlanetTableRecognizer : ITableRecognizer
         // Planar CHW [3·488·488], zero-initialized → the pad region (bottom/right) stays zero. We fill a
         // plain float[] here (the DenseTensor's Span is a ref struct and cannot be captured by the
         // ProcessPixelRows lambda), then wrap it as the tensor.
-        int plane = InputSize * InputSize;
+        int plane = inputSize * inputSize;
         var data = new float[3 * plane];
 
         resized.ProcessPixelRows(accessor =>
@@ -300,7 +308,7 @@ internal sealed class SlanetTableRecognizer : ITableRecognizer
             for (int y = 0; y < resizeH; y++)
             {
                 Span<Rgb24> row = accessor.GetRowSpan(y);
-                int rowBase = y * InputSize;
+                int rowBase = y * inputSize;
                 for (int x = 0; x < resizeW; x++)
                 {
                     Rgb24 px = row[x];
@@ -316,8 +324,8 @@ internal sealed class SlanetTableRecognizer : ITableRecognizer
             }
         });
 
-        // [1, 3, 488, 488].
-        return new DenseTensor<float>(data, new[] { 1, 3, InputSize, InputSize });
+        // [1, 3, inputSize, inputSize] (488 for SLANet_plus, 512 for SLANeXt).
+        return new DenseTensor<float>(data, new[] { 1, 3, inputSize, inputSize });
     }
 
     // ===============================================================================================
@@ -372,9 +380,9 @@ internal sealed class SlanetTableRecognizer : ITableRecognizer
         float[] probs = probTensor.ToArray();
         float[] loc = locTensor.ToArray();
 
-        // Every coordinate is scaled by (InputSize / ratio) == max(origH, origW). Guard against a zero ratio.
+        // Every coordinate is scaled by (inputSize / ratio) == max(origH, origW). Guard against a zero ratio.
         float safeRatio = ratio > 0 ? ratio : 1f;
-        float scale = InputSize / safeRatio;
+        float scale = _inputSize / safeRatio;
 
         var tokens = new List<string>(steps);
         var boxes = new List<float[]>();

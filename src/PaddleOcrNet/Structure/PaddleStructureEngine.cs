@@ -48,6 +48,7 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
     private readonly SemaphoreSlim _layoutLock = new(1, 1);
 
     private ITableRecognizer? _tableRecognizer;
+    private TableRecognitionModel _tableRecognizerModel;
     private readonly SemaphoreSlim _tableLock = new(1, 1);
 
     private IFormulaRecognizer? _formulaRecognizer;
@@ -188,7 +189,7 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
                 // Recognize the table's own text first (in crop coordinates) so the table recognizer can
                 // distribute it into the predicted cells.
                 var cropLines = await RecognizeCropTextAsync(crop, options, ct).ConfigureAwait(false);
-                var recognizer = await GetOrLoadTableRecognizerAsync(ct).ConfigureAwait(false);
+                var recognizer = await GetOrLoadTableRecognizerAsync(options.TableModel, ct).ConfigureAwait(false);
                 var table = recognizer.Recognize(crop, cropLines);
                 var pageLines = TranslateLines(cropLines, rect.X, rect.Y);
                 return new StructureBlock(
@@ -385,37 +386,78 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
     }
 
     /// <summary>
-    /// Loads (once) the SLANet_plus table-structure recognizer + its structure-token vocab.
+    /// Loads (once per <see cref="TableRecognitionModel"/>) the table-structure recognizer:
+    /// <see cref="TableRecognitionModel.SlanetPlus"/> builds a single SLANet_plus recognizer (488×488);
+    /// <see cref="TableRecognitionModel.SlaNeXt"/> builds a <see cref="SlaNeXtTableRouter"/> over the
+    /// wired/wireless classifier and the two SLANeXt structure recognizers (512×512). Rebuilt if the requested
+    /// model changes (mirrors the layout-detector cache).
     /// </summary>
-    public async Task<ITableRecognizer> GetOrLoadTableRecognizerAsync(CancellationToken ct)
+    public async Task<ITableRecognizer> GetOrLoadTableRecognizerAsync(TableRecognitionModel model, CancellationToken ct)
     {
-        if (_tableRecognizer is not null) return _tableRecognizer;
+        if (_tableRecognizer is not null && _tableRecognizerModel == model) return _tableRecognizer;
         await _tableLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            if (_tableRecognizer is not null) return _tableRecognizer;
+            if (_tableRecognizer is not null && _tableRecognizerModel == model) return _tableRecognizer;
+            _tableRecognizer?.Dispose();
+            _tableRecognizer = null;
 
-            // The structure-token dictionary is optional: SlanetTableRecognizer embeds the canonical 48-token
-            // fallback, so if the sidecar isn't hosted we hand it an empty list and it uses the built-in vocab.
-            IReadOnlyList<string> vocab = Array.Empty<string>();
-            try
-            {
-                var dictPath = await EnsureAssetAsync(PaddleModelRegistry.TableStructureDict, ct).ConfigureAwait(false);
-                vocab = LoadTokenList(dictPath);
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogInformation(ex, "Table-structure dictionary not hosted; using the embedded vocab.");
-            }
-            var session = await LoadSessionAsync(PaddleModelRegistry.SlanetPlus, ct).ConfigureAwait(false);
-
-            _tableRecognizer = new SlanetTableRecognizer(session, vocab);
-            _logger?.LogInformation("Table-structure recognizer loaded (SLANet_plus, {Tokens} tokens).", vocab.Count);
+            _tableRecognizer = model == TableRecognitionModel.SlaNeXt
+                ? await BuildSlaNeXtRouterAsync(ct).ConfigureAwait(false)
+                : await BuildSlanetPlusAsync(ct).ConfigureAwait(false);
+            _tableRecognizerModel = model;
             return _tableRecognizer;
         }
         finally
         {
             _tableLock.Release();
+        }
+    }
+
+    /// <summary>Builds the SLANet_plus recognizer (single end-to-end model, 488×488).</summary>
+    private async Task<ITableRecognizer> BuildSlanetPlusAsync(CancellationToken ct)
+    {
+        var vocab = await LoadTableVocabAsync(ct).ConfigureAwait(false);
+        var session = await LoadSessionAsync(PaddleModelRegistry.SlanetPlus, ct).ConfigureAwait(false);
+        _logger?.LogInformation("Table-structure recognizer loaded (SLANet_plus, {Tokens} tokens).", vocab.Count);
+        return new SlanetTableRecognizer(session, vocab);
+    }
+
+    /// <summary>
+    /// Builds the SLANeXt v2 router: the wired/wireless table classifier plus the two SLANeXt structure
+    /// recognizers (512×512). SLANeXt shares SLANet's heads, so each leg is an ordinary
+    /// <see cref="SlanetTableRecognizer"/> at the 512 input size.
+    /// </summary>
+    private async Task<ITableRecognizer> BuildSlaNeXtRouterAsync(CancellationToken ct)
+    {
+        var vocab = await LoadTableVocabAsync(ct).ConfigureAwait(false);
+        var clsSession = await LoadSessionAsync(PaddleModelRegistry.TableClassifier, ct).ConfigureAwait(false);
+        var wiredSession = await LoadSessionAsync(PaddleModelRegistry.SlaNeXtWired, ct).ConfigureAwait(false);
+        var wirelessSession = await LoadSessionAsync(PaddleModelRegistry.SlaNeXtWireless, ct).ConfigureAwait(false);
+
+        const int slanextInputSize = 512;
+        var classifier = new TableClassifier(clsSession);
+        var wired = new SlanetTableRecognizer(wiredSession, vocab, slanextInputSize);
+        var wireless = new SlanetTableRecognizer(wirelessSession, vocab, slanextInputSize);
+        _logger?.LogInformation("Table-structure recognizer loaded (SLANeXt v2: table_cls + wired + wireless).");
+        return new SlaNeXtTableRouter(classifier, wired, wireless);
+    }
+
+    /// <summary>
+    /// Loads the optional structure-token dictionary shared by SLANet/SLANeXt. The sidecar may not be hosted;
+    /// <see cref="SlanetTableRecognizer"/> embeds the canonical 48-token fallback, so an empty list is fine.
+    /// </summary>
+    private async Task<IReadOnlyList<string>> LoadTableVocabAsync(CancellationToken ct)
+    {
+        try
+        {
+            var dictPath = await EnsureAssetAsync(PaddleModelRegistry.TableStructureDict, ct).ConfigureAwait(false);
+            return LoadTokenList(dictPath);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogInformation(ex, "Table-structure dictionary not hosted; using the embedded vocab.");
+            return Array.Empty<string>();
         }
     }
 
