@@ -4,7 +4,7 @@ All notable changes to PaddleOcrNet are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.0] - 2026-06-21
 
 ### Added
 
@@ -71,13 +71,6 @@ All notable changes to PaddleOcrNet are documented here. The format is based on
   — fractions, sub/superscripts, roots, Greek letters, n-ary sum/integral/product, and common operators;
   unsupported constructs degrade gracefully to text (previously `$$…$$` text).
 
-## [1.0.0-alpha] - 2026-06-20
-
-First alpha of the core OCR engine. Functional end-to-end once the PP-OCRv5 ONNX models are published
-to the configured model host.
-
-### Added
-
 - **Text detection** — DB (Differentiable Binarization) detector (`DbTextDetector`) with full
   post-processing: probability-map thresholding, connected components, min-area rotated boxes, the
   Vatti **unclip** expansion (Clipper2), and box NMS.
@@ -128,11 +121,10 @@ to the configured model host.
   on the public `PaddleOcrNet/PaddleOcrNet-models` Hugging Face repo and are **SHA-256 verified** on
   download. Point `PADDLEOCRNET_MODEL_BASE_URL` (or `ModelDownloadOptions.BaseUrlOverride`) at a private
   mirror if needed.
-- **A few secondary structure models are not yet exported to ONNX, so they are not published.** The seal
-  detector, the SLANeXt / PicoDet layout variants, the RT-DETR table-cell detectors, and the table
-  classifier are referenced by the registry but have no published asset/checksum yet (they fail closed
-  until `tools/export_onnx.py` produces and uploads them). The features that depend only on the published
-  models — detection, recognition, orientation, dewarp, formula, `PP-DocLayoutV3` layout, and `SLANet_plus`
-  tables — run end-to-end today (see `VALIDATION.md`).
+- **The full structure model set is hosted and SHA-256 verified.** Layout (`PP-DocLayoutV3`, PicoDet S/M),
+  tables (`SLANet_plus` plus the SLANeXt v2 wired/wireless models + table classifier), formula (LaTeX-OCR),
+  and the PP-OCRv4 seal detector all download on first use and run end-to-end (see `VALIDATION.md`). The
+  RT-DETR table-cell detectors are hosted but not yet wired into the pipeline — SLANeXt already recovers cells
+  from its own location head, so this is an optional accuracy enhancement rather than a gap.
 
-[1.0.0-alpha]: https://github.com/FarhanLodi/PaddleOcrNet/releases/tag/v1.0.0-alpha
+[1.0.0]: https://github.com/FarhanLodi/PaddleOcrNet/releases/tag/v1.0.0
