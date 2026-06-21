@@ -135,4 +135,4 @@ to the configured model host.
   models — detection, recognition, orientation, dewarp, formula, `PP-DocLayoutV3` layout, and `SLANet_plus`
   tables — run end-to-end today (see `VALIDATION.md`).
 
-[1.0.0-alpha]: https://github.com/paddleocrnet/PaddleOcrNet/releases/tag/v1.0.0-alpha
+[1.0.0-alpha]: https://github.com/FarhanLodi/PaddleOcrNet/releases/tag/v1.0.0-alpha

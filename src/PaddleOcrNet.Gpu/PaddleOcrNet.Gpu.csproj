@@ -10,8 +10,8 @@
 		<Authors>PaddleOcrNet Contributors</Authors>
 		<Description>CUDA GPU execution provider for PaddleOcrNet. Adds Microsoft.ML.OnnxRuntime.Gpu so detection, classification and recognition run on NVIDIA GPUs.</Description>
 		<PackageTags>OCR;PaddleOCR;ONNX;GPU;CUDA;.NET10</PackageTags>
-		<RepositoryUrl>https://github.com/paddleocrnet/PaddleOcrNet</RepositoryUrl>
-		<PackageProjectUrl>https://github.com/paddleocrnet/PaddleOcrNet</PackageProjectUrl>
+		<RepositoryUrl>https://github.com/FarhanLodi/PaddleOcrNet</RepositoryUrl>
+		<PackageProjectUrl>https://github.com/FarhanLodi/PaddleOcrNet</PackageProjectUrl>
 		<PackageLicenseExpression>MIT</PackageLicenseExpression>
 		<NeutralLanguage>en-US</NeutralLanguage>
 		<GenerateDocumentationFile>true</GenerateDocumentationFile>

@@ -11,8 +11,8 @@
 		<Authors>PaddleOcrNet Contributors</Authors>
 		<Description>High-accuracy native .NET OCR powered by PaddleOCR's neural models (DB detection, text-line orientation, SVTR/CRNN recognition) running on ONNX Runtime. No Python required.</Description>
 		<PackageTags>OCR;PaddleOCR;ONNX;TextRecognition;DBNet;SVTR;.NET10;AOT</PackageTags>
-		<RepositoryUrl>https://github.com/paddleocrnet/PaddleOcrNet</RepositoryUrl>
-		<PackageProjectUrl>https://github.com/paddleocrnet/PaddleOcrNet</PackageProjectUrl>
+		<RepositoryUrl>https://github.com/FarhanLodi/PaddleOcrNet</RepositoryUrl>
+		<PackageProjectUrl>https://github.com/FarhanLodi/PaddleOcrNet</PackageProjectUrl>
 		<PackageLicenseExpression>MIT</PackageLicenseExpression>
 		<NeutralLanguage>en-US</NeutralLanguage>
 		<PublishRepositoryUrl>true</PublishRepositoryUrl>
