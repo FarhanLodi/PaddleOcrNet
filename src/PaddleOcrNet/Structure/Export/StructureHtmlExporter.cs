@@ -1,10 +1,10 @@
 using System.Globalization;
 using System.Text;
 using PaddleOcrNet.Models;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats.Png;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
+using EasyImageSharp;
+using EasyImageSharp.Formats.Png;
+using EasyImageSharp.PixelFormats;
+using EasyImageSharp.Processing;
 
 namespace PaddleOcrNet.Structure;
 

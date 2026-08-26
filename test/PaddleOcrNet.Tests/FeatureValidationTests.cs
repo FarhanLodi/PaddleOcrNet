@@ -6,9 +6,9 @@ using PaddleOcrNet.Services;
 using PaddleOcrNet.Structure.Layout;
 using PaddleOcrNet.Structure.Formula;
 using PaddleOcrNet.Structure.Table;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
+using EasyImageSharp;
+using EasyImageSharp.PixelFormats;
+using EasyImageSharp.Processing;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -250,7 +250,7 @@ public class FeatureValidationTests
         var box = new Rectangle(
             (int)(page.Width * 0.60), (int)(page.Height * 0.145),
             (int)(page.Width * 0.30), (int)(page.Height * 0.14));
-        box.Intersect(new Rectangle(0, 0, page.Width, page.Height));
+        box = Rectangle.Intersect(box, new Rectangle(0, 0, page.Width, page.Height));
         using var crop = page.Clone(c => c.Crop(box));
 
         // Representative OCR lines positioned over the crop's label/value columns.

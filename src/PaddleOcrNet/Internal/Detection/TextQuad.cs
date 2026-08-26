@@ -1,5 +1,5 @@
 using PaddleOcrNet.Models;
-using SixLabors.ImageSharp;
+using EasyImageSharp;
 
 namespace PaddleOcrNet.Internal.Detection;
 

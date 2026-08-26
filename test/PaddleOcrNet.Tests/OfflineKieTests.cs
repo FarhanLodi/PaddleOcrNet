@@ -1,8 +1,8 @@
 using PaddleOcrNet.Intelligence.Offline;
 using PaddleOcrNet.Models;
 using PaddleOcrNet.Services;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
+using EasyImageSharp;
+using EasyImageSharp.PixelFormats;
 using Xunit;
 
 namespace PaddleOcrNet.Tests;

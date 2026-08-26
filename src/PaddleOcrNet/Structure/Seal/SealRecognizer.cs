@@ -4,9 +4,9 @@ using PaddleOcrNet.Internal.Detection;
 using PaddleOcrNet.Internal.Geometry;
 using PaddleOcrNet.Internal.Recognition;
 using PaddleOcrNet.Models;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
+using EasyImageSharp;
+using EasyImageSharp.PixelFormats;
+using EasyImageSharp.Processing;
 
 namespace PaddleOcrNet.Structure.Seal;
 

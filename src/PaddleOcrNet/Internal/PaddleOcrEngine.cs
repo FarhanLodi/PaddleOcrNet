@@ -7,9 +7,9 @@ using PaddleOcrNet.Models;
 using PaddleOcrNet.Services;
 using Microsoft.Extensions.Logging;
 using Microsoft.ML.OnnxRuntime;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
+using EasyImageSharp;
+using EasyImageSharp.PixelFormats;
+using EasyImageSharp.Processing;
 
 namespace PaddleOcrNet.Internal;
 

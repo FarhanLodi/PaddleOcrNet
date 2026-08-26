@@ -1,8 +1,8 @@
 using System.Text.RegularExpressions;
 using PaddleOcrNet.Models;
 using PaddleOcrNet.Services;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
+using EasyImageSharp;
+using EasyImageSharp.PixelFormats;
 
 namespace PaddleOcrNet.Intelligence.Offline;
 

@@ -7,7 +7,7 @@
 		<LangVersion>latest</LangVersion>
 		<IsAotCompatible>true</IsAotCompatible>
 		<PackageId>PaddleOcrNet</PackageId>
-		<Version>1.0.0</Version>
+		<Version>2.0.0</Version>
 		<Authors>PaddleOcrNet Contributors</Authors>
 		<Description>High-accuracy native .NET OCR powered by PaddleOCR's neural models (DB detection, text-line orientation, SVTR/CRNN recognition) running on ONNX Runtime. No Python required.</Description>
 		<PackageTags>OCR;PaddleOCR;ONNX;TextRecognition;DBNet;SVTR;.NET10;AOT</PackageTags>
@@ -38,7 +38,7 @@
 		<PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="10.0.9" />
 		<PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.9" />
 		<PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.27.0" />
-		<PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
+		<PackageReference Include="EasyImageSharp" Version="1.0.1" />
 		<!-- PDFium-based PDF rasterization for the built-in PDF input / searchable-PDF output. -->
 		<PackageReference Include="Docnet.Core" Version="2.6.0" />
 		<!-- Polygon offsetting (unclip) for DB detection post-processing. Namespace: Clipper2Lib. -->

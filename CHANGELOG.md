@@ -4,6 +4,32 @@ All notable changes to PaddleOcrNet are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-08-26
+
+### Changed
+
+- **BREAKING — imaging backend moved from SixLabors.ImageSharp to EasyImageSharp.** All image
+  decode/encode, resizing, cropping, rotation and pixel access now run on
+  [EasyImageSharp](https://www.nuget.org/packages/EasyImageSharp) (MIT, fully managed, zero package
+  dependencies). This removes the Six Labors Split License, so commercial use above their revenue
+  threshold no longer requires a paid licence.
+
+  Every public member that took or returned `SixLabors.ImageSharp.Image<Rgb24>` now uses
+  `EasyImageSharp.Image<Rgb24>` — 29 signatures across `IPaddleOcrService` (6 overloads),
+  `IDocumentIntelligence`, `OcrVisualizationExtensions.DrawAnnotations`, `StructureResult.ToDocx` /
+  `WriteDocx` / `SaveAsDocx` / `ToHtml` / `SaveAsHtml`, and the PDF extensions.
+
+  **Migration:** replace the package reference and change `using SixLabors.ImageSharp;` →
+  `using EasyImageSharp;` (likewise `.PixelFormats`, `.Processing`, `.Formats.Png`, `.Formats.Jpeg`).
+  The namespaces and type names map one-to-one, so this is normally a find-and-replace. The one API
+  difference: `Rectangle` is a `readonly struct`, so the mutating `rect.Intersect(other)` becomes
+  `rect = Rectangle.Intersect(rect, other)`.
+
+  **Accuracy is unaffected.** Detection, recognition, classification, layout, formula and table output
+  were diffed against the 1.0.0 build and are byte-identical, with one exception: a text-line
+  orientation confidence of 0.9850 vs 0.9849 (1e-4 of resampler rounding; same decision). Throughput
+  is equivalent.
+
 ## [1.0.0] - 2026-06-21
 
 ### Added

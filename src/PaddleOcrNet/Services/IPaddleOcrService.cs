@@ -1,7 +1,7 @@
 using PaddleOcrNet.Models;
 using PaddleOcrNet.Structure;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
+using EasyImageSharp;
+using EasyImageSharp.PixelFormats;
 
 namespace PaddleOcrNet.Services;
 

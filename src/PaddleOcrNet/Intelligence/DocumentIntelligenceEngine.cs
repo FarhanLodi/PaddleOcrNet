@@ -3,10 +3,10 @@ using System.Text.Json;
 using PaddleOcrNet.Models;
 using PaddleOcrNet.Services;
 using PaddleOcrNet.Structure;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats.Png;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
+using EasyImageSharp;
+using EasyImageSharp.Formats.Png;
+using EasyImageSharp.PixelFormats;
+using EasyImageSharp.Processing;
 
 namespace PaddleOcrNet.Intelligence;
 

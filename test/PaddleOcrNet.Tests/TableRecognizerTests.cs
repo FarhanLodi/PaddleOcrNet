@@ -2,8 +2,8 @@ using System.Text.RegularExpressions;
 using Microsoft.ML.OnnxRuntime;
 using PaddleOcrNet.Models;
 using PaddleOcrNet.Structure.Table;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
+using EasyImageSharp;
+using EasyImageSharp.PixelFormats;
 using Xunit;
 using Xunit.Abstractions;
 

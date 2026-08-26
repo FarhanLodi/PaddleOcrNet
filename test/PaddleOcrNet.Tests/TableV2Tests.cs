@@ -2,8 +2,8 @@ using System.Collections.Generic;
 using PaddleOcrNet.Models;
 using PaddleOcrNet.Structure;
 using PaddleOcrNet.Structure.Table;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
+using EasyImageSharp;
+using EasyImageSharp.PixelFormats;
 using Xunit;
 
 namespace PaddleOcrNet.Tests;

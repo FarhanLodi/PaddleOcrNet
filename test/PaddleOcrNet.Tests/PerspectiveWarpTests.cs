@@ -1,7 +1,7 @@
 using PaddleOcrNet.Internal.Geometry;
 using PaddleOcrNet.Models;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
+using EasyImageSharp;
+using EasyImageSharp.PixelFormats;
 using Xunit;
 
 namespace PaddleOcrNet.Tests;

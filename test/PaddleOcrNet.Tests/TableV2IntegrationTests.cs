@@ -7,8 +7,8 @@ using PaddleOcrNet.Internal;
 using PaddleOcrNet.Models;
 using PaddleOcrNet.Services;
 using PaddleOcrNet.Structure.Table;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
+using EasyImageSharp;
+using EasyImageSharp.PixelFormats;
 using Xunit;
 
 namespace PaddleOcrNet.Tests;

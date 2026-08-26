@@ -1,9 +1,9 @@
 using System.Globalization;
 using System.Text;
 using PaddleOcrNet.Models;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats.Jpeg;
-using SixLabors.ImageSharp.PixelFormats;
+using EasyImageSharp;
+using EasyImageSharp.Formats.Jpeg;
+using EasyImageSharp.PixelFormats;
 
 namespace PaddleOcrNet.Pdf.Internal;
 

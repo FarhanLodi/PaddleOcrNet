@@ -19,7 +19,7 @@ public sealed class PaddleOcrServiceOptions
     /// image header <b>before</b> the pixels are decoded into memory when loading from a file, stream, or
     /// byte buffer. Guards against decompression-bomb / pixel-flood denial of service when OCR-ing
     /// untrusted input. Default 100,000,000 (100 MP). Set to 0 to disable. Already-decoded
-    /// <see cref="SixLabors.ImageSharp.Image{TPixel}"/> inputs (the caller's own allocation) are not checked.
+    /// <see cref="EasyImageSharp.Image{TPixel}"/> inputs (the caller's own allocation) are not checked.
     /// </summary>
     public long MaxImagePixels { get; set; } = 100_000_000;
 

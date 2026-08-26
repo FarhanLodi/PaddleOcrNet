@@ -86,7 +86,7 @@ public class OcrLanguageTests
         public Task<OcrResult> ExtractTextFromImage(Stream imageStream, IReadOnlyList<OcrLanguage> languages, RecognitionOptions? options = null, CancellationToken cancellationToken = default) => Record(languages);
         public Task<OcrResult> ExtractTextFromImage(byte[] imageBytes, IReadOnlyList<OcrLanguage> languages, RecognitionOptions? options = null, CancellationToken cancellationToken = default) => Record(languages);
         public Task<OcrResult> ExtractTextFromImage(ReadOnlyMemory<byte> imageBytes, IReadOnlyList<OcrLanguage> languages, RecognitionOptions? options = null, CancellationToken cancellationToken = default) => Record(languages);
-        public Task<OcrResult> ExtractTextFromImage(SixLabors.ImageSharp.Image<SixLabors.ImageSharp.PixelFormats.Rgb24> image, IReadOnlyList<OcrLanguage> languages, RecognitionOptions? options = null, CancellationToken cancellationToken = default) => Record(languages);
+        public Task<OcrResult> ExtractTextFromImage(EasyImageSharp.Image<EasyImageSharp.PixelFormats.Rgb24> image, IReadOnlyList<OcrLanguage> languages, RecognitionOptions? options = null, CancellationToken cancellationToken = default) => Record(languages);
         public void Dispose() { }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

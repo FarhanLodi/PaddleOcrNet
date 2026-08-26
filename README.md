@@ -159,7 +159,7 @@ constructs degrade gracefully to text.
 using PaddleOcrNet.Structure.Export;
 
 StructureResult doc = await ocr.AnalyzeDocumentAsync("report.png");
-using var page = SixLabors.ImageSharp.Image.Load<SixLabors.ImageSharp.PixelFormats.Rgb24>("report.png");
+using var page = EasyImageSharp.Image.Load<EasyImageSharp.PixelFormats.Rgb24>("report.png");
 
 byte[] docx = doc.ToDocx(page);          // figures/charts/seals as inline images; formulas as OMML equations
 string html = doc.ToHtml(page, "Report"); // figures/charts/seals as inline <img data:image/png;base64,…>
@@ -382,3 +382,8 @@ For work inquiries, collaboration, feature requests, or any questions, reach out
 
 MIT © PaddleOcrNet contributors. Downloaded models are Apache-2.0 / MIT and attributed to their authors
 (see [NOTICE](NOTICE)).
+
+Every runtime dependency is permissively licensed, with no revenue threshold, commercial tier or licence
+key anywhere in the stack: imaging runs on [EasyImageSharp](https://github.com/FarhanLodi/EasyImageSharp)
+(MIT), inference on ONNX Runtime (MIT), PDF rasterization on Docnet.Core (MIT) and polygon offsetting on
+Clipper2 (BSL-1.0).

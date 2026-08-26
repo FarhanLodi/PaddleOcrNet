@@ -1,6 +1,6 @@
 using PaddleOcrNet.Models;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
+using EasyImageSharp;
+using EasyImageSharp.PixelFormats;
 
 namespace PaddleOcrNet.Internal.Recognition;
 
