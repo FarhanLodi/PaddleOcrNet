@@ -372,6 +372,8 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
             }
             var session = await LoadSessionAsync(modelAsset, ct).ConfigureAwait(false);
 
+            // RT-DETR graphs take a third "im_shape" input the PicoDet exports do not, so they must go to
+            // RtDetrLayoutDetector or the graph faults on a missing input.
             _layoutDetector = model == LayoutModel.RtDetrL
                 ? new RtDetrLayoutDetector(session, classMap)
                 : new PicoDetLayoutDetector(session, classMap);

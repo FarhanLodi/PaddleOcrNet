@@ -4,6 +4,37 @@ All notable changes to PaddleOcrNet are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.1] - 2026-08-27
+
+### Fixed
+
+- **Corrected `LayoutModel` documentation.** `LayoutModel.RtDetrL` was documented as
+  "PP-DocLayout_plus-L — the RT-DETR-based layout detector (highest accuracy, heaviest)", but the engine
+  has always resolved it to **PP-DocLayoutV3**. The XML doc now says so, and records why plus-L is not
+  exposed: at 20 classes it is strictly dominated by PP-DocLayoutV3's 25 — V3 splits `formula` into
+  `display_formula` / `inline_formula` and adds `header_image`, `footer_image`, `vertical_text` and
+  `vision_footnote` — so selecting it could only ever be a downgrade.
+- **Corrected `PicoDetLayoutDetector` documentation**, which claimed no PicoDet layout ONNX was published
+  and that the detector was therefore unused. Both PP-DocLayout-S and -M are now hosted, so
+  `LayoutModel.PicoDetS` / `PicoDetM` work.
+
+### Model hosting (no package upgrade required)
+
+These are asset-side changes to the public model repo. The SHA-256 pins for all three were already
+correct in 2.0.0, so **2.0.0 consumers pick them up automatically** — no upgrade needed:
+
+- **`PP-OCRv4_server_seal_det.onnx` is now published.** `StructureOptions.RecognizeSeals` defaults to
+  `true` and the seal branch is unguarded, so a document whose layout contained a seal region previously
+  threw on the missing model. Verified byte-identical to the pinned checksum.
+- **`PP-DocLayout-S` / `PP-DocLayout-M` (+ label sidecars) are now published**, so
+  `LayoutModel.PicoDetS` / `PicoDetM` resolve instead of failing with a 404.
+
+### Notes
+
+- `PP-DocLayout_plus-L` and the RT-DETR table-cell detectors remain unpublished and unreferenced by any
+  code path; their registry checksums were refreshed against the current export toolchain but nothing
+  resolves them.
+
 ## [2.0.0] - 2026-08-26
 
 ### Changed

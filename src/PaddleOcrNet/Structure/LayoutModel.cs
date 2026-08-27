@@ -20,7 +20,11 @@ public enum LayoutModel
     PicoDetM,
 
     /// <summary>
-    /// PP-DocLayout_plus-L — the RT-DETR-based layout detector (highest accuracy, heaviest).
+    /// The RT-DETR-based layout detector, served by <c>PP-DocLayoutV3</c> — the RT-DETR layout network
+    /// actually published as ONNX. This is the default and the validated path (25 classes, 800×800).
+    /// PP-DocLayout_plus-L is deliberately not exposed: at 20 classes it is strictly dominated by
+    /// PP-DocLayoutV3's 25 (which additionally splits formula into display/inline and adds header_image,
+    /// footer_image, vertical_text and vision_footnote), so it would only ever be a downgrade.
     /// </summary>
     RtDetrL,
 }

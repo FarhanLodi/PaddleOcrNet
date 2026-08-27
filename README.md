@@ -238,6 +238,8 @@ share across threads. Call `WarmUp(...)` to pre-load models off the request path
 | **Offline / air-gapped** | Pre-seed the cache (or a mirror) and run fully offline; downloads are SHA-256 verified. |
 | **Throughput** | `BatchSize`, `MaxDegreeOfParallelism`, and reading-order / paragraph grouping via `RecognitionOptions`. |
 | **Input limits** | Built-in max-pixel / PDF page guards against decompression bombs. |
+| **Layout model** | `StructureOptions.LayoutModel` — `RtDetrL` (default, PP-DocLayoutV3, 25 classes, most accurate) or `PicoDetS` / `PicoDetM` (PP-DocLayout-S/M, far smaller and faster, fewer regions). |
+| **Seals** | `StructureOptions.RecognizeSeals` (on by default) runs the PP-OCRv4 seal detector over detected seal regions. |
 
 ### Output formats
 

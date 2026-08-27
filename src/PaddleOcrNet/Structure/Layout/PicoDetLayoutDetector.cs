@@ -22,9 +22,11 @@ namespace PaddleOcrNet.Structure.Layout;
 /// pre-processes, runs the session, score-thresholds the rows, maps the class id, and scales the boxes back
 /// to source-image pixels.
 /// <para>
-/// Note: the re-hosted layout model shipped with this package is the RT-DETR PP-DocLayoutV3 driven by
-/// <see cref="RtDetrLayoutDetector"/>; no PicoDet layout ONNX is present, so this detector is currently
-/// unused. It is retained for the PicoDet PP-DocLayout-S/M exports and shares the same output parser.
+/// Note: the default layout model is the RT-DETR PP-DocLayoutV3 driven by <see cref="RtDetrLayoutDetector"/>.
+/// This detector drives the PicoDet PP-DocLayout-S/M exports, selected via <c>LayoutModel.PicoDetS</c> /
+/// <c>LayoutModel.PicoDetM</c>, and shares the same output parser. Unlike the RT-DETR graphs, the PicoDet
+/// exports take two inputs (<c>image</c>, <c>scale_factor</c>) with a fixed 480x480 input and no
+/// <c>im_shape</c>.
 /// </para>
 /// </para>
 /// <para>
