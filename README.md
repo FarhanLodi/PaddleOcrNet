@@ -388,6 +388,23 @@ heuristic, layout-based **offline KIE** extractor as the non-LLM alternative. Un
 
 ---
 
+## Contributing
+
+**Contributions are welcome!** Accuracy improvements, performance tuning, bug fixes, additional
+language/model coverage, documentation, and tests are all appreciated.
+
+- **Found a bug?** Open an [issue](https://github.com/FarhanLodi/PaddleOcrNet/issues) with a minimal
+  repro (image/PDF + the code and options you used).
+- **Have an idea or feature request?** Open an issue to discuss it first, then send a PR.
+- **Sending a PR?** Read [CONTRIBUTING.md](CONTRIBUTING.md) — it covers the build, the two test
+  suites (CI only gates the unit ones, so accuracy regressions need a local integration run), the
+  pinned model checksums, and the hand-synced structure engine.
+
+Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md). For security problems, please
+follow [SECURITY.md](SECURITY.md) rather than opening a public issue.
+
+---
+
 ## Support
 
 If PaddleOcrNet saves you time, consider supporting development:
