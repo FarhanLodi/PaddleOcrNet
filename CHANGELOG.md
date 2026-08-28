@@ -4,6 +4,77 @@ All notable changes to PaddleOcrNet are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.2] - 2026-08-28
+
+### Fixed
+
+- **Every language pack decoded one character class off** ([#1](https://github.com/FarhanLodi/PaddleOcrNet/issues/1)).
+  The per-script PP-OCRv5 dictionaries (`cyrillic_dict.txt`, `latin_dict.txt`, `arabic_dict.txt`,
+  `devanagari_dict.txt`, `korean_dict.txt`, `japan_dict.txt`, `th_dict.txt`, `ppocrv5_el_dict.txt`,
+  `te_dict.txt`, `ta_dict.txt`, `ppocrv5_eslav_dict.txt`) begin with an **empty first line** — that line is
+  the CTC blank slot itself, and the class the file leaves off is the trailing space. `CharacterDictionary`
+  saw only that the file was one class short of the network and prepended a *second* blank, shifting every
+  class by one: `ИСТОРИЯ РОССИЙСКОГО ГОСУДАРСТВА` came out as `ЗРСНПЗЮꚟПНРРЗИРЙНВНꚟВНРТГЏПРСБЏ`.
+  `BuildVocab` now checks whether the first line is empty and builds `["blank"] + lines[1..] + [" "]` in that
+  case, which restores the exact class alignment the models were trained with. The dictionary *files* were
+  correct all along and are unchanged — the bug was purely in how they were interpreted, so no re-download is
+  needed. Affected: Russian and every other Cyrillic language, Latin-script languages routed to the `latin`
+  pack (fr, de, es, it, pt, …), Arabic, Devanagari, Korean, Japanese (`ja_full`), Thai, Greek, Telugu, Tamil
+  and East Slavic. The default Chinese/English/Japanese recognizers on `ppocrv5_dict.txt` were never affected —
+  that file ships as the complete class list and took a different branch.
+- **Non-ASCII text is no longer escaped in JSON output** ([#2](https://github.com/FarhanLodi/PaddleOcrNet/issues/2)).
+  `StructureResult.ToJson()` and `OcrResult.ToJson()` inherited the System.Text.Json default encoder, which
+  escapes everything outside Basic Latin — so Cyrillic, Greek, Arabic, Hebrew, CJK, Devanagari … reached the
+  caller as `\uXXXX` sequences: valid JSON, but unreadable in Notepad and friends. Both exporters now
+  serialize through `PaddleOcrJson.Encoder` (`JavaScriptEncoder.Create(UnicodeRanges.All)`) and emit those
+  scripts verbatim. HTML-sensitive characters (`< > & ' +`) are still escaped — deliberately not
+  `UnsafeRelaxedJsonEscaping`, since blocks carry `TableHtml` that may be embedded in a page. The decoded
+  text is unchanged either way; only readability differs.
+
+### Added
+
+- **`ToJson(JsonSerializerOptions)` overloads** on `StructureResult` and `OcrResult`, for callers who want a
+  different encoder, indentation, or naming policy. The options are copied onto the source-generated context,
+  so the overload stays trim / Native-AOT safe and leaves the caller's options instance mutable and reusable.
+  Passing `Encoder = JavaScriptEncoder.Default` restores the pre-2.0.2 escaping.
+- **`PaddleOcrNet.Models.PaddleOcrJson.Encoder`**, the exporters' default `JavaScriptEncoder`, exposed so
+  callers can reuse it in their own `JsonSerializerOptions`.
+- **`StructureOptions.LayoutScoreThreshold`** — the layout-detection confidence floor is now configurable
+  ([#3](https://github.com/FarhanLodi/PaddleOcrNet/issues/3)). It was a `private const float
+  ScoreThreshold = 0.5f` inside `RtDetrLayoutDetector` and `PicoDetLayoutDetector`, so callers could not
+  keep the regions the detector was unsure about (or discard the marginal ones). Default is unchanged at
+  `0.5` — the confidence floor both PP-DocLayoutV3 and PP-DocLayout-S/M ship in their own model
+  configs — and the comparison stays exclusive (`score > threshold`). The
+  threshold is passed per `Detect` call rather than held on the detector, because the engine caches one
+  detector instance per `LayoutModel` and reuses it across calls with different `StructureOptions`.
+  `StructureOptions.DefaultLayoutScoreThreshold` exposes the default as a constant.
+- **Layout regions are now cleaned up before recognition.** The detectors emit a fixed top-k of candidates
+  with no NMS, so the same area of the page is routinely proposed several times under different labels, and
+  every one of those candidates used to reach the caller. A new post-processing stage collapses them:
+  regions overlapping by more than 70% of the smaller box merge into the larger, sub-6px slivers and
+  `reference` markers (whose text is carried by the neighbouring `reference_content` block) are dropped, an
+  `inline_formula` overlapping its paragraph by more than 50% is absorbed, and `image` regions covering
+  essentially the whole page — the "this entire scan is one photograph" false positive — are discarded.
+  Controlled by `StructureOptions.FilterOverlappingRegions`, on by default. At the default score threshold
+  this changes nothing measurable (duplicates rarely score that high — on the test corpus the region
+  counts are identical); at a lowered threshold it is the difference between 31 regions and 25, or 21 and 14.
+- **`StructureOptions.LayoutNms`, `LayoutUnclipRatio` and `LayoutMergeMode`** — three optional layout
+  passes, all off by default. `LayoutNms` suppresses a lower-scoring region overlapping a kept one by more
+  than 0.6 IoU within a class (0.98 across classes). `LayoutUnclipRatio` grows every region about its centre
+  by a ratio, for detectors whose boxes clip ascenders out of the crops handed to the recognizers.
+  `LayoutMergeMode` resolves nested regions — `Large` keeps the enclosing block, `Small` the inner ones,
+  `None`/`Union` keep both; formulas are never absorbed by the text around them.
+- **Reading order now comes from the layout model when it predicts one.** PP-DocLayoutV3 is trained to emit a
+  reading-order index alongside each box (the trailing column of its detection rows); that index was being
+  discarded and order re-derived geometrically. It is now surfaced as `LayoutRegion.OrderIndex` and used to
+  sequence the blocks, falling back to the XY-cut orderer for the PicoDet and PP-DocLayout_plus-L exports,
+  which emit no such column. `StructureOptions.ReadingOrder` selects: `Auto` (default, model-then-XY-cut),
+  `Model`, or `XyCut` to keep the previous behaviour on every model.
+- **`LayoutRegion.RawLabel`** — the model's own label name for the region (`reference_content`,
+  `inline_formula`, `vision_footnote`, …), alongside the existing `RawClassId`. `StructureBlockType`
+  deliberately collapses several of these onto one value, so the raw name is what the clean-up filters key
+  off, and it is useful diagnostically when a region maps to an unexpected type.
+
 ## [2.0.1] - 2026-08-27
 
 ### Fixed

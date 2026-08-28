@@ -7,7 +7,7 @@
 		<LangVersion>latest</LangVersion>
 		<IsAotCompatible>true</IsAotCompatible>
 		<PackageId>PaddleOcrNet</PackageId>
-		<Version>2.0.1</Version>
+		<Version>2.0.2</Version>
 		<Authors>PaddleOcrNet Contributors</Authors>
 		<Description>High-accuracy native .NET OCR powered by PaddleOCR's neural models (DB detection, text-line orientation, SVTR/CRNN recognition) running on ONNX Runtime. No Python required.</Description>
 		<PackageTags>OCR;PaddleOCR;ONNX;TextRecognition;DBNet;SVTR;.NET10;AOT</PackageTags>

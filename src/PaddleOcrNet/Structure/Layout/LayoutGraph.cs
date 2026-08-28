@@ -10,12 +10,12 @@ namespace PaddleOcrNet.Structure.Layout;
 /// already-decoded detections whose leading columns are <c>[class_id, score, x1, y1, x2, y2]</c>, plus an
 /// <c>int32</c> <c>boxes_num</c> tensor giving the per-image row count (batch = 1). The PicoDet / RT-DETR-plus
 /// exports use a 6-wide row; the re-hosted PP-DocLayoutV3 RT-DETR export emits a <b>7-wide</b> row
-/// (<c>[class_id, score, x1, y1, x2, y2, extra]</c>, the trailing column being an in-graph rank/index that is
-/// ignored), confirmed by loading the ONNX and printing the output. The detection row width is therefore
-/// detected per-run rather than fixed. This class centralizes (a) resolving the image input name + fixed
-/// spatial size and the optional auxiliary inputs from the session metadata, (b) reading those fused
-/// detections out of the run results, and (c) thresholding + class-mapping + box-scaling them into
-/// <see cref="LayoutRegion"/>s.
+/// (<c>[class_id, score, x1, y1, x2, y2, order_index]</c>, the trailing column being the model's predicted
+/// reading-order index, which this parser ignores), confirmed by loading the ONNX and printing the output.
+/// The detection row width is therefore detected per-run rather than fixed. This class centralizes
+/// (a) resolving the image input name + fixed spatial size and the optional auxiliary inputs from the
+/// session metadata, (b) reading those fused detections out of the run results, and (c) thresholding +
+/// class-mapping + box-scaling them into <see cref="LayoutRegion"/>s.
 /// </summary>
 internal static class LayoutGraph
 {
@@ -160,7 +160,9 @@ internal static class LayoutGraph
     /// (<paramref name="scaleX"/>, <paramref name="scaleY"/>) into source-image space (1,1 when the graph
     /// already emitted source pixels) and clamped to <paramref name="origW"/>×<paramref name="origH"/>; and
     /// its raw class id is mapped via <paramref name="classMap"/> (unmapped ids resolve to
-    /// <see cref="StructureBlockType.Unknown"/>). Zero-area boxes are dropped.
+    /// <see cref="StructureBlockType.Unknown"/>) and, when <paramref name="labelNames"/> is supplied, its raw
+    /// label name is carried through on the region. Rows wider than six columns also carry the model's
+    /// predicted reading-order index (column 6). Zero-area boxes are dropped.
     /// </summary>
     public static IReadOnlyList<LayoutRegion> BuildRegions(
         Detections detections,
@@ -169,7 +171,8 @@ internal static class LayoutGraph
         float scaleX,
         float scaleY,
         int origW,
-        int origH)
+        int origH,
+        IReadOnlyDictionary<int, string>? labelNames = null)
     {
         var data = detections.Data;
         int rowWidth = detections.RowWidth;
@@ -202,7 +205,15 @@ internal static class LayoutGraph
             }
 
             var type = classMap.TryGetValue(rawClassId, out var mapped) ? mapped : StructureBlockType.Unknown;
-            regions.Add(new LayoutRegion(type, new OcrBoundingBox(minX, minY, maxX, maxY), score, rawClassId));
+            string? rawLabel = labelNames is not null && labelNames.TryGetValue(rawClassId, out var name)
+                ? name
+                : null;
+
+            // The 7-wide PP-DocLayoutV3 rows carry the model's own reading-order index in the trailing column.
+            int? orderIndex = rowWidth > 6 ? (int)MathF.Round(data[baseIdx + 6]) : null;
+
+            regions.Add(new LayoutRegion(
+                type, new OcrBoundingBox(minX, minY, maxX, maxY), score, rawClassId, rawLabel, orderIndex));
         }
 
         return regions;

@@ -16,16 +16,35 @@ public static class OcrExportExtensions
     private static readonly string Producer =
         "PaddleOcrNet " + (typeof(OcrExportExtensions).Assembly.GetName().Version?.ToString(3) ?? "");
 
-    private static readonly PaddleOcrJsonContext IndentedJson = new(new JsonSerializerOptions { WriteIndented = true });
+    private static readonly PaddleOcrJsonContext CompactJson = new(PaddleOcrJson.Options(indented: false));
+    private static readonly PaddleOcrJsonContext IndentedJson = new(PaddleOcrJson.Options(indented: true));
 
     /// <summary>
-    /// Serializes the result to JSON using the source-generated (AOT-safe) context.
+    /// Serializes the result to JSON using the source-generated (AOT-safe) context. Non-ASCII text
+    /// (Cyrillic, CJK, Arabic, …) is written verbatim rather than as <c>\uXXXX</c> escapes — see
+    /// <see cref="PaddleOcrJson.Encoder"/>.
     /// </summary>
     public static string ToJson(this OcrResult result, bool indented = false)
     {
         ArgumentNullException.ThrowIfNull(result);
-        return JsonSerializer.Serialize(result,
-            indented ? IndentedJson.OcrResult : PaddleOcrJsonContext.Default.OcrResult);
+        return JsonSerializer.Serialize(result, (indented ? IndentedJson : CompactJson).OcrResult);
+    }
+
+    /// <summary>
+    /// Serializes the result to JSON with caller-supplied <paramref name="options"/> (naming policy,
+    /// indentation, <see cref="System.Text.Json.JsonSerializerOptions.Encoder"/>, …). Serialization stays
+    /// reflection-free: the options are copied onto a <see cref="PaddleOcrJsonContext"/>, so the
+    /// source-generated metadata is still what resolves the types.
+    /// </summary>
+    /// <remarks>
+    /// A context is built per call. When serializing in a loop, cache one instead:
+    /// <c>var ctx = new PaddleOcrJsonContext(options); JsonSerializer.Serialize(result, ctx.OcrResult);</c>.
+    /// </remarks>
+    public static string ToJson(this OcrResult result, JsonSerializerOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        ArgumentNullException.ThrowIfNull(options);
+        return JsonSerializer.Serialize(result, new PaddleOcrJsonContext(PaddleOcrJson.ForContext(options)).OcrResult);
     }
 
     /// <summary>

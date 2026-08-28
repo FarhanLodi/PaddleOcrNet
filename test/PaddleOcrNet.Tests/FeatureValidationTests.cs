@@ -3,6 +3,7 @@ using Microsoft.ML.OnnxRuntime;
 using PaddleOcrNet.Internal.Classification;
 using PaddleOcrNet.Models;
 using PaddleOcrNet.Services;
+using PaddleOcrNet.Structure;
 using PaddleOcrNet.Structure.Layout;
 using PaddleOcrNet.Structure.Formula;
 using PaddleOcrNet.Structure.Table;
@@ -189,7 +190,7 @@ public class FeatureValidationTests
             var ap = Asset(name);
             if (!File.Exists(ap)) { report.AppendLine($"- `{name}`: MISSING asset"); continue; }
             using var image = Image.Load<Rgb24>(ap);
-            var regions = detector.Detect(image);
+            var regions = detector.Detect(image, StructureOptions.Default.LayoutScoreThreshold);
             totalRegions += regions.Count;
             report.AppendLine($"`{name}` ({image.Width}x{image.Height}) — {regions.Count} regions:");
             foreach (var reg in regions.OrderByDescending(r => r.Score).Take(40))

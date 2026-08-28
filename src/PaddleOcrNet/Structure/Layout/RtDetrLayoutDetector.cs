@@ -15,8 +15,9 @@ namespace PaddleOcrNet.Structure.Layout;
 /// session.
 /// <para>
 /// The decode is fused into the graph: the output (<c>fetch_name_0</c>) is already-decoded detections shaped
-/// <c>[300, 7]</c> as <c>[class_id, score, x1, y1, x2, y2, extra]</c> — the leading six columns are the
-/// detection, the seventh is an in-graph rank/index that is ignored. A companion <c>boxes_num</c> tensor
+/// <c>[300, 7]</c> as <c>[class_id, score, x1, y1, x2, y2, order_index]</c> — the leading six columns are the
+/// detection, the seventh is the model's own predicted reading-order index, surfaced on each region as
+/// <see cref="LayoutRegion.OrderIndex"/> and used downstream to sequence the blocks. A companion <c>boxes_num</c> tensor
 /// (<c>fetch_name_1</c>, <c>int32[1]</c>) gives the valid row count, and <c>fetch_name_2</c>
 /// (<c>int32[300,200,200]</c>) is an auxiliary instance mask that box detection ignores. Boxes come out in
 /// <b>absolute source-image pixels</b> (the graph un-scales them using the supplied <c>scale_factor</c> and
@@ -39,17 +40,13 @@ namespace PaddleOcrNet.Structure.Layout;
 internal sealed class RtDetrLayoutDetector : ILayoutDetector
 {
     /// <summary>
-    /// Detections scoring at or below this confidence are discarded (PaddleX layout <c>threshold</c>).
-    /// </summary>
-    private const float ScoreThreshold = 0.5f;
-
-    /// <summary>
     /// Fallback square input edge when the graph declares a dynamic spatial dimension (PP-DocLayout_plus-L default).
     /// </summary>
     private const int DefaultInputSize = 800;
 
     private readonly InferenceSession _session;
     private readonly IReadOnlyDictionary<int, StructureBlockType> _classMap;
+    private readonly IReadOnlyDictionary<int, string>? _labelNames;
 
     // Resolved once from the graph metadata: the image input name, the model's fixed input H/W, and the
     // auxiliary "im_shape" / "scale_factor" input names (RT-DETR exports always declare both).
@@ -65,10 +62,20 @@ internal sealed class RtDetrLayoutDetector : ILayoutDetector
     /// </summary>
     /// <param name="session">The loaded RT-DETR layout model session (this instance takes ownership).</param>
     /// <param name="classMap">Maps the model's raw class indices to <see cref="StructureBlockType"/>.</param>
-    public RtDetrLayoutDetector(InferenceSession session, IReadOnlyDictionary<int, StructureBlockType> classMap)
+    /// <param name="labelNames">
+    /// Optional class-id → raw label name map from the same sidecar. Carried onto every
+    /// <see cref="LayoutRegion.RawLabel"/> so <see cref="LayoutPostProcessor"/> can tell apart labels that
+    /// <see cref="StructureBlockType"/> collapses (<c>reference</c> vs <c>reference_content</c>,
+    /// <c>inline_formula</c> vs <c>display_formula</c>).
+    /// </param>
+    public RtDetrLayoutDetector(
+        InferenceSession session,
+        IReadOnlyDictionary<int, StructureBlockType> classMap,
+        IReadOnlyDictionary<int, string>? labelNames = null)
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
         _classMap = classMap ?? throw new ArgumentNullException(nameof(classMap));
+        _labelNames = labelNames;
 
         // RT-DETR layout graphs expose three inputs: the 4-D image plus 2-D "im_shape" and "scale_factor".
         _imageInputName = LayoutGraph.ResolveImageInput(_session, out _inputHeight, out _inputWidth, DefaultInputSize);
@@ -77,7 +84,7 @@ internal sealed class RtDetrLayoutDetector : ILayoutDetector
     }
 
     /// <inheritdoc />
-    public IReadOnlyList<LayoutRegion> Detect(Image<Rgb24> image)
+    public IReadOnlyList<LayoutRegion> Detect(Image<Rgb24> image, float scoreThreshold)
     {
         ArgumentNullException.ThrowIfNull(image);
 
@@ -122,9 +129,9 @@ internal sealed class RtDetrLayoutDetector : ILayoutDetector
 
         using var results = _session.Run(inputs);
 
-        // POSTPROCESS: read the fused-decode detections [300,7] = [class_id, score, x1,y1,x2,y2, extra] in
-        // absolute source pixels (the trailing column is an in-graph index, ignored), then threshold and map
-        // the class id. No NMS — the RT-DETR decoder is NMS-free.
+        // POSTPROCESS: read the fused-decode detections [300,7] = [class_id, score, x1,y1,x2,y2, order_index]
+        // in absolute source pixels (the trailing column is the model's reading-order index, ignored here),
+        // then threshold and map the class id. No NMS — the RT-DETR decoder is NMS-free.
         var detections = LayoutGraph.ReadDetections(results);
         if (detections.Rows == 0)
         {
@@ -133,7 +140,7 @@ internal sealed class RtDetrLayoutDetector : ILayoutDetector
 
         // Boxes are already in source-image pixels (scale_factor un-scaled them in-graph), so no extra scale.
         var regions = LayoutGraph.BuildRegions(
-            detections, _classMap, ScoreThreshold, scaleX: 1f, scaleY: 1f, origW, origH);
+            detections, _classMap, scoreThreshold, scaleX: 1f, scaleY: 1f, origW, origH, _labelNames);
         return regions;
     }
 

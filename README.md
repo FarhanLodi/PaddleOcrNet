@@ -123,6 +123,7 @@ StructureResult doc = await ocr.AnalyzeDocumentAsync("report.png", new Structure
     UseDocOrientation = true,    // auto-rotate skewed scans (0/90/180/270°)
     RecognizeTables   = true,    // tables → HTML
     RecognizeFormulas = true,    // formulas → LaTeX
+    // LayoutScoreThreshold = 0.4f,  // default 0.5 — lower to keep less-confident layout regions
 });
 
 foreach (var block in doc.Blocks)
@@ -239,6 +240,9 @@ share across threads. Call `WarmUp(...)` to pre-load models off the request path
 | **Throughput** | `BatchSize`, `MaxDegreeOfParallelism`, and reading-order / paragraph grouping via `RecognitionOptions`. |
 | **Input limits** | Built-in max-pixel / PDF page guards against decompression bombs. |
 | **Layout model** | `StructureOptions.LayoutModel` — `RtDetrL` (default, PP-DocLayoutV3, 25 classes, most accurate) or `PicoDetS` / `PicoDetM` (PP-DocLayout-S/M, far smaller and faster, fewer regions). |
+| **Layout threshold** | `StructureOptions.LayoutScoreThreshold` — confidence floor for layout regions, default `0.5`. Lower it to keep regions the detector is unsure about, raise it to keep only confident ones. |
+| **Layout clean-up** | Near-duplicate regions are collapsed by default (`FilterOverlappingRegions`); `LayoutNms`, `LayoutUnclipRatio` and `LayoutMergeMode` add optional suppression, box growth and nested-region resolution. |
+| **Reading order** | `StructureOptions.ReadingOrder` — `Auto` (default) uses the order PP-DocLayoutV3 predicts for itself and falls back to geometric XY-cut; `XyCut` always uses XY-cut. |
 | **Seals** | `StructureOptions.RecognizeSeals` (on by default) runs the PP-OCRv4 seal detector over detected seal regions. |
 
 ### Output formats
@@ -249,6 +253,18 @@ cells). The `ToDocx(image)` / `ToHtml(image)` overloads embed figure/chart/seal 
 and DOCX formulas render as **native Word equations (OMML)**. Multi-page Markdown can be stitched with
 `ConcatenateMarkdownPages`; PDFs can be re-emitted as **searchable PDFs**. All exporters are AOT-safe via a
 source-generated JSON context.
+
+JSON output is written with a Unicode-permissive encoder, so recognized text in Cyrillic, Greek, Arabic,
+Hebrew, CJK and every other script appears verbatim instead of as `\uXXXX` escapes; HTML-sensitive
+characters (`< > & ' +`) are still escaped. Pass your own `JsonSerializerOptions` to override any of it:
+
+```csharp
+using System.Text.Json;
+using System.Text.Encodings.Web;
+
+string pretty  = result.ToJson(new JsonSerializerOptions { WriteIndented = true });
+string escaped = doc.ToJson(new JsonSerializerOptions { Encoder = JavaScriptEncoder.Default });  // pre-2.0.2 escaping
+```
 
 ---
 

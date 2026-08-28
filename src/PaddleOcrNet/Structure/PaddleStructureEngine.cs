@@ -116,8 +116,15 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
 
             // ---- (2) layout detection ----------------------------------------------------------------
             var layoutDetector = await GetOrLoadLayoutDetectorAsync(options.LayoutModel, ct).ConfigureAwait(false);
-            var regions = layoutDetector.Detect(page);
-            _logger?.LogInformation("Layout detector found {Count} region(s).", regions.Count);
+            var detected = layoutDetector.Detect(page, options.LayoutScoreThreshold);
+
+            // The detectors emit a fixed top-k of candidates with no NMS, so the same area of the page is
+            // routinely proposed several times under different labels. Clean that up (and apply the optional
+            // NMS / unclip / merge passes) before anything is recognized.
+            var regions = LayoutPostProcessor.Apply(detected, options, page.Width, page.Height);
+            _logger?.LogInformation(
+                "Layout detector found {Count} region(s) ({Raw} before post-processing).",
+                regions.Count, detected.Count);
 
             if (regions.Count == 0)
             {
@@ -138,9 +145,17 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
             }
 
             // ---- (4) reading order -------------------------------------------------------------------
-            // XY-cut over the region bounds, then write the resulting rank into each block's Order. The
-            // returned blocks are also emitted in reading order so downstream exporters can rely on either.
-            var order = ReadingOrder.XyCutOrderer.Order(blocks.Select(b => b.Bounds).ToArray());
+            // Prefer the order the model predicted for itself when it supplied one for every region —
+            // LayoutPostProcessor has already sorted the regions (and therefore the blocks) by it, so the
+            // ranking is the identity. Otherwise fall back to XY-cut over the region bounds. Either way the
+            // rank is written into each block's Order and the blocks are emitted in that order, so downstream
+            // exporters can rely on either.
+            bool useModelOrder = options.ReadingOrder != LayoutReadingOrder.XyCut
+                && regions.Count == blocks.Count
+                && regions.All(r => r.OrderIndex is not null);
+            var order = useModelOrder
+                ? Enumerable.Range(0, blocks.Count).ToArray()
+                : ReadingOrder.XyCutOrderer.Order(blocks.Select(b => b.Bounds).ToArray());
             var ordered = new StructureBlock[blocks.Count];
             for (int rank = 0; rank < order.Count; rank++)
             {
@@ -363,20 +378,24 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
 
             var labelPath = await EnsureAssetAsync(labelAsset, ct).ConfigureAwait(false);
             var classMap = LayoutLabelMap.Load(labelPath);
+            var labelNames = LayoutLabelMap.LoadNames(labelPath);
             if (classMap.Count == 0)
             {
                 // Sidecar missing/unparseable: fall back to the model's canonical label vocabulary so
                 // detections still map to real block types. The RT-DETR slot is served by PP-DocLayoutV3 (25-class).
-                classMap = LayoutLabelMap.FromNames(
-                    model == LayoutModel.RtDetrL ? LayoutLabelMap.DocLayoutV325 : LayoutLabelMap.DocLayout23);
+                var fallbackNames = model == LayoutModel.RtDetrL
+                    ? LayoutLabelMap.DocLayoutV325
+                    : LayoutLabelMap.DocLayout23;
+                classMap = LayoutLabelMap.FromNames(fallbackNames);
+                labelNames = LayoutLabelMap.NamesFromList(fallbackNames);
             }
             var session = await LoadSessionAsync(modelAsset, ct).ConfigureAwait(false);
 
             // RT-DETR graphs take a third "im_shape" input the PicoDet exports do not, so they must go to
             // RtDetrLayoutDetector or the graph faults on a missing input.
             _layoutDetector = model == LayoutModel.RtDetrL
-                ? new RtDetrLayoutDetector(session, classMap)
-                : new PicoDetLayoutDetector(session, classMap);
+                ? new RtDetrLayoutDetector(session, classMap, labelNames)
+                : new PicoDetLayoutDetector(session, classMap, labelNames);
             _layoutDetectorModel = model;
             _logger?.LogInformation("Layout detector loaded ({Model}).", model);
             return _layoutDetector;

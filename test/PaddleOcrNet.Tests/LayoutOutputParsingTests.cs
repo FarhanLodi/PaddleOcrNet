@@ -11,7 +11,9 @@ namespace PaddleOcrNet.Tests;
 /// raw-class-id → <see cref="StructureBlockType"/> mapping for both the 23-class (PP-DocLayout_plus) and the
 /// 20-class (PP-DocLayout) label vocabularies. The class mapping is exercised through the real, already-
 /// implemented <see cref="LayoutLabelMap"/>; the <c>[N,6]</c> row parse is pinned via a local reference that
-/// mirrors the post-processing the detector body must perform.
+/// mirrors the post-processing the detector body must perform. The per-call score threshold
+/// (<see cref="StructureOptions.LayoutScoreThreshold"/>) is exercised against the real
+/// <see cref="LayoutGraph.BuildRegions"/>.
 /// </summary>
 public class LayoutOutputParsingTests
 {
@@ -91,6 +93,61 @@ public class LayoutOutputParsingTests
 
         Assert.Equal(StructureBlockType.Unknown, region.Type);
         Assert.Equal(99, region.RawClassId);
+    }
+
+    // -----------------------------------------------------------------------------------------------------
+    // configurable score threshold: StructureOptions.LayoutScoreThreshold -> LayoutGraph.BuildRegions
+    // -----------------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Three real 7-wide PP-DocLayoutV3 rows (<c>class_id, score, x1, y1, x2, y2, order_index</c>) scoring
+    /// 0.95 / 0.45 / 0.20, so a threshold sweep crosses each one in turn.
+    /// </summary>
+    private static LayoutGraph.Detections ThreeScoredRows() => new(
+        new float[]
+        {
+            0, 0.95f, 10, 10, 110, 50, 0,
+            1, 0.45f, 10, 60, 110, 90, 1,
+            2, 0.20f, 10, 100, 210, 300, 2,
+        },
+        rows: 3,
+        rowWidth: 7);
+
+    /// <summary>
+    /// The threshold the detectors receive per call is the one that filters, and it is exclusive
+    /// (<c>score &gt; threshold</c>), so a row scoring exactly the threshold is dropped.
+    /// </summary>
+    [Theory]
+    [InlineData(0.5f, 1)]    // the shipped default: only the 0.95 row survives
+    [InlineData(0.45f, 1)]   // exclusive: a row scoring exactly the threshold is still dropped
+    [InlineData(0.3f, 2)]    // lowered: the 0.45 row comes back
+    [InlineData(0.1f, 3)]    // low: every row is kept
+    [InlineData(0.95f, 0)]   // at the best score: nothing survives
+    public void BuildRegions_keeps_only_rows_scoring_above_the_supplied_threshold(float threshold, int expected)
+    {
+        var classMap = new Dictionary<int, StructureBlockType>
+        {
+            [0] = StructureBlockType.Text,
+            [1] = StructureBlockType.Title,
+            [2] = StructureBlockType.Table,
+        };
+
+        var regions = LayoutGraph.BuildRegions(
+            ThreeScoredRows(), classMap, threshold, scaleX: 1f, scaleY: 1f, origW: 1000, origH: 1000);
+
+        Assert.Equal(expected, regions.Count);
+        Assert.All(regions, r => Assert.True(r.Score > threshold));
+    }
+
+    [Fact]
+    public void LayoutScoreThreshold_defaults_to_the_documented_value_and_is_overridable()
+    {
+        Assert.Equal(0.5f, StructureOptions.DefaultLayoutScoreThreshold);
+        Assert.Equal(0.5f, StructureOptions.Default.LayoutScoreThreshold);
+
+        var relaxed = StructureOptions.Default with { LayoutScoreThreshold = 0.25f };
+        Assert.Equal(0.25f, relaxed.LayoutScoreThreshold);
+        Assert.Equal(0.5f, StructureOptions.Default.LayoutScoreThreshold); // record copy leaves the default alone
     }
 
     // -----------------------------------------------------------------------------------------------------
