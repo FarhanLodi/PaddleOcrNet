@@ -388,6 +388,41 @@ heuristic, layout-based **offline KIE** extractor as the non-LLM alternative. Un
 
 ---
 
+## Support
+
+If PaddleOcrNet saves you time, consider supporting development:
+
+- **PayPal** — [paypal.me/FarhanLodi](https://paypal.me/FarhanLodi)
+- **UPI (India)** — `farhanlodi5@oksbi`
+- **Bank transfer (USD)** — details below
+
+<details>
+<summary><b>USD bank transfer details (Wise)</b></summary>
+
+<br>
+
+USD account details for Farhan Lodi on Wise. Sending from a bank in the US? Use these details for a
+domestic transfer. Sending from anywhere else? Make an international SWIFT transfer.
+
+| Field | Value |
+|---|---|
+| Name | Farhan Lodi |
+| Account type | Deposit |
+| Routing number (wire and ACH) | `084009519` |
+| Account number | `420927686563885` |
+| SWIFT/BIC | `TRWIUS35XXX` |
+| Bank address | Wise US Inc, 108 W 13th St, Wilmington, DE, 19801, United States |
+
+Use the routing and account numbers when sending from the US, and the SWIFT/BIC when sending from
+outside the US.
+
+</details>
+
+Need more details, a different payment method, or have a question? Email
+[farhanlodi31@gmail.com](mailto:farhanlodi31@gmail.com). See [Donation.md](Donation.md) for the full list.
+
+---
+
 ## Contact
 
 For work inquiries, collaboration, feature requests, or any questions, reach out to:
