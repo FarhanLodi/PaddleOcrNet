@@ -6,7 +6,7 @@
 		<Nullable>enable</Nullable>
 		<LangVersion>latest</LangVersion>
 		<PackageId>PaddleOcrNet.Gpu</PackageId>
-		<Version>2.0.2</Version>
+		<Version>2.0.3</Version>
 		<Authors>PaddleOcrNet Contributors</Authors>
 		<Description>CUDA GPU execution provider for PaddleOcrNet. Adds Microsoft.ML.OnnxRuntime.Gpu so detection, classification and recognition run on NVIDIA GPUs.</Description>
 		<PackageTags>OCR;PaddleOCR;ONNX;GPU;CUDA;.NET10</PackageTags>

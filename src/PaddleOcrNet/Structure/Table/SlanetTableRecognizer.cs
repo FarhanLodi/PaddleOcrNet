@@ -275,6 +275,7 @@ internal sealed class SlanetTableRecognizer : ITableRecognizer
     /// the top-left corner).
     /// </summary>
     /// <param name="crop">The table crop (caller retains ownership).</param>
+    /// <param name="inputSize">The model's square input edge (488 for SLANet_plus, 512 for SLANeXt).</param>
     /// <param name="origW">The crop's original pixel width (for the shape_list / box rescale).</param>
     /// <param name="origH">The crop's original pixel height.</param>
     /// <param name="ratio">The applied resize ratio (long-edge scale).</param>
@@ -466,12 +467,18 @@ internal sealed class SlanetTableRecognizer : ITableRecognizer
     /// </summary>
     /// <param name="cellBoxes">Predicted cell boxes in crop pixels, in structure (HTML) order.</param>
     /// <param name="ocrLines">OCR lines in the crop's pixel coordinates.</param>
-    /// <returns>cell index → list of OCR texts assigned to that cell.</returns>
-    private static Dictionary<int, List<string>> MatchOcrToCells(
+    /// <returns>cell index → the OCR lines assigned to that cell (whole lines, geometry included).</returns>
+    /// <remarks>
+    /// The matched <see cref="OcrLine"/> is kept whole rather than reduced to its text: a cell that swallows
+    /// several detection boxes needs their geometry to tell "two fragments of one printed line" from "two
+    /// stacked lines", which is what <see cref="AppendCellText"/> uses to decide between a space and a
+    /// <c>&lt;br&gt;</c>.
+    /// </remarks>
+    private static Dictionary<int, List<OcrLine>> MatchOcrToCells(
         IReadOnlyList<float[]> cellBoxes,
         IReadOnlyList<OcrLine> ocrLines)
     {
-        var matched = new Dictionary<int, List<string>>();
+        var matched = new Dictionary<int, List<OcrLine>>();
         if (cellBoxes.Count == 0)
         {
             return matched;
@@ -512,13 +519,13 @@ internal sealed class SlanetTableRecognizer : ITableRecognizer
 
             if (bestCell >= 0)
             {
-                if (!matched.TryGetValue(bestCell, out var texts))
+                if (!matched.TryGetValue(bestCell, out var cellLines))
                 {
-                    texts = new List<string>();
-                    matched[bestCell] = texts;
+                    cellLines = new List<OcrLine>();
+                    matched[bestCell] = cellLines;
                 }
 
-                texts.Add(line.Text);
+                cellLines.Add(line);
             }
         }
 
@@ -587,8 +594,8 @@ internal sealed class SlanetTableRecognizer : ITableRecognizer
     /// </para>
     /// </summary>
     /// <param name="structureTokens">Decoded structure tokens in document order.</param>
-    /// <param name="matched">cell index → OCR texts (from <see cref="MatchOcrToCells"/>).</param>
-    private static string BuildHtml(IReadOnlyList<string> structureTokens, IReadOnlyDictionary<int, List<string>> matched)
+    /// <param name="matched">cell index → OCR lines (from <see cref="MatchOcrToCells"/>).</param>
+    private static string BuildHtml(IReadOnlyList<string> structureTokens, IReadOnlyDictionary<int, List<OcrLine>> matched)
     {
         var sb = new StringBuilder();
         sb.Append("<html><body><table>");
@@ -629,24 +636,112 @@ internal sealed class SlanetTableRecognizer : ITableRecognizer
     }
 
     /// <summary>
-    /// Appends the OCR text matched to <paramref name="cellIndex"/> (HTML-escaped), if any.
+    /// Appends the OCR text matched to <paramref name="cellIndex"/> (HTML-escaped), if any, preserving the
+    /// cell's visual line structure: fragments sitting on the SAME printed line are joined with a space,
+    /// while a fragment that starts a NEW line is preceded by <c>&lt;br&gt;</c>.
     /// </summary>
-    private static void AppendCellText(StringBuilder sb, IReadOnlyDictionary<int, List<string>> matched, int cellIndex)
+    /// <remarks>
+    /// A wrapped paragraph inside one cell arrives as several detection boxes stacked vertically. Joining
+    /// them all with spaces (what PaddleOCR's <c>get_pred_html</c> does) collapses a multi-line cell into a
+    /// single run, which loses the heading/body break in editorial tables and glues the rows of a notes
+    /// column together. Rebuilding the rows from the boxes' vertical overlap and separating them with
+    /// <c>&lt;br&gt;</c> keeps the cell readable in every exporter — Markdown and HTML render the tag, and the
+    /// OOXML writers turn it back into a real line break (see <see cref="Export.OoxmlHtmlTable"/>).
+    /// </remarks>
+    internal static void AppendCellText(StringBuilder sb, IReadOnlyDictionary<int, List<OcrLine>> matched, int cellIndex)
     {
-        if (cellIndex < 0 || !matched.TryGetValue(cellIndex, out var texts) || texts.Count == 0)
+        if (cellIndex < 0 || !matched.TryGetValue(cellIndex, out var cellLines) || cellLines.Count == 0)
         {
             return;
         }
 
-        for (int i = 0; i < texts.Count; i++)
+        bool firstRow = true;
+        foreach (var row in GroupIntoVisualLines(cellLines))
         {
-            if (i > 0)
+            if (!firstRow)
             {
-                sb.Append(' ');
+                sb.Append("<br>");
+            }
+            firstRow = false;
+
+            for (int i = 0; i < row.Count; i++)
+            {
+                if (i > 0)
+                {
+                    sb.Append(' ');
+                }
+
+                sb.Append(HtmlEscape(row[i].Text));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Fraction of the shorter box height that two boxes must overlap vertically to count as the same printed
+    /// line. The lines of a wrapped paragraph are stacked with a gap and overlap by ~0, while fragments of one
+    /// line — split by the detector at a wide inter-word gap — share nearly their whole height, so the two
+    /// cases sit far either side of this midpoint.
+    /// </summary>
+    private const double SameLineOverlapRatio = 0.5;
+
+    /// <summary>
+    /// Groups a cell's matched OCR lines into visual rows: top-to-bottom by vertical position, left-to-right
+    /// inside each row. A line joins the open row when it overlaps that row's vertical span by at least
+    /// <see cref="SameLineOverlapRatio"/> of the shorter of the two heights; otherwise it opens a new row.
+    /// </summary>
+    internal static List<List<OcrLine>> GroupIntoVisualLines(List<OcrLine> cellLines)
+    {
+        // Sort by vertical position (top edge, then left edge) so one forward pass builds the rows.
+        var ordered = new List<OcrLine>(cellLines);
+        ordered.Sort(static (a, b) =>
+        {
+            int cmp = a.BoundingBox.MinY.CompareTo(b.BoundingBox.MinY);
+            return cmp != 0 ? cmp : a.BoundingBox.MinX.CompareTo(b.BoundingBox.MinX);
+        });
+
+        var rows = new List<List<OcrLine>>();
+        double rowTop = 0, rowBottom = 0;
+
+        foreach (var line in ordered)
+        {
+            var box = line.BoundingBox;
+            if (rows.Count > 0 && SameVisualLine(rowTop, rowBottom, box))
+            {
+                rows[^1].Add(line);
+                // Grow the row's span so a taller fragment keeps pulling in the rest of its line.
+                rowTop = Math.Min(rowTop, box.MinY);
+                rowBottom = Math.Max(rowBottom, box.MaxY);
+                continue;
             }
 
-            sb.Append(HtmlEscape(texts[i]));
+            rows.Add(new List<OcrLine> { line });
+            rowTop = box.MinY;
+            rowBottom = box.MaxY;
         }
+
+        // Reading order inside a row is left-to-right, which the MinY-first sort above does not guarantee.
+        foreach (var row in rows)
+        {
+            row.Sort(static (a, b) => a.BoundingBox.MinX.CompareTo(b.BoundingBox.MinX));
+        }
+
+        return rows;
+    }
+
+    /// <summary>
+    /// True when <paramref name="box"/> belongs to the open row spanning
+    /// [<paramref name="rowTop"/>, <paramref name="rowBottom"/>].
+    /// </summary>
+    private static bool SameVisualLine(double rowTop, double rowBottom, OcrBoundingBox box)
+    {
+        double overlap = Math.Min(rowBottom, box.MaxY) - Math.Max(rowTop, box.MinY);
+        double shorter = Math.Min(rowBottom - rowTop, box.Height);
+
+        // A zero-height row or box carries no scale to compare the overlap against, so require only that the
+        // spans meet: keeping a degenerate box on the open row beats inventing a line break for it.
+        if (shorter <= 0) return overlap >= 0;
+
+        return overlap >= shorter * SameLineOverlapRatio;
     }
 
     /// <summary>

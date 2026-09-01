@@ -78,7 +78,7 @@ internal sealed class SealRecognizer : ISealRecognizer
     /// <remarks>
     /// Pipeline: (1) ImageNet-normalize the seal crop and run the DB seal detector to a probability map;
     /// (2) DB-postprocess that map into scored min-area quads (one per curved line, approximated);
-    /// (3) rectify each quad to an upright strip via <see cref="PerspectiveWarp.Rectify"/>;
+    /// (3) rectify each quad to an upright strip via <see cref="Internal.Geometry.PerspectiveWarp.Rectify(EasyImageSharp.Image{EasyImageSharp.PixelFormats.Rgb24}, OcrPoint[])"/>;
     /// (4) batch-recognize the strips through the shared <see cref="ITextRecognizer"/>;
     /// (5) emit one <see cref="OcrLine"/> per non-empty reading, with its polygon in the crop's pixel space.
     /// </remarks>

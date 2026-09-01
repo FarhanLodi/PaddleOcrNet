@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using PaddleOcrNet.Services;
 using Microsoft.Extensions.Logging;
 using Microsoft.ML.OnnxRuntime;
@@ -17,7 +18,7 @@ namespace PaddleOcrNet.Internal;
 /// provider whose native code is not present.
 /// </para>
 /// </summary>
-internal static class ExecutionProviderResolver
+internal static partial class ExecutionProviderResolver
 {
     // ONNX Runtime's provider names as returned by OrtEnv.GetAvailableProviders().
     private const string CudaName = "CUDAExecutionProvider";
@@ -137,7 +138,51 @@ internal static class ExecutionProviderResolver
         }
         catch (Exception ex)
         {
+            var hint = CudaToolkitHint(ex);
+            if (hint is not null)
+            {
+                logger?.LogWarning(ex, "{Provider} execution provider unavailable. Falling back to CPU. {Hint}", name, hint);
+                return;
+            }
+
             logger?.LogWarning(ex, "{Provider} execution provider unavailable. Falling back to CPU. Install {Package} for support.", name, package);
         }
     }
+
+    /// <summary>
+    /// Recognizes the "wrong CUDA toolkit" flavour of provider-load failure and explains it, or returns
+    /// <c>null</c> when the failure is not of that kind.
+    /// <para>
+    /// When the CUDA provider DLL itself loads but its CUDA dependencies do not, ONNX Runtime reports the
+    /// first missing library by name — e.g. <c>cublasLt64_13.dll</c>. The trailing number is the CUDA
+    /// <b>major</b> version that runtime was built against, so the message already says which toolkit is
+    /// wanted; it is just very easy to misread as a broken CUDA install, because the machine usually has a
+    /// perfectly good CUDA of the <em>other</em> major version.
+    /// </para>
+    /// </summary>
+    internal static string? CudaToolkitHint(Exception ex)
+    {
+        var match = CudaLibraryRegex().Match(ex.Message);
+        if (!match.Success) return null;
+
+        string library = match.Value;
+        string major = match.Groups["major"].Value;
+        string built = major == "13"
+            ? "ONNX Runtime 1.27 and later build against CUDA 13"
+            : "ONNX Runtime 1.21 through 1.26 build against CUDA 12";
+
+        return $"The loaded ONNX Runtime wants the CUDA {major}.x runtime \u2014 '{library}' was not found on PATH \u2014 " +
+               $"so the installed CUDA is a different major version. {built}. Either install the CUDA {major}.x " +
+               "toolkit (with a matching cuDNN 9), or add a PackageReference to the Microsoft.ML.OnnxRuntime.Gpu " +
+               "version that matches the CUDA you have; a direct reference overrides the version PaddleOcrNet.Gpu " +
+               "brings in.";
+    }
+
+    /// <summary>
+    /// Matches a CUDA runtime library name carrying its major-version suffix, in either platform's spelling:
+    /// <c>cublasLt64_13.dll</c> / <c>cudart64_12.dll</c> on Windows, <c>libcublasLt.so.13</c> on Linux. The
+    /// two alternatives reuse the <c>major</c> group name, which .NET merges into one capture.
+    /// </summary>
+    [GeneratedRegex(@"\b(?:lib)?cu[a-z]+(?:64)?(?:_(?<major>\d+)\.dll|\.so\.(?<major>\d+))", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex CudaLibraryRegex();
 }

@@ -98,6 +98,17 @@ internal sealed class RtDetrLayoutDetector : ILayoutDetector
         // PREPROCESS: stretch-resize to the model's square input and pack pixel/255 float pixels into
         // [1,3,H,W] RGB CHW. NOTE: /255 scaling but NO mean/std — confirmed by running the real ONNX (raw
         // 0-255 collapses all scores to ~0.01; /255 restores them).
+        //
+        // This matches the canonical PP-DocLayoutV3 preprocessing on every point that affects the scores:
+        // the reference image processor declares size 800x800, mean [0,0,0] and std [1,1,1] (i.e. rescale
+        // only, no mean/std shift) and a plain stretch resize with no aspect-ratio padding. Measured against
+        // the real graph, the remaining variables are noise: bicubic instead of bilinear moves the top score
+        // by ~0.003, and BGR/RGB and keep-ratio padding change it by less. So a low score is the model's
+        // genuine confidence, not a preprocessing defect — magnitude is content-dependent (a clean report
+        // page scores ~0.87 on average with several regions above 0.9, while a dense page of small text
+        // lines averages ~0.74, and a tight crop of a single line can top out below 0.5 and detect nothing).
+        // Callers that need those faint regions lower StructureOptions.LayoutScoreThreshold rather than
+        // expecting the scores themselves to rise.
         var input = BuildInputTensor(image);
 
         // im_shape is the network input size [inputH, inputW] = [800, 800]; scale_factor is

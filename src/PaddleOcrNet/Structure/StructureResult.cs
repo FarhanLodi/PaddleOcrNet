@@ -76,11 +76,11 @@ public sealed class StructureResult
                 return Heading(block.Text, level: 2);
 
             case StructureBlockType.Table:
-                // Markdown allows inline HTML; emit the recovered <table> verbatim. Fall back to any
-                // recovered text (e.g. GFM) if HTML is absent.
-                return !string.IsNullOrWhiteSpace(block.TableHtml)
-                    ? block.TableHtml!.Trim()
-                    : (block.Text?.Trim() ?? string.Empty);
+                // Markdown allows inline HTML; emit the recovered <table> verbatim — but only the table.
+                // The recognizer wraps it in <html><body> (PaddleOCR parity), which has no business inside a
+                // Markdown document. Fall back to any recovered text (e.g. GFM) if HTML is absent.
+                var table = Export.TableHtmlFragment.Extract(block.TableHtml);
+                return table.Length > 0 ? table : (block.Text?.Trim() ?? string.Empty);
 
             case StructureBlockType.Formula:
                 return string.IsNullOrWhiteSpace(block.Latex)

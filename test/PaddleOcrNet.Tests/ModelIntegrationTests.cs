@@ -20,6 +20,23 @@ public class ModelIntegrationTests
     private static bool IntegrationEnabled =>
         Environment.GetEnvironmentVariable(Gate) is "1" or "true" or "TRUE";
 
+    /// <summary>
+    /// Walks up from the test binary to the repo root (the folder holding <c>PaddleOcrNet.sln</c>). Resolving
+    /// assets relative to the binary or to the process CWD is runner-dependent and silently wrong under
+    /// <c>dotnet test</c>; the other integration suites all locate the repo this way.
+    /// </summary>
+    private static string RepoRoot
+    {
+        get
+        {
+            var dir = new DirectoryInfo(AppContext.BaseDirectory);
+            while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "PaddleOcrNet.sln")))
+                dir = dir.Parent;
+            return dir?.FullName
+                ?? throw new InvalidOperationException("Could not locate repo root (PaddleOcrNet.sln not found).");
+        }
+    }
+
     [SkippableFact]
     public async Task ExtractTextFromImage_recognizes_text_with_real_models()
     {
@@ -66,13 +83,7 @@ public class ModelIntegrationTests
     {
         Skip.IfNot(IntegrationEnabled, $"Integration test skipped; set {Gate}=1 to run.");
 
-        var assetsDir = Path.Combine(AppContext.BaseDirectory, "../../../test/Assets");
-        if (!Directory.Exists(assetsDir))
-        {
-            // fallback
-            assetsDir = Path.Combine(Directory.GetCurrentDirectory(), "test/Assets");
-        }
-        var imagePath = Path.Combine(assetsDir, filename);
+        var imagePath = Path.Combine(RepoRoot, "test", "Assets", filename);
 
         Assert.True(File.Exists(imagePath), $"Test image not found at: {imagePath}");
 

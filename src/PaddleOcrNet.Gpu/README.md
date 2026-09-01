@@ -54,10 +54,59 @@ await using var ocr = new PaddleOcrService(new PaddleOcrServiceOptions
 
 ## Requirements
 
-- An NVIDIA GPU with the proprietary driver installed, and **CUDA 12+**.
+- An NVIDIA GPU with the proprietary driver installed, and the **CUDA 13.x** toolkit with **cuDNN 9**
+  (CUDA 12 is supported by pinning ONNX Runtime yourself — see below).
 - **Windows or Linux.** `Microsoft.ML.OnnxRuntime.Gpu` ships native assets for those two platforms only.
   On macOS this package has nothing to contribute; install plain `PaddleOcrNet` and let `Auto` select
   CoreML.
+
+### Running on CUDA 12
+
+This package brings in **ONNX Runtime 1.27**, whose GPU build targets **CUDA 13** — as does every ONNX
+Runtime release after it:
+
+| ONNX Runtime | CUDA | cuDNN |
+|---|---|---|
+| 1.27.x and later | 13.0 | 9.x |
+| 1.21.x – 1.26.x | 12.8 | 9.x |
+
+On a machine with only the **CUDA 12** toolkit, that runtime looks for `cublasLt64_13.dll`
+(`libcublasLt.so.13`), fails to attach the CUDA provider, and PaddleOcrNet falls back to CPU. The warning it
+logs names the missing library and the CUDA major version the runtime wanted, so the mismatch is visible
+without decoding `Error 126`.
+
+There are three ways to get a GPU out of a CUDA 12 machine. Installing PaddleOcrNet 2.0.2 or older does not
+help — every release so far has referenced ONNX Runtime 1.27.
+
+**1. Install the CUDA 13 runtime next to CUDA 12.** The two majors coexist: their libraries are suffixed
+(`cublasLt64_12.dll` vs `cublasLt64_13.dll`), so adding CUDA 13 leaves existing CUDA 12 workloads alone. This
+keeps you on the current ONNX Runtime and needs no project changes.
+
+**2. Pin ONNX Runtime 1.26 in your own project.** Pin **both** packages — they ship the same managed assembly
+and must not split — and suppress `NU1605`, which NuGet raises because a direct reference below a transitive
+one counts as a downgrade:
+
+```xml
+<PropertyGroup>
+  <NoWarn>$(NoWarn);NU1605</NoWarn>
+</PropertyGroup>
+
+<ItemGroup>
+  <PackageReference Include="Microsoft.ML.OnnxRuntime.Gpu" Version="1.26.0" />
+  <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.26.0" />
+</ItemGroup>
+```
+
+A direct reference always wins over the transitive one, so this is all that is needed — nothing about
+PaddleOcrNet itself changes, and `ExecutionProvider` still resolves CUDA automatically.
+
+**3. Use DirectML instead of CUDA (Windows only).** DirectML runs on any DirectX 12 GPU — NVIDIA included —
+with no CUDA toolkit at all. Install `Microsoft.ML.OnnxRuntime.DirectML` instead of this package;
+`ExecutionProvider.Auto` already prefers DirectML over CUDA on Windows, so no code changes are needed:
+
+```bash
+dotnet add package Microsoft.ML.OnnxRuntime.DirectML
+```
 
 If CUDA is unavailable at runtime — no driver, missing libraries, no compatible device — provider
 selection logs the reason and **falls back to CPU** rather than throwing. `OcrResult.UsedGpu` reports

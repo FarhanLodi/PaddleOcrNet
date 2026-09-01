@@ -4,6 +4,103 @@ All notable changes to PaddleOcrNet are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.3] - 2026-09-01
+
+### Fixed
+
+- **Multi-line table cells collapsed onto one line.**
+  A cell usually swallows several detection boxes: fragments of one printed line, and — for a wrapped
+  paragraph — several stacked lines. `SlanetTableRecognizer` joined all of them with spaces (what PaddleOCR's
+  `get_pred_html` does), so a cell holding a heading plus a body paragraph came out as one run and the rows of
+  a notes column ran together. The recognizer now rebuilds the cell's visual rows from the matched boxes'
+  vertical overlap — same printed line when they overlap by at least half the shorter box height — joins
+  fragments within a row with a space, and separates rows with `<br>`. Rows are ordered top-to-bottom and
+  left-to-right regardless of the order the OCR lines arrived in.
+- **`<br>` in a cell survives into DOCX and XLSX.** `OoxmlHtmlTable` stripped every inner tag from cell
+  content, so the new break would have vanished along with it. It now maps `<br>` / `<br/>` / `<br />` to a
+  newline; `StructureDocxExporter` emits a real `<w:br/>` run for it (a literal newline inside `<w:t>` renders
+  as a space in Word), and `StructureXlsxExporter` writes a minimal `xl/styles.xml` and tags multi-line cells
+  with a wrap-text format so Excel shows every line. Multi-line **text** blocks pick up the same Word fix.
+- **`StructureResult.ToHtml()` degraded every real table to fallback text.** The recognizer returns PaddleOCR's
+  whole `<html><body><table>…</table></body></html>` document, but `RenderTable`'s table-rooted validity
+  check requires a bare `<table>` fragment, so it always failed and emitted the block's plain text instead of
+  the recovered grid. Both text exporters now take the `<table>` span out of the wrapper first — which also
+  stops `ToMarkdown()` from pasting a nested `<html>`/`<body>` into the page. `StructureBlock.TableHtml` and
+  `TableResult.Html` are unchanged and still carry the wrapper verbatim, for parity with Python.
+- **`TextGrouping.Paragraph` produced no paragraph breaks in `OcrResult.FullText`.** Every block was joined
+  with a single newline — the same separator the paragraph grouper puts *between the lines inside* a
+  paragraph — so the grouping carried no information into the text at all. Paragraph mode now separates
+  blocks with a blank line (a block's own trailing newline is trimmed first, so the gap never widens).
+  `Word` and `Line` grouping are unchanged.
+- **A CUDA toolkit mismatch now explains itself.** ONNX Runtime moved its GPU build to CUDA 13 in 1.27, so
+  `PaddleOcrNet.Gpu` looks for `cublasLt64_13.dll` and, on a machine with the CUDA 12 toolkit, fails to attach
+  the provider and falls back to CPU. All the user saw was ONNX Runtime's raw `Error 126` text, which reads
+  like a broken CUDA install rather than a version mismatch. When the failure names a missing CUDA library the
+  warning now says which CUDA major version the loaded runtime was built against (from the `_13` / `_12`
+  suffix), which ONNX Runtime releases match it, and that a direct `PackageReference` overrides the version
+  the package brings in. The ONNX Runtime reference itself is **unchanged at 1.27.0** — see below.
+
+### Documentation
+
+- **How to run the GPU package on a CUDA 12 machine.** `PaddleOcrNet.Gpu` targets CUDA 13, as every ONNX
+  Runtime from 1.27 onward does, and no earlier PaddleOcrNet release helps (all of them reference 1.27.0).
+  The GPU package README now spells out the three ways out: install the CUDA 13 runtime alongside CUDA 12
+  (the majors coexist — their libraries are suffixed), pin ONNX Runtime 1.26 in your own project (both
+  packages, plus `NoWarn NU1605`, since a direct reference below a transitive one counts as a downgrade), or
+  switch to DirectML on Windows, which needs no CUDA at all and which `ExecutionProvider.Auto` already
+  prefers there.
+- `OcrExecutionProvider.Auto` named a `PaddleOcrNet.DirectMl` package that was never shipped; the DirectML
+  runtime comes from Microsoft's own `Microsoft.ML.OnnxRuntime.DirectML`, which is what the provider
+  resolver has always told callers to install.
+- **The package now builds warning-free.** Eight XML-doc warnings (`CS1574` / `CS1573`) had been shipping
+  since 2.0.0, so the generated documentation file carried broken `<see>` links and missing `<param>` entries
+  into consumers' IntelliSense: `RecognitionOptions` pointed at an `ExtractTextFromImage` overload taking
+  `IEnumerable<string>` (every list overload takes `IReadOnlyList<OcrLanguage>`), `SealRecognizer` had an
+  unresolvable cref to `PerspectiveWarp.Rectify`, and `EmitWithPossibleScripts`, `SplitByGaps` and
+  `Preprocess` each documented only some of their parameters.
+
+### Tests
+
+- **The 14 language integration cases had never actually run.** `ModelIntegrationTests` resolved its assets
+  as `AppContext.BaseDirectory/../../../test/Assets`, which from `bin/Debug/net10.0` lands inside the test
+  project rather than the repo, and its fallback only worked when the runner happened to sit at the repo
+  root — so every case failed on the `File.Exists` assert before touching the library. It now walks up to
+  `PaddleOcrNet.sln` like every other integration suite. These are the tests that would have caught 2.0.2's
+  per-script dictionary bug.
+- **New coverage for the fixes above**: unit tests for the cell line-grouping rule, the `<br>` round-trip
+  through the Word/Excel writers, the grouping-dependent `FullText` separator and the CUDA-mismatch
+  diagnostic; integration tests that drive the real SLANet graph with stacked lines in one cell and run the
+  reported document end to end.
+- **Capability tests for the asset corpus** — table structure recovery and its Markdown/HTML/DOCX/XLSX
+  exports, formula-to-LaTeX, seal region detection, and an orientation check that an upside-down page yields
+  at least as much text with `DetectOrientation` on as off.
+- **A 100-image accuracy benchmark** over `test/Assets/paddleocrnet_100_test_dataset/` (11 categories: plain
+  text, multi-column, tables, forms, receipts, seals, dense mixed, low quality, rotated/perspective,
+  numbers/codes, handwriting-like). Because the fixtures are synthetic renders with known content, the suite
+  asserts recovered *strings* rather than just "it did not crash": the pangram, e-mail address and product
+  name on every plain-text page, the `abcdefghijklmnopqrstuvwxyz 0123456789` character probe on every
+  low-quality page, and the `OCR TEST` banner across the titled pages. Baseline at the time of writing —
+  **100/100 pages recognized, corpus mean confidence 0.963**, banner recovered on 99% of the 92 titled pages,
+  weakest category `rotated_perspective` at 0.942. Floors are set below those levels so the suite catches a
+  regression without flaking on model variance.
+
+### Known issues
+
+Both of these are long-standing, were found while testing the fixes above, and are **not** changed by this
+release — they are recorded here so they are not mistaken for new behaviour.
+
+- **`TableRecognitionModel.SlaNeXt` misplaces cell text.** Its location head decodes cell boxes that are far
+  too tall, and many of them clamp to the bottom of the crop, so OCR lines match into the wrong cells. On
+  `medal_table.png` (550×345, a clean 16×6 grid) the mean cell is 2.48× the true row height and 47 of 96
+  cells clamp; on `table.jpg` 12 of 13 clamp. The row/column structure decodes correctly — only the geometry
+  is wrong — so the symptom is scrambled content rather than a malformed table. `SlanetPlus` (the default)
+  places every value correctly on both fixtures, so **use the default**; the enum member's documentation now
+  says so. Diagnosing the correct SLANeXt coordinate convention needs reference data we do not have, and a
+  guessed rescale risks the working SLANet_plus path, so no speculative fix is shipped here.
+- **Seal text is not recovered.** On `seal.png` the layout detector finds the seal region at 0.96 confidence,
+  but `SealRecognizer` returns zero lines, so the block's `Text` is null — while plain OCR over the same image
+  reads 发票专用章 and 吗繁物. The rectify-then-recognize path inside the seal recognizer produces nothing.
+
 ## [2.0.2] - 2026-08-28
 
 ### Fixed

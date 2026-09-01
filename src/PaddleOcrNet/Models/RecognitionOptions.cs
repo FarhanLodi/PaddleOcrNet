@@ -2,7 +2,7 @@ namespace PaddleOcrNet.Models;
 
 /// <summary>
 /// Tunable options for a recognition call. Pass to
-/// <see cref="Services.PaddleOcrService.ExtractTextFromImage(string, System.Collections.Generic.IEnumerable{string}, RecognitionOptions, System.Threading.CancellationToken)"/>.
+/// <see cref="Services.PaddleOcrService.ExtractTextFromImage(string, System.Collections.Generic.IReadOnlyList{OcrLanguage}, RecognitionOptions, System.Threading.CancellationToken)"/>.
 /// </summary>
 public sealed record RecognitionOptions
 {
@@ -46,7 +46,7 @@ public sealed record RecognitionOptions
     /// demand. Default false.
     /// <para>
     /// Passing the literal language code <c>"auto"</c> to an
-    /// <see cref="Services.PaddleOcrService.ExtractTextFromImage(string, System.Collections.Generic.IEnumerable{string}, RecognitionOptions, System.Threading.CancellationToken)"/>
+    /// <see cref="Services.PaddleOcrService.ExtractTextFromImage(string, System.Collections.Generic.IReadOnlyList{OcrLanguage}, RecognitionOptions, System.Threading.CancellationToken)"/>
     /// overload is an equivalent trigger and sets this behaviour without having to construct options.
     /// </para>
     /// <para>

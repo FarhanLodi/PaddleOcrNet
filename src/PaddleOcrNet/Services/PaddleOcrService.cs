@@ -298,11 +298,11 @@ public sealed class PaddleOcrService : IPaddleOcrService
         var langs = ResolveLanguages(languages.ToCodes(), allowEmpty: false);
         if (polygons.Length == 0)
         {
-            return BuildResult(Array.Empty<OcrLine>(), langs, sw, activity, image.Width, image.Height);
+            return BuildResult(Array.Empty<OcrLine>(), langs, sw, activity, image.Width, image.Height, grouping: options.Grouping);
         }
 
         var lines = await _engine.RecognizeRegionsAsync(image, langs, polygons, options, cancellationToken).ConfigureAwait(false);
-        return BuildResult(lines, langs, sw, activity, image.Width, image.Height);
+        return BuildResult(lines, langs, sw, activity, image.Width, image.Height, grouping: options.Grouping);
     }
 
     /// <summary>
@@ -447,13 +447,13 @@ public sealed class PaddleOcrService : IPaddleOcrService
             outcome = await CoreAsync(image, languages, options, cancellationToken).ConfigureAwait(false);
         }
 
-        return BuildResult(outcome.Lines, outcome.Languages, sw, activity, image.Width, image.Height, outcome.Detected);
+        return BuildResult(outcome.Lines, outcome.Languages, sw, activity, image.Width, image.Height, outcome.Detected, options.Grouping);
     }
 
     /// <summary>
     /// Sorts into reading order, records metrics/trace tags, and assembles the result.
     /// </summary>
-    private OcrResult BuildResult(IReadOnlyList<OcrLine> lines, string[] languages, Stopwatch sw, Activity? activity, int sourceWidth = 0, int sourceHeight = 0, IReadOnlyList<string>? detectedLanguages = null)
+    private OcrResult BuildResult(IReadOnlyList<OcrLine> lines, string[] languages, Stopwatch sw, Activity? activity, int sourceWidth = 0, int sourceHeight = 0, IReadOnlyList<string>? detectedLanguages = null, TextGrouping grouping = TextGrouping.Line)
     {
         var ordered = SortLinesByReadingOrder(lines);
         sw.Stop();
@@ -471,7 +471,7 @@ public sealed class PaddleOcrService : IPaddleOcrService
 
         return new OcrResult
         {
-            FullText = BuildFullText(ordered),
+            FullText = BuildFullText(ordered, grouping),
             Lines = ordered,
             Languages = languages,
             DetectedLanguages = detectedLanguages ?? Array.Empty<string>(),
@@ -681,14 +681,27 @@ public sealed class PaddleOcrService : IPaddleOcrService
         return (arr.Length & 1) == 1 ? arr[mid] : (arr[mid - 1] + arr[mid]) / 2.0;
     }
 
-    private static string BuildFullText(IEnumerable<OcrLine> lines)
+    /// <summary>
+    /// Concatenates the recognized blocks into <see cref="OcrResult.FullText"/>.
+    /// <para>
+    /// Under <see cref="TextGrouping.Paragraph"/> each block is itself a multi-line paragraph (the merged
+    /// lines are newline-joined by <see cref="ParagraphGrouper"/>), so blocks are separated by a BLANK line:
+    /// with a single newline the paragraph boundary would be indistinguishable from the line breaks inside a
+    /// paragraph, and the grouping would carry no information into the text. Word/line grouping keeps the
+    /// one-newline-per-line layout, where every newline already means the same thing.
+    /// </para>
+    /// </summary>
+    internal static string BuildFullText(IEnumerable<OcrLine> lines, TextGrouping grouping)
     {
+        string separator = grouping == TextGrouping.Paragraph ? "\n\n" : "\n";
+
         var sb = new StringBuilder();
         foreach (var line in lines)
         {
             if (string.IsNullOrEmpty(line.Text)) continue;
-            if (sb.Length > 0) sb.AppendLine();
-            sb.Append(line.Text);
+            if (sb.Length > 0) sb.Append(separator);
+            // Trim the block's own trailing newline so the separator is never doubled into a wider gap.
+            sb.Append(line.Text.TrimEnd('\r', '\n'));
         }
         return sb.ToString();
     }
