@@ -178,17 +178,13 @@ public sealed class AssetCapabilityTests : IClassFixture<AssetCapabilityTests.Se
     }
 
     /// <summary>
-    /// The seal region must be found and cover the stamp.
-    /// <para>
-    /// <b>Text recovery is a known open defect</b> and is deliberately NOT asserted here: on this fixture
-    /// <c>SealRecognizer</c> returns zero lines (so the block's <c>Text</c> is null) even though the region is
-    /// detected at 0.96 and plain OCR over the same image reads 发票专用章 and 吗繁物. See the "Known issues"
-    /// section of CHANGELOG 2.0.3. This test pins the half that works so the detection side cannot regress
-    /// unnoticed while the recognition side is outstanding; tighten it to assert the text once that is fixed.
-    /// </para>
+    /// A seal page must come back as a seal region <b>carrying text</b>. The curved-text recognizer returns
+    /// nothing on this fixture, so this exercises the fallback to ordinary OCR over the same crop — without
+    /// it the words printed on the stamp are silently dropped from the document even though the region is
+    /// detected at 0.96 confidence.
     /// </summary>
     [SkippableFact]
-    public async Task A_seal_page_is_detected_as_a_seal_region()
+    public async Task A_seal_page_is_detected_and_keeps_its_text()
     {
         Skip.IfNot(IntegrationEnabled, $"Integration test skipped; set {Gate}=1 to run.");
         Skip.IfNot(File.Exists(Asset("seal.png")), "seal.png missing.");
@@ -202,10 +198,13 @@ public sealed class AssetCapabilityTests : IClassFixture<AssetCapabilityTests.Se
         var seal = doc.Blocks.FirstOrDefault(b => b.Type == StructureBlockType.Seal);
         Assert.NotNull(seal);
         _out.WriteLine($"seal score={seal!.Score:0.00} bounds={seal.Bounds} " +
-                       $"text={seal.Text ?? "(null — known issue)"} lines={seal.Lines?.Count ?? 0}");
+                       $"lines={seal.Lines?.Count ?? 0} text={seal.Text?.Replace("\n", " / ") ?? "(null)"}");
 
         Assert.True(seal.Score > 0.5, $"seal detected with low confidence: {seal.Score}");
         Assert.True(seal.Bounds.Width > 100 && seal.Bounds.Height > 100, "seal region should cover the stamp");
+
+        Assert.False(string.IsNullOrWhiteSpace(seal.Text), "seal region carried no text");
+        Assert.Contains("发票专用章", seal.Text);
     }
 
     /// <summary>

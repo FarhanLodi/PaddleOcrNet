@@ -227,6 +227,14 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
                 using var crop = page.Clone(ctx => ctx.Crop(rect));
                 var recognizer = await GetOrLoadSealRecognizerAsync(options, ct).ConfigureAwait(false);
                 var sealLines = recognizer.Recognize(crop);
+
+                // The curved-text path can come back empty on a seal it cannot rectify. 
+                // Falling back to the shared text recognizer is a reasonable compromise: it will at least recover the text in a straight line, even if the bounding polygon is not curved.
+                if (sealLines.Count == 0)
+                {
+                    sealLines = await RecognizeCropTextAsync(crop, options, ct).ConfigureAwait(false);
+                }
+
                 var pageLines = TranslateLines(sealLines, rect.X, rect.Y);
                 return new StructureBlock(
                     StructureBlockType.Seal, region.Bounds, Order: 0,

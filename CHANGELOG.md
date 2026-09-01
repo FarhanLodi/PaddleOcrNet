@@ -4,6 +4,21 @@ All notable changes to PaddleOcrNet are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.4] - 2026-09-01
+
+### Fixed
+
+- **Seal regions no longer lose their text.** `RecognizeSeals` is on by default, and a
+  `StructureBlockType.Seal` region is routed to the curved-text seal recognizer instead of the
+  ordinary OCR path. When that recognizer rectifies nothing it returned zero lines, and the block reached the
+  caller with `Text: null` — so every word printed on the stamp was silently dropped from
+  `AnalyzeDocumentAsync`, even though the region itself was detected confidently. On the bundled `seal.png`
+  the region scores 0.96 and came back empty, while plain OCR over the same pixels reads 发票专用章 and
+  吗繁物. The seal branch now falls back to ordinary OCR over the same crop when the seal recognizer yields
+  no lines, which costs one extra pass only in that case and can only add text where there was none. That
+  fixture now returns "首页 / 发票专用章 / 吗繁物". This supersedes the second entry under "Known issues" in
+  2.0.3; the curved-text recognizer itself is still the weaker path and is unchanged here.
+
 ## [2.0.3] - 2026-09-01
 
 ### Fixed
