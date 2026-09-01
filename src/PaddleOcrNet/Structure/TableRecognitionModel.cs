@@ -19,13 +19,12 @@ public enum TableRecognitionModel
     /// <i>wireless</i> (borderless), then the matching SLANeXt structure model (512×512) recovers the grid.
     /// Downloads three extra models on first use.
     /// <para>
-    /// <b>Known issue — prefer <see cref="SlanetPlus"/>.</b> The cell boxes this path decodes come out far
-    /// too tall and a large share of them clamp to the bottom edge of the crop, so OCR lines are matched into
-    /// the wrong cells: on the bundled 16×6 fixture the mean cell is ~2.5× the true row height and 47 of 96
-    /// cells clamp, which scrambles the recovered text even though the row/column <i>structure</i> decodes
-    /// correctly. The location head evidently does not use the same coordinate convention as SLANet_plus,
-    /// which this recognizer's rescale assumes. Until that is corrected, <see cref="SlanetPlus"/> is both the
-    /// default and the accurate option.
+    /// <b>Still less accurate than <see cref="SlanetPlus"/>; prefer the default.</b> SLANeXt's location head
+    /// is content-normalized rather than canvas-normalized, which 2.0.4 corrects — that halved the damage
+    /// (on the bundled 16×6 fixture, empty cells fell from 54 to 33; on the 4-row fixture, from 8 to 4). A
+    /// residual error remains: the fit against SLANet_plus's verified boxes explains only ~89% of the
+    /// variance, so scale was not the whole story, and cell text is still misplaced on both fixtures.
+    /// <see cref="SlanetPlus"/> places every value correctly on the same inputs and stays the default.
     /// </para>
     /// </summary>
     SlaNeXt,

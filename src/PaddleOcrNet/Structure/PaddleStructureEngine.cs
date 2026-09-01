@@ -466,8 +466,9 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
 
         const int slanextInputSize = 512;
         var classifier = new TableClassifier(clsSession);
-        var wired = new SlanetTableRecognizer(wiredSession, vocab, slanextInputSize);
-        var wireless = new SlanetTableRecognizer(wirelessSession, vocab, slanextInputSize);
+        // SLANeXt's location head is content-normalized, unlike SLANet_plus's canvas-normalized one.
+        var wired = new SlanetTableRecognizer(wiredSession, vocab, slanextInputSize, contentNormalizedBoxes: true);
+        var wireless = new SlanetTableRecognizer(wirelessSession, vocab, slanextInputSize, contentNormalizedBoxes: true);
         _logger?.LogInformation("Table-structure recognizer loaded (SLANeXt v2: table_cls + wired + wireless).");
         return new SlaNeXtTableRouter(classifier, wired, wireless);
     }

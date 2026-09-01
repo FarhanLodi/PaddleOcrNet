@@ -243,7 +243,7 @@ share across threads. Call `WarmUp(...)` to pre-load models off the request path
 | **Offline / air-gapped** | Pre-seed the cache (or a mirror) and run fully offline; downloads are SHA-256 verified. |
 | **Throughput** | `BatchSize`, `MaxDegreeOfParallelism`, and reading-order / paragraph grouping via `RecognitionOptions`. |
 | **Input limits** | Built-in max-pixel / PDF page guards against decompression bombs. |
-| **Table model** | `StructureOptions.TableModel` — keep the default `SlanetPlus`. `SlaNeXt` currently decodes over-tall cell boxes and misplaces cell text (see CHANGELOG "Known issues"). |
+| **Table model** | `StructureOptions.TableModel` — keep the default `SlanetPlus`. `SlaNeXt` improved in 2.0.4 but still misplaces some cell text (see CHANGELOG). |
 | **Layout model** | `StructureOptions.LayoutModel` — `RtDetrL` (default, PP-DocLayoutV3, 25 classes, most accurate) or `PicoDetS` / `PicoDetM` (PP-DocLayout-S/M, far smaller and faster, fewer regions). |
 | **Layout threshold** | `StructureOptions.LayoutScoreThreshold` — confidence floor for layout regions, default `0.5`. Lower it to keep regions the detector is unsure about, raise it to keep only confident ones. |
 | **Layout clean-up** | Near-duplicate regions are collapsed by default (`FilterOverlappingRegions`); `LayoutNms`, `LayoutUnclipRatio` and `LayoutMergeMode` add optional suppression, box growth and nested-region resolution. |

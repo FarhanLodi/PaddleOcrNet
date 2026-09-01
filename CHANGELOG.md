@@ -18,6 +18,18 @@ All notable changes to PaddleOcrNet are documented here. The format is based on
   no lines, which costs one extra pass only in that case and can only add text where there was none. That
   fixture now returns "首页 / 发票专用章 / 吗繁物". This supersedes the second entry under "Known issues" in
   2.0.3; the curved-text recognizer itself is still the weaker path and is unchanged here.
+- **`TableRecognitionModel.SlaNeXt` decoded its cell boxes with the wrong coordinate convention.** The
+  location head is normalized against the resized *content*, while SLANet_plus normalizes against the padded
+  *canvas* — and the recognizer applied the canvas formula to both. That inflated every SLANeXt y by
+  `max(origW, origH) / origH`, so cells swallowed the rows beneath them and the rest clamped to the bottom
+  edge. Measured against SLANet_plus's verified boxes on the 550×345 fixture the regression is
+  `y_slanext = 1.576 · y_slanet` against an expected 550/345 = 1.594; on the 551×132 fixture 24 of 26 boxes
+  had overflowed. The convention is now a per-model property, so the two SLANeXt legs rescale x by `origW`
+  and y by `origH`. Empty cells fell from 54 to 33 on the 16×6 fixture and from 8 to 4 on the 4-row one.
+  **This is an improvement, not a cure:** the fit explains only ~89% of the variance, so a residual error
+  remains and `SlaNeXt` still misplaces cell text. **`SlanetPlus` remains the default and the accurate
+  option** — it is untouched by this change and still places every value correctly. Partially supersedes the
+  first entry under "Known issues" in 2.0.3.
 
 ## [2.0.3] - 2026-09-01
 

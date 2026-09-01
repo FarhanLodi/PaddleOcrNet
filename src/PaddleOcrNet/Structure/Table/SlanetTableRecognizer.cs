@@ -45,6 +45,21 @@ internal sealed class SlanetTableRecognizer : ITableRecognizer
     private readonly int _inputSize;
 
     /// <summary>
+    /// Whether the location head's [0,1] coordinates are relative to the <b>content</b> (the resized image
+    /// that sits in the top-left of the padded square) rather than to the whole padded canvas.
+    /// <para>
+    /// SLANet_plus normalizes against the canvas, so both axes rescale by <c>inputSize / ratio</c> —
+    /// <c>max(origW, origH)</c>. SLANeXt normalizes against the content, so x rescales by
+    /// <c>origW</c> and y by <c>origH</c>. Feeding SLANeXt through the canvas formula inflates every y by
+    /// <c>max(origW, origH) / origH</c>; measured against SLANet_plus's (verified) boxes on a 550×345
+    /// fixture the regression is <c>y_slanext = 1.576 · y_slanet</c> against an expected 550/345 = 1.594,
+    /// and on a 551×132 fixture 24 of 26 boxes overflowed and clamped to the bottom edge. Both axes agree
+    /// on a landscape crop (<c>origW == max</c>), which is why only the vertical error was visible.
+    /// </para>
+    /// </summary>
+    private readonly bool _contentNormalizedBoxes;
+
+    /// <summary>
     /// ImageNet per-channel mean (RGB order), the SLANet normalization the model was trained with.
     /// </summary>
     private static readonly float[] Mean = { 0.485f, 0.456f, 0.406f };
@@ -147,11 +162,21 @@ internal sealed class SlanetTableRecognizer : ITableRecognizer
     /// The square input edge the model expects: <b>488</b> for SLANet_plus (the default), <b>512</b> for
     /// SLANeXt wired/wireless.
     /// </param>
-    public SlanetTableRecognizer(InferenceSession session, IReadOnlyList<string> structureVocab, int inputSize = 488)
+    /// <param name="contentNormalizedBoxes">
+    /// <c>true</c> when the location head's [0,1] coordinates are relative to the resized content rather than
+    /// the padded canvas — <b>SLANeXt</b>. Leave <c>false</c> for SLANet_plus. See
+    /// <see cref="_contentNormalizedBoxes"/> for the measurements behind this.
+    /// </param>
+    public SlanetTableRecognizer(
+        InferenceSession session,
+        IReadOnlyList<string> structureVocab,
+        int inputSize = 488,
+        bool contentNormalizedBoxes = false)
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
         ArgumentNullException.ThrowIfNull(structureVocab);
         _inputSize = inputSize > 0 ? inputSize : 488;
+        _contentNormalizedBoxes = contentNormalizedBoxes;
 
         _inputName = _session.InputMetadata.Keys.First();
         (_locOutputName, _probOutputName) = ResolveOutputNames(_session);
@@ -350,7 +375,9 @@ internal sealed class SlanetTableRecognizer : ITableRecognizer
     /// (x1,y1,x2,y2,x3,y3,x4,y4) in [0,1], NOT a 2-corner rectangle. PaddleOCR's <c>_bbox_decode</c> scales
     /// the x components by <c>pad_w / ratio_w</c> and the y components by <c>pad_h / ratio_h</c>; here
     /// <c>pad_w == pad_h == 488</c> and <c>ratio_w == ratio_h == ratio</c>, so every coordinate is scaled by
-    /// <c>488 / ratio == max(origH, origW)</c>, landing it back in the crop's pixels. Because the rest of the
+    /// <c>488 / ratio == max(origH, origW)</c>, landing it back in the crop's pixels. That holds for the
+    /// canvas-normalized SLANet_plus head; SLANeXt normalizes against the content instead and rescales by
+    /// <c>origW</c>/<c>origH</c> (see <see cref="_contentNormalizedBoxes"/>). Because the rest of the
     /// pipeline (OCR↔cell matching, <see cref="TableResult.CellBounds"/>) is axis-aligned, we reduce the
     /// polygon to its tight AABB <c>[minX,minY,maxX,maxY]</c> over the four corners. <i>Approximation:</i> for
     /// a skewed cell this AABB is slightly larger than the quad, but the predicted polygons are near-axis-
@@ -381,9 +408,12 @@ internal sealed class SlanetTableRecognizer : ITableRecognizer
         float[] probs = probTensor.ToArray();
         float[] loc = locTensor.ToArray();
 
-        // Every coordinate is scaled by (inputSize / ratio) == max(origH, origW). Guard against a zero ratio.
+        // Canvas-normalized heads (SLANet_plus) scale both axes by (inputSize / ratio) == max(origH, origW);
+        // content-normalized heads (SLANeXt) scale x by origW and y by origH. See _contentNormalizedBoxes.
+        // Guard against a zero ratio.
         float safeRatio = ratio > 0 ? ratio : 1f;
-        float scale = _inputSize / safeRatio;
+        float scaleX = _contentNormalizedBoxes ? origW : _inputSize / safeRatio;
+        float scaleY = _contentNormalizedBoxes ? origH : _inputSize / safeRatio;
 
         var tokens = new List<string>(steps);
         var boxes = new List<float[]>();
@@ -430,8 +460,8 @@ internal sealed class SlanetTableRecognizer : ITableRecognizer
                 // Walk the polygon as (x,y) pairs: 4 corners for the [.,.,8] head, 2 for a [.,.,4] fallback.
                 for (int k = 0; k + 1 < locStride; k += 2)
                 {
-                    float px = loc[lBase + k] * scale;
-                    float py = loc[lBase + k + 1] * scale;
+                    float px = loc[lBase + k] * scaleX;
+                    float py = loc[lBase + k + 1] * scaleY;
                     if (px < minX) minX = px;
                     if (py < minY) minY = py;
                     if (px > maxX) maxX = px;
