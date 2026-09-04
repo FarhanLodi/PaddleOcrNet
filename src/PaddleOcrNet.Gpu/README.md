@@ -112,6 +112,60 @@ If CUDA is unavailable at runtime — no driver, missing libraries, no compatibl
 selection logs the reason and **falls back to CPU** rather than throwing. `OcrResult.UsedGpu` reports
 what was actually used, so a silent fallback is still observable.
 
+## Diagnosing a CPU fallback
+
+When OCR runs on CPU and you expected a GPU, ask the service what happened:
+
+```csharp
+await using var ocr = new PaddleOcrService();
+Console.WriteLine(ocr.GetRuntimeInfo());
+```
+
+```
+PaddleOcrNet runtime:
+  ONNX Runtime:        1.27.0
+  Available providers: TensorrtExecutionProvider, CUDAExecutionProvider, CPUExecutionProvider
+  Requested provider:  Auto
+  Resolved provider:   Cuda
+  Active provider:     Cpu
+  GPU probe:           NVIDIA GPU detected
+  Hint:                ...
+```
+
+Read it top-down. **Available providers** is fixed at build time by the ONNX Runtime package you
+installed: if `CUDAExecutionProvider` is not in that list, no runtime setting can bring it back.
+**Resolved** is the provider PaddleOcrNet attempted and **Active** is what it is really running on; when
+those differ, the accelerator failed to attach and **Hint** says why. The same text is on
+`PaddleOcrService.GpuAccelerationHint`, and an attach failure is written once to standard error even when
+no `ILogger` is configured.
+
+### The native-asset conflict (fixed in this package)
+
+Before the fix, `PaddleOcrNet.Gpu` could never reach the GPU on any machine. `PaddleOcrNet` depends on
+`Microsoft.ML.OnnxRuntime` (the CPU native package) and this package adds
+`Microsoft.ML.OnnxRuntime.Gpu`, so both ended up in the graph. They ship the *same* asset path —
+`runtimes/win-x64/native/onnxruntime.dll`, `runtimes/linux-x64/native/libonnxruntime.so` — and NuGet
+gives that single slot to exactly one of them: the CPU package. Applications got the 246 MB
+`onnxruntime_providers_cuda.dll` deployed next to a core runtime with no CUDA support compiled in, which
+never loads it. `GetAvailableProviders()` reported only `CPUExecutionProvider` and `AzureExecutionProvider`,
+`Auto` resolved to CPU, and — because no provider was ever *attempted* — nothing threw and nothing logged.
+
+This package now carries an MSBuild targets file that copies the GPU build's core runtime over the CPU
+one after build and after publish, so the CUDA provider has a runtime that can load it. It needs no
+change in your project. To opt out (for instance to deliberately ship the CPU runtime), set:
+
+```xml
+<PropertyGroup>
+  <PaddleOcrNetGpuPreferGpuRuntime>false</PaddleOcrNetGpuPreferGpuRuntime>
+</PropertyGroup>
+```
+
+On an older version, the equivalent manual fix is to keep the CPU package's natives out of the build:
+
+```xml
+<PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.27.0" ExcludeAssets="native" />
+```
+
 ## Notes
 
 - Install either `PaddleOcrNet` **or** `PaddleOcrNet.Gpu`, not both — this package already references the

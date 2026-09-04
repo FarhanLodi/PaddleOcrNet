@@ -69,7 +69,8 @@ public class StructureMarkdownTests
         int docTitle = md.IndexOf("My Document", System.StringComparison.Ordinal);
         int intro = md.IndexOf("Intro paragraph.", System.StringComparison.Ordinal);
         int heading = md.IndexOf("Results", System.StringComparison.Ordinal);
-        int table = md.IndexOf("<table>", System.StringComparison.Ordinal);
+        // Pretty tables are on by default, so the emitted tag carries border="1".
+        int table = md.IndexOf("<table border=\"1\">", System.StringComparison.Ordinal);
         int formula = md.IndexOf("E = mc^2", System.StringComparison.Ordinal);
 
         Assert.All(new[] { docTitle, intro, heading, table, formula }, i => Assert.True(i >= 0));
@@ -93,11 +94,14 @@ public class StructureMarkdownTests
     [Fact]
     public void ToMarkdown_emits_table_html_and_formula_dollar_block()
     {
+        // Default rendering prettifies the table tag; PrettyTables = false restores the verbatim fragment.
         var md = Sample().ToMarkdown();
-
-        Assert.Contains("<table><tr><td>1</td></tr></table>", md);
+        Assert.Contains("<table border=\"1\"><tr><td>1</td></tr></table>", md);
         Assert.Contains("$$", md);
         Assert.Contains("E = mc^2", md);
+
+        var plain = Sample().ToMarkdown(new MarkdownRenderOptions { PrettyTables = false });
+        Assert.Contains("<table><tr><td>1</td></tr></table>", plain);
     }
 
     [Fact]

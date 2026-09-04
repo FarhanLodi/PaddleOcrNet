@@ -26,7 +26,8 @@ public class LayoutPostProcessingTests
         new(type, new OcrBoundingBox(x1, y1, x2, y2), score, classId, label, orderIndex);
 
     /// <summary>Options with every optional pass off, so a test exercises one behaviour at a time.</summary>
-    private static StructureOptions Bare => StructureOptions.Default with { FilterOverlappingRegions = false };
+    private static StructureOptions Bare =>
+        StructureOptions.Default with { FilterOverlappingRegions = false, LayoutNms = false };
 
     private static IReadOnlyList<LayoutRegion> Run(
         IEnumerable<LayoutRegion> regions, StructureOptions options, int width = 1000, int height = 1400) =>
@@ -51,7 +52,7 @@ public class LayoutPostProcessingTests
     [Fact]
     public void Overlap_filter_keeps_regions_that_only_touch()
     {
-        // 20px of vertical overlap on 100px-tall boxes — nowhere near the 70% bar.
+        // 20px of vertical overlap on 100px-tall boxes — nowhere near the 50% bar.
         var upper = Region(10, 10, 210, 110);
         var lower = Region(10, 90, 210, 190);
 
@@ -66,45 +67,52 @@ public class LayoutPostProcessingTests
         var large = Region(10, 10, 210, 110);
         var small = Region(20, 20, 200, 100);
 
-        var kept = Run(
-            new[] { large, small }, StructureOptions.Default with { FilterOverlappingRegions = false });
+        // NMS (also on by default) would suppress the same duplicate, so it is disabled too to show the
+        // overlap-filter knob acting on its own.
+        var kept = Run(new[] { large, small }, Bare);
 
         Assert.Equal(2, kept.Count);
     }
 
     [Fact]
-    public void Overlap_filter_drops_reference_markers_but_keeps_reference_content()
+    public void Reference_regions_get_no_special_treatment()
     {
+        // The pre-parity port unconditionally dropped small "reference" markers; PaddleX's
+        // remove_overlap_blocks has no such rule, so disjoint reference regions all survive.
         var marker = Region(10, 10, 60, 30, StructureBlockType.Reference, label: "reference");
         var content = Region(10, 200, 400, 300, StructureBlockType.Reference, label: "reference_content");
 
         var kept = Run(new[] { marker, content }, StructureOptions.Default);
 
-        Assert.Equal(new[] { content }, kept);
+        Assert.Equal(new[] { marker, content }, kept);
     }
 
     [Fact]
-    public void Overlap_filter_drops_slivers_under_six_pixels()
+    public void Slim_regions_survive_the_overlap_filter()
     {
+        // The old 6px sliver rule is gone (no PaddleX counterpart): a 4px-wide separator-like region that
+        // overlaps nothing is kept.
         var sliver = Region(10, 10, 14, 300);   // 4px wide
         var normal = Region(100, 10, 400, 300);
 
         var kept = Run(new[] { sliver, normal }, StructureOptions.Default);
 
-        Assert.Equal(new[] { normal }, kept);
+        Assert.Equal(new[] { sliver, normal }, kept);
     }
 
     [Fact]
-    public void Overlap_filter_leaves_a_figure_overlapping_a_chart_alone()
+    public void Overlap_filter_drops_the_image_of_a_mixed_pair_regardless_of_size()
     {
-        // image / table / seal / chart legitimately nest in one another, so a differently-labelled pair drawn
-        // from that set survives even at full overlap.
+        // remove_overlap_blocks' one label rule: when exactly one of an overlapping pair is 'image', the
+        // image loses even though it is the LARGER region here (the generic rule would drop the table).
+        // Geometry: intersection is 210x280 = 58800 px², 52.5% of the smaller (table) area — over the 0.5
+        // bar but under the 90% containment bar, so the per-class merge stage leaves the pair alone.
         var image = Region(10, 10, 410, 310, StructureBlockType.Figure, label: "image");
-        var chart = Region(20, 20, 400, 300, StructureBlockType.Chart, label: "chart");
+        var table = Region(200, 20, 600, 300, StructureBlockType.Table, label: "table");
 
-        var kept = Run(new[] { image, chart }, StructureOptions.Default);
+        var kept = Run(new[] { image, table }, StructureOptions.Default);
 
-        Assert.Equal(2, kept.Count);
+        Assert.Equal(new[] { table }, kept);
     }
 
     [Fact]
@@ -119,17 +127,17 @@ public class LayoutPostProcessingTests
     }
 
     [Fact]
-    public void Overlap_filter_absorbs_an_inline_formula_into_its_paragraph()
+    public void Overlap_filter_treats_inline_and_display_formulas_alike()
     {
-        // 60% of the formula sits inside the paragraph: under the 70% duplicate bar, over the 50% one that
-        // applies to inline formulas. An identical region labelled display_formula therefore survives, which
-        // is what makes this a test of the inline rule rather than of the duplicate rule.
+        // The old port gave inline_formula a lower absorption bar than display_formula; PaddleX's
+        // remove_overlap_blocks knows no formula labels, so at 60% overlap both variants lose to the
+        // (larger) paragraph under the ordinary smaller-region rule.
         var paragraph = Region(10, 10, 410, 110, StructureBlockType.Text, label: "text");
         var inline = Region(350, 20, 450, 100, StructureBlockType.Formula, label: "inline_formula");
         var display = Region(350, 20, 450, 100, StructureBlockType.Formula, label: "display_formula");
 
         Assert.Equal(new[] { paragraph }, Run(new[] { paragraph, inline }, StructureOptions.Default));
-        Assert.Equal(2, Run(new[] { paragraph, display }, StructureOptions.Default).Count);
+        Assert.Equal(new[] { paragraph }, Run(new[] { paragraph, display }, StructureOptions.Default));
     }
 
     // -----------------------------------------------------------------------------------------------------
@@ -187,19 +195,20 @@ public class LayoutPostProcessingTests
     }
 
     // -----------------------------------------------------------------------------------------------------
-    // NMS (opt-in)
+    // NMS (on by default, PP-StructureV3 layout_nms: True)
     // -----------------------------------------------------------------------------------------------------
 
     [Fact]
-    public void Nms_is_off_by_default_and_suppresses_the_lower_score_when_enabled()
+    public void Nms_is_on_by_default_and_suppresses_the_lower_score()
     {
         var strong = Region(10, 10, 210, 110, score: 0.9f, classId: 3);
         var weak = Region(20, 20, 220, 120, score: 0.6f, classId: 3);   // 0.75 IoU, same class
 
-        Assert.Equal(2, Run(new[] { strong, weak }, Bare).Count);
-
-        var kept = Run(new[] { strong, weak }, Bare with { LayoutNms = true });
+        var kept = Run(
+            new[] { strong, weak }, StructureOptions.Default with { FilterOverlappingRegions = false });
         Assert.Equal(new[] { strong }, kept);
+
+        Assert.Equal(2, Run(new[] { strong, weak }, Bare).Count);   // Bare turns it off
     }
 
     [Fact]
@@ -330,15 +339,18 @@ public class LayoutPostProcessingTests
     // -----------------------------------------------------------------------------------------------------
 
     [Fact]
-    public void Default_options_enable_only_the_overlap_filter()
+    public void Default_options_match_the_PP_StructureV3_pipeline_config()
     {
         var options = StructureOptions.Default;
 
         Assert.True(options.FilterOverlappingRegions);
-        Assert.False(options.LayoutNms);
+        Assert.True(options.LayoutNms);                             // layout_nms: True
         Assert.Null(options.LayoutUnclipRatio);
-        Assert.Equal(LayoutMergeMode.None, options.LayoutMergeMode);
-        Assert.Equal(LayoutReadingOrder.Auto, options.ReadingOrder);
+        Assert.Equal(LayoutMergeMode.None, options.LayoutMergeMode); // per-class defaults apply
+        Assert.Null(options.LayoutClassThresholds);                  // per-class defaults apply
+        Assert.Null(options.LayoutClassMergeModes);
+        Assert.Equal(LayoutReadingOrder.Auto, options.ReadingOrder); // resolves to XY-Cut++
+        Assert.True(options.UseTableOrientationClassification);
     }
 
     [Fact]
@@ -359,5 +371,133 @@ public class LayoutPostProcessingTests
     public void An_empty_region_list_is_returned_as_is()
     {
         Assert.Empty(Run(Array.Empty<LayoutRegion>(), StructureOptions.Default));
+    }
+
+    // -----------------------------------------------------------------------------------------------------
+    // per-class score thresholds (PP-StructureV3 threshold dict)
+    // -----------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void Per_class_thresholds_keep_low_scoring_titles_but_drop_low_scoring_text()
+    {
+        // Default floors: paragraph_title 0.3, text 0.4 — a 0.35 score passes the first and fails the
+        // second (strictly-greater comparison, like PaddleX's dict-threshold branch).
+        var title = Region(10, 10, 200, 60, StructureBlockType.Title, score: 0.35f, label: "paragraph_title");
+        var text = Region(10, 100, 200, 160, score: 0.35f, label: "text");
+
+        var kept = Run(new[] { title, text }, Bare);
+
+        Assert.Equal(new[] { title }, kept);
+    }
+
+    [Fact]
+    public void Custom_class_thresholds_replace_the_defaults_entirely()
+    {
+        // A user dictionary REPLACES the built-in per-class floors: text drops to 0.1, while
+        // paragraph_title (absent from the dictionary) falls back to the global 0.5.
+        var title = Region(10, 10, 200, 60, StructureBlockType.Title, score: 0.35f, label: "paragraph_title");
+        var text = Region(10, 100, 200, 160, score: 0.35f, label: "text");
+        var options = Bare with
+        {
+            LayoutClassThresholds = new Dictionary<string, float> { ["text"] = 0.1f },
+        };
+
+        var kept = Run(new[] { title, text }, options);
+
+        Assert.Equal(new[] { text }, kept);
+    }
+
+    [Fact]
+    public void An_empty_threshold_dictionary_disables_the_per_class_defaults()
+    {
+        var title = Region(10, 10, 200, 60, StructureBlockType.Title, score: 0.35f, label: "paragraph_title");
+        var options = Bare with { LayoutClassThresholds = new Dictionary<string, float>() };
+
+        Assert.Empty(Run(new[] { title }, options));                          // falls to the global 0.5
+        Assert.Equal(0.5f, LayoutPostProcessor.DetectionScoreFloor(options)); // and the detector floor too
+    }
+
+    [Fact]
+    public void Detection_score_floor_is_the_minimum_of_global_and_per_class_floors()
+    {
+        // With the built-in defaults active the lowest floor is paragraph_title/formula at 0.3, so the
+        // detector must be fed 0.3 or candidates in the 0.3–0.5 band never reach the per-class filter.
+        Assert.Equal(0.3f, LayoutPostProcessor.DetectionScoreFloor(StructureOptions.Default));
+    }
+
+    // -----------------------------------------------------------------------------------------------------
+    // overlap-filter 0.5 bar (strict) and the exact-tie drop
+    // -----------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void Overlap_filter_bar_is_strictly_greater_than_half_the_smaller_area()
+    {
+        var options = StructureOptions.Default with { LayoutNms = false };
+        var a = Region(0, 0, 100, 100);
+
+        // Exactly 50% of the smaller region: NOT dropped (python: overlap_ratio > threshold).
+        var half = Region(50, 0, 150, 100);
+        Assert.Equal(2, Run(new[] { a, half }, options).Count);
+
+        // 51%: dropped — and on an exact area tie python drops the EARLIER block (area1 <= area2).
+        var justOver = Region(49, 0, 149, 100);
+        Assert.Equal(new[] { justOver }, Run(new[] { a, justOver }, options));
+    }
+
+    // -----------------------------------------------------------------------------------------------------
+    // label post-fixes (pipeline_v2.py standardized_data)
+    // -----------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void A_footnote_above_the_lowest_text_block_is_relabelled_to_text()
+    {
+        var text = Region(100, 100, 900, 1000, label: "text");
+        var midFootnote = Region(100, 500, 900, 540, StructureBlockType.Footnote, label: "footnote");
+        var realFootnote = Region(100, 1100, 900, 1140, StructureBlockType.Footnote, label: "footnote");
+
+        var fixedUp = LayoutPostProcessor.ApplyLabelPostFixes(
+            new[] { text, midFootnote, realFootnote }, 1000, 1400);
+
+        Assert.Equal("text", fixedUp[1].RawLabel);
+        Assert.Equal(StructureBlockType.Text, fixedUp[1].Type);
+        // The footnote genuinely at the page bottom keeps its label.
+        Assert.Equal("footnote", fixedUp[2].RawLabel);
+        Assert.Equal(StructureBlockType.Footnote, fixedUp[2].Type);
+    }
+
+    [Fact]
+    public void A_lone_large_paragraph_title_is_promoted_to_doc_title()
+    {
+        // No doc_title on the page, exactly one paragraph_title, and its area (120000) exceeds 30% of the
+        // largest block's area (240000 * 0.3 = 72000): promoted.
+        var title = Region(100, 50, 900, 200, StructureBlockType.Title, label: "paragraph_title");
+        var text = Region(100, 300, 900, 600, label: "text");
+
+        var fixedUp = LayoutPostProcessor.ApplyLabelPostFixes(new[] { title, text }, 1000, 1400);
+
+        Assert.Equal("doc_title", fixedUp[0].RawLabel);
+        Assert.Equal(StructureBlockType.DocTitle, fixedUp[0].Type);
+    }
+
+    [Fact]
+    public void Title_promotion_requires_a_lone_large_title_and_no_existing_doc_title()
+    {
+        var bigTitle = Region(100, 50, 900, 200, StructureBlockType.Title, label: "paragraph_title");
+        var text = Region(100, 300, 900, 600, label: "text");
+
+        // Two paragraph_titles: neither is promoted (and the same instance comes back untouched).
+        var secondTitle = Region(100, 700, 900, 850, StructureBlockType.Title, label: "paragraph_title");
+        var twoTitles = new[] { bigTitle, secondTitle, text };
+        Assert.Same(twoTitles, LayoutPostProcessor.ApplyLabelPostFixes(twoTitles, 1000, 1400));
+
+        // An existing doc_title blocks the promotion.
+        var docTitle = Region(100, 0, 900, 40, StructureBlockType.DocTitle, label: "doc_title");
+        var withDocTitle = new[] { docTitle, bigTitle, text };
+        Assert.Same(withDocTitle, LayoutPostProcessor.ApplyLabelPostFixes(withDocTitle, 1000, 1400));
+
+        // A small title (area 24000 <= 72000) stays a paragraph_title.
+        var smallTitle = Region(100, 50, 500, 110, StructureBlockType.Title, label: "paragraph_title");
+        var withSmallTitle = new[] { smallTitle, text };
+        Assert.Same(withSmallTitle, LayoutPostProcessor.ApplyLabelPostFixes(withSmallTitle, 1000, 1400));
     }
 }

@@ -119,9 +119,10 @@ public sealed class AssetCapabilityTests : IClassFixture<AssetCapabilityTests.Se
 
         Skip.If(doc.Blocks.All(b => b.Type != StructureBlockType.Table), "layout found no table region.");
 
-        // Markdown: the table, and none of the recognizer's <html>/<body> wrapper.
+        // Markdown: the table (pretty tables emit border="1" by default), and none of the recognizer's
+        // <html>/<body> wrapper.
         var markdown = doc.ToMarkdown();
-        Assert.Contains("<table>", markdown, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("<table border=\"1\">", markdown, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("<html>", markdown, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("<body>", markdown, StringComparison.OrdinalIgnoreCase);
 

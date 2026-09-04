@@ -1,4 +1,5 @@
 using PaddleOcrNet.Internal;
+using PaddleOcrNet.Models;
 
 namespace PaddleOcrNet.Services;
 
@@ -39,6 +40,50 @@ public sealed class PaddleOcrServiceOptions
     public OcrExecutionProvider ExecutionProvider { get; set; } = OcrExecutionProvider.Auto;
 
     /// <summary>
+    /// Zero-based accelerator device index for the CUDA / DirectML execution providers — the equivalent of
+    /// Python's <c>device="gpu:1"</c>. Ignored on CPU. Default 0 (the first GPU).
+    /// </summary>
+    public int DeviceId { get; set; }
+
+    /// <summary>
+    /// Which PP-OCRv5 <b>detection</b> network to run. <see cref="OcrModelVariant.Server"/> selects
+    /// <c>PP-OCRv5_server_det</c>: noticeably better detection accuracy at the cost of a bigger download
+    /// and slower inference. Default <see cref="OcrModelVariant.Mobile"/>.
+    /// </summary>
+    public OcrModelVariant DetectionModel { get; set; } = OcrModelVariant.Mobile;
+
+    /// <summary>
+    /// Which PP-OCRv5 <b>recognition</b> network to run for the default Chinese/English/Japanese pack.
+    /// <see cref="OcrModelVariant.Server"/> selects <c>PP-OCRv5_server_rec</c>: better accuracy, bigger
+    /// download. The per-script language packs (latin, cyrillic, arabic, …) have no published server
+    /// variant and always stay on their mobile network (an informational log line notes this once).
+    /// Default <see cref="OcrModelVariant.Mobile"/>.
+    /// </summary>
+    public OcrModelVariant RecognitionModel { get; set; } = OcrModelVariant.Mobile;
+
+    /// <summary>
+    /// Path to a local detection ONNX file to load <b>instead of</b> the built-in registry models —
+    /// no download happens and no checksum is verified (the file is trusted as-is). Overrides
+    /// <see cref="DetectionModel"/>. Null (the default) uses the registry model.
+    /// </summary>
+    public string? DetectionModelPath { get; set; }
+
+    /// <summary>
+    /// Path to a local recognition ONNX file to load for the <b>default</b> (ch/en/ja) recognizer pack —
+    /// no download happens and no checksum is verified. Overrides <see cref="RecognitionModel"/> for that
+    /// pack; per-script packs are unaffected. Pair it with <see cref="RecognitionDictionaryPath"/> when the
+    /// model was trained on a custom character set. Null (the default) uses the registry model.
+    /// </summary>
+    public string? RecognitionModelPath { get; set; }
+
+    /// <summary>
+    /// Path to a local character dictionary (one token per line) matching
+    /// <see cref="RecognitionModelPath"/>. Null (the default) keeps the default pack's published
+    /// <c>ppocrv5_dict.txt</c>.
+    /// </summary>
+    public string? RecognitionDictionaryPath { get; set; }
+
+    /// <summary>
     /// ONNX Runtime intra-op thread count (parallelism inside a single model run). Null = runtime
     /// default. Set to a small number to cap CPU use in busy multi-tenant servers.
     /// </summary>
@@ -56,8 +101,10 @@ public sealed class PaddleOcrServiceOptions
 
     /// <summary>
     /// Run the text-line orientation classifier (180° flip detection) before recognition. PaddleOCR's
-    /// <c>use_textline_orientation</c>. Default false; the classifier model is then never loaded. Can also
-    /// be requested per call via <see cref="PaddleOcrNet.Models.RecognitionOptions.UseTextLineOrientation"/>.
+    /// <c>use_textline_orientation</c>. Default false at the service level, but note that the per-call
+    /// <see cref="PaddleOcrNet.Models.RecognitionOptions.UseTextLineOrientation"/> defaults to true (the
+    /// Python pipeline default), so the classifier runs for default recognition calls regardless; a call
+    /// must set it to false to skip the classifier.
     /// </summary>
     public bool UseTextLineOrientation { get; set; }
 
@@ -87,6 +134,12 @@ public sealed class PaddleOcrServiceOptions
         {
             ModelCachePath = string.IsNullOrWhiteSpace(ModelCachePath) ? null : Path.GetFullPath(ModelCachePath),
             ExecutionProvider = provider,
+            DeviceId = DeviceId,
+            DetectionModel = DetectionModel,
+            RecognitionModel = RecognitionModel,
+            DetectionModelPath = string.IsNullOrWhiteSpace(DetectionModelPath) ? null : Path.GetFullPath(DetectionModelPath),
+            RecognitionModelPath = string.IsNullOrWhiteSpace(RecognitionModelPath) ? null : Path.GetFullPath(RecognitionModelPath),
+            RecognitionDictionaryPath = string.IsNullOrWhiteSpace(RecognitionDictionaryPath) ? null : Path.GetFullPath(RecognitionDictionaryPath),
             IntraOpNumThreads = IntraOpNumThreads,
             InterOpNumThreads = InterOpNumThreads,
             Download = Download,

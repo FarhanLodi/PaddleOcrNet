@@ -14,7 +14,7 @@
   <a href="https://www.nuget.org/packages/PaddleOcrNet"><img src="https://img.shields.io/nuget/v/PaddleOcrNet.svg?label=NuGet&color=004880" alt="NuGet"/></a>
   <a href="https://www.nuget.org/packages/PaddleOcrNet"><img src="https://img.shields.io/nuget/dt/PaddleOcrNet.svg?label=Downloads&color=004880" alt="Downloads"/></a>
   <img src="https://img.shields.io/badge/models-PP--OCRv5%20%2B%20PP--StructureV3-ff6f00" alt="PP-OCRv5 + PP-StructureV3"/>
-  <img src="https://img.shields.io/badge/languages-80%2B-1f6feb" alt="80+ languages"/>
+  <img src="https://img.shields.io/badge/languages-100%2B-1f6feb" alt="100+ languages"/>
   <img src="https://img.shields.io/badge/.NET-10.0-512BD4" alt=".NET 10"/>
   <img src="https://img.shields.io/badge/AOT-ready-2ea44f" alt="AOT ready"/>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"/></a>
@@ -33,7 +33,7 @@ in-process, offline-capable, and trim/AOT-friendly.
 
 - **High-accuracy text OCR** — DB detection + SVTR recognition (PP-OCRv5) handles dense invoices, forms,
   receipts, handwriting, rotated scans, and curved text.
-- **80+ languages** across 12 script families, with one shared detector and per-script recognizer packs.
+- **100+ languages** across 12 script families, with one shared detector and per-script recognizer packs.
 - **Automatic language detection** — pass `OcrLanguage.Auto` and PaddleOcrNet identifies the script and
   pulls the right model on demand (Python PaddleOCR requires you to name the language up front).
 - **Document understanding** — `AnalyzeDocumentAsync` returns layout regions, reading order, tables as
@@ -110,9 +110,9 @@ Console.WriteLine(string.Join(", ", r.DetectedLanguages)); // e.g. "arabic, lati
 
 ## Document structure analysis
 
-`AnalyzeDocumentAsync` runs the PP-StructureV3 pipeline — orientation → layout detection → per-region
-OCR / table / formula → reading-order reconstruction — and returns a structured document you can export
-straight to Markdown or JSON.
+`AnalyzeDocumentAsync` runs the PP-StructureV3 pipeline — orientation → layout detection → formula
+recognition → whole-page OCR matched into the layout blocks → table recognition → reading-order
+reconstruction — and returns a structured document you can export straight to Markdown or JSON.
 
 ```csharp
 using PaddleOcrNet.Models;
@@ -143,12 +143,18 @@ string json     = doc.ToJson();      // structured blocks with bounding boxes + 
 | Table recognition | SLANet_plus (default) · SLANeXt v2 | `<table>` HTML with cell text matched into the grid |
 | Formula recognition | LaTeX-OCR | LaTeX string |
 | Orientation / unwarp | PP-LCNet · UVDoc | de-skewed, de-warped page |
-| Reading order | XY-cut | multi-column document order |
+| Reading order | XY-Cut++ (`xycut_enhanced`) | multi-column document order |
+
+The engine follows Python PP-StructureV3's whole-page design: the page is OCR'd **once**, the lines are
+matched into the layout blocks (lines straddling two blocks are split and re-recognized), formulas are
+recognized first and masked out of the page so the text recognizer never reads half an equation, and
+sideways tables are detected and uprighted before structure recognition.
 
 For tables, set `StructureOptions.TableModel = TableRecognitionModel.SlaNeXt` to use the PP-StructureV3 **v2**
-path: a `PP-LCNet` classifier decides wired (bordered) vs wireless (borderless) and runs the matching
-**SLANeXt** model — often more accurate on clearly bordered/borderless tables (downloads three small models on
-first use). The default, `SlanetPlus`, is a single end-to-end model.
+path: a `PP-LCNet` classifier decides wired (bordered) vs wireless (borderless), then runs **SLANeXt_wired**
+for bordered tables and **SLANet_plus** for borderless ones — the model pairing PP-StructureV3 itself ships
+(downloads two extra small models on first use). The default, `SlanetPlus`, is a single end-to-end model.
+Either way, recognized tables expose per-cell rectangles via `StructureBlock.CellBounds` alongside the HTML.
 
 ### Exports with embedded figures & native equations
 
@@ -180,16 +186,22 @@ enum; each value maps to one of the representative recognizer codes below:
 
 | Pack | Codes |
 | --- | --- |
-| Chinese / English / Japanese (default) | `ch` `zh` `en` `ja` |
-| Latin | `latin` `fr` `de` `es` `it` `pt` `nl` `pl` `tr` `vi` … |
-| Cyrillic | `cyrillic` `ru` `uk` `bg` `sr` `be` `mn` … |
-| Arabic | `arabic` `ar` `fa` `ur` `ug` |
+| Chinese / Japanese (default) | `ch` `zh` `ja` `japan` |
+| English (dedicated pack) | `en` |
+| Latin | `latin` `fr` `de` `es` `it` `pt` `nl` `pl` `tr` `vi` `fi` `ca` `eu` `gl` `lb` `rm` `qu` … |
+| Cyrillic | `cyrillic` `bg` `sr` `mn` `kk` `ky` `tg` `mk` `tt` `ba` `sah` … |
+| East-Slavic | `eslav` `ru` `uk` `be` (+ `ru_eslav` `uk_eslav` `be_eslav`) |
+| Arabic | `arabic` `ar` `fa` `ur` `ug` `ps` `sd` `bal` |
 | Devanagari | `devanagari` `hi` `mr` `ne` `sa` … |
 | Korean | `korean` `ko` |
-| Japanese (full) | `japan` |
 | Thai · Greek · Telugu · Tamil | `thai`/`th` · `greek`/`el` · `telugu`/`te` · `tamil`/`ta` |
 | Traditional Chinese | `chinese_cht` `cht` `zh_tra` |
-| East-Slavic | `eslav` `ru_eslav` `uk_eslav` `be_eslav` |
+
+Routing follows Python PaddleOCR: **English** gets its own small `en_PP-OCRv5` recognizer (not the shared
+ch/ja model), and **Russian, Ukrainian and Belarusian** are served by the **East-Slavic** (`eslav`) pack —
+a Cyrillic variant tuned for those languages — rather than the generic `cyrillic` pack (which still covers
+Bulgarian, Serbian, Mongolian, the Central-Asian Turkic languages, and more). Japanese shares the default
+recognizer's dictionary; upstream publishes no separate Japanese PP-OCRv5 model.
 
 Or pass **`OcrLanguage.Auto`** to detect the script automatically.
 
@@ -219,8 +231,9 @@ using PaddleOcrNet.Models;
 
 builder.Services.AddPaddleOcrNet(o =>
 {
-    o.UseTextLineOrientation = true;       // correct 180°-flipped lines
-    o.ModelCachePath         = "/var/cache/ocr";
+    o.ModelCachePath = "/var/cache/ocr";
+    // 180°-flip correction is on by default per call (RecognitionOptions.UseTextLineOrientation);
+    // set it to false on a call to skip the classifier.
 });
 
 // Readiness probe — Healthy once models for these languages are cached:
@@ -237,18 +250,121 @@ share across threads. Call `WarmUp(...)` to pre-load models off the request path
 
 | Concern | How |
 | --- | --- |
-| **GPU** | Add `PaddleOcrNet.Gpu` (CUDA 13.x); it is detected and used automatically, otherwise CPU. For CUDA 12, pin ONNX Runtime 1.26 in your project. |
+| **GPU** | Add `PaddleOcrNet.Gpu` (CUDA 13.x); it is detected and used automatically, otherwise CPU. For CUDA 12, pin ONNX Runtime 1.26 in your project. `DeviceId` picks the GPU on multi-GPU hosts. When OCR runs on CPU and you expected otherwise, see [GPU diagnostics](#gpu-diagnostics). |
+| **Model variant** | `DetectionModel` / `RecognitionModel` — `OcrModelVariant.Mobile` (default) or `Server` for the larger, more accurate PP-OCRv5 networks. See [Server models](#server-models). |
+| **Crop padding** | `RecognitionOptions.CropPadding` — white border in pixels added around every detected line before recognition (default `0`). A few pixels help when glyphs sit flush against the detected box. |
+| **Orientation handling** | `UseTextLineOrientation` / `UseDocOrientation` correct upside-down lines and pages (both on by default). The classifiers do misfire on upright text, so a verdict must clear `TextLineOrientationThreshold` (default `0.9`) and is then confirmed by `VerifyOrientationByRecognition` (default `true`), which recognizes the crop both ways and keeps the more confident reading. Set the threshold to `0` and the verification to `false` for raw PaddleX 3.x behaviour. |
 | **Model cache** | `%LOCALAPPDATA%` / `~/.local/share` by default; override via `ModelCachePath` or `PADDLEOCRNET_CACHE`. |
 | **Model host** | Defaults to the public Hugging Face repo; point at a private mirror via `PADDLEOCRNET_MODEL_BASE_URL` or `ModelDownloadOptions.BaseUrlOverride`. |
+| **Local models** | `DetectionModelPath` / `RecognitionModelPath` / `RecognitionDictionaryPath` load your own ONNX/dictionary files with no download at all. See [Local / offline models](#local--offline-models). |
 | **Offline / air-gapped** | Pre-seed the cache (or a mirror) and run fully offline; downloads are SHA-256 verified. |
-| **Throughput** | `BatchSize`, `MaxDegreeOfParallelism`, and reading-order / paragraph grouping via `RecognitionOptions`. |
+| **Throughput** | `BatchSize` (applied per call), `MaxDegreeOfParallelism`, and reading-order / paragraph grouping via `RecognitionOptions`. |
 | **Input limits** | Built-in max-pixel / PDF page guards against decompression bombs. |
-| **Table model** | `StructureOptions.TableModel` — keep the default `SlanetPlus`. `SlaNeXt` improved in 2.0.4 but still misplaces some cell text (see CHANGELOG). |
+| **Table model** | `StructureOptions.TableModel` — `SlanetPlus` (default, single end-to-end model) or `SlaNeXt` (v2 path: wired/wireless classifier → SLANeXt_wired or SLANet_plus). `UseTableOrientationClassification` (on by default) uprights sideways tables first. |
 | **Layout model** | `StructureOptions.LayoutModel` — `RtDetrL` (default, PP-DocLayoutV3, 25 classes, most accurate) or `PicoDetS` / `PicoDetM` (PP-DocLayout-S/M, far smaller and faster, fewer regions). |
-| **Layout threshold** | `StructureOptions.LayoutScoreThreshold` — confidence floor for layout regions, default `0.5`. Lower it to keep regions the detector is unsure about, raise it to keep only confident ones. |
-| **Layout clean-up** | Near-duplicate regions are collapsed by default (`FilterOverlappingRegions`); `LayoutNms`, `LayoutUnclipRatio` and `LayoutMergeMode` add optional suppression, box growth and nested-region resolution. |
-| **Reading order** | `StructureOptions.ReadingOrder` — `Auto` (default) uses the order PP-DocLayoutV3 predicts for itself and falls back to geometric XY-cut; `XyCut` always uses XY-cut. |
-| **Seals** | `StructureOptions.RecognizeSeals` (on by default) runs the PP-OCRv4 seal detector over detected seal regions. |
+| **Layout threshold** | `StructureOptions.LayoutScoreThreshold` — global confidence floor, default `0.5`. Per-class floors via `LayoutClassThresholds`; left null, the PP-StructureV3 per-class defaults apply (`paragraph_title` 0.3, `text` 0.4, `formula` 0.3, `seal` 0.45). |
+| **Layout clean-up** | Near-duplicate regions are collapsed (`FilterOverlappingRegions`) and NMS runs (`LayoutNms`) by default, as in PP-StructureV3; `LayoutClassMergeModes` / `LayoutMergeMode` resolve nested regions (Python's per-class defaults apply when unset), `LayoutUnclipRatio` grows boxes. |
+| **Reading order** | `StructureOptions.ReadingOrder` — `Auto` (default) uses **XY-Cut++** (`xycut_enhanced`, what Python PP-StructureV3 uses); `Model` trusts PP-DocLayoutV3's own predicted order; `XyCut` is the plain geometric cut. |
+| **Seals** | `StructureOptions.RecognizeSeals` (on by default) runs the PP-OCRv4 seal detector over detected seal regions, with curved-arc rectification for round stamps. |
+| **Markdown output** | `ToMarkdown(MarkdownRenderOptions)` — which block types render, `<table border="1">` vs bare tables, and the page separator. See [Output formats](#output-formats). |
+
+### Server models
+
+PP-OCRv5 ships each of detection and recognition in two sizes. PaddleOcrNet defaults to the **mobile**
+networks — a few MB each, fast on CPU. The **server** networks are roughly 3–5× larger and more accurate,
+and each side is selected independently:
+
+```csharp
+await using var ocr = new PaddleOcrService(new PaddleOcrServiceOptions
+{
+    DetectionModel   = OcrModelVariant.Server,   // PP-OCRv5_server_det
+    RecognitionModel = OcrModelVariant.Server,   // PP-OCRv5_server_rec
+});
+```
+
+They download and cache on first use exactly like the mobile ones, with the same SHA-256 verification, so
+nothing else in your code changes.
+
+Two things to know about the server **recognizer**:
+
+- It covers **Chinese, English and Japanese only** (it is built on `ppocrv5_dict.txt`). Every other
+  language pack stays on its own mobile recognizer whatever this is set to — so
+  `RecognitionModel = Server` is a no-op for, say, Korean or Arabic rather than an error.
+- Detection is language-independent, so `DetectionModel = Server` applies to every language. Setting only
+  the detector to `Server` is a reasonable middle ground: it is the side that decides whether faint or
+  small text is found at all.
+
+### Crop padding
+
+Recognition runs on the rectified crop of each detected box. When the detector's box hugs the glyphs, the
+recognizer can clip the first or last character, or misread ascenders and descenders. `CropPadding` adds a
+white border around every crop before it is recognized:
+
+```csharp
+var result = await ocr.ExtractTextFromImage("receipt.png", OcrLanguage.English, new RecognitionOptions
+{
+    CropPadding = 10,   // pixels of white on every side; default 0
+});
+```
+
+10–20 px is a sensible range. The padding is applied before the text-line orientation classifier, so
+classification and recognition see identical pixels. It does not move the reported
+`BoundingPolygon` — coordinates still refer to the original image. If whole words rather than edge
+characters are being lost, grow the detected boxes themselves with `DetectionOptions.UnclipRatio`
+instead.
+
+### GPU diagnostics
+
+A GPU that silently isn't used is worse than an error, so PaddleOcrNet reports the provider it is
+**actually** running on, not the one that was requested:
+
+```csharp
+await using var ocr = new PaddleOcrService(new PaddleOcrServiceOptions { UseGpu = true });
+
+Console.WriteLine(ocr.GetRuntimeInfo());
+// PaddleOcrNet runtime:
+//   ONNX Runtime:        1.27.0
+//   Available providers: TensorrtExecutionProvider, CUDAExecutionProvider, CPUExecutionProvider
+//   Requested provider:  Cuda
+//   Resolved provider:   Cuda
+//   Active provider:     Cpu
+//   GPU probe:           NVIDIA GPU detected
+//   Hint:                ... names the exact problem and fix ...
+```
+
+- `PaddleOcrService.ActiveExecutionProvider` and `OcrResult.ExecutionProvider` / `OcrResult.UsedGpu`
+  reflect the **live** provider — an accelerator that failed to attach and fell back to CPU reports CPU
+  here, never a false `UsedGpu = true`.
+- `GpuAccelerationHint` (also included in `GetRuntimeInfo()`) explains why acceleration is off and names
+  the fix. When no `ILogger` is configured, a provider attach failure is additionally written once per
+  process to stderr so it is never completely invisible; set `LogGpuHint = true` to log the hint as a
+  startup warning.
+
+The most common CUDA problem: ONNX Runtime 1.27+ (and therefore `PaddleOcrNet.Gpu`) is built against
+**CUDA 13**, so on a CUDA 12 machine the provider fails to attach with a missing-`cublasLt64_13.dll`
+style error. Either install the CUDA 13 runtime alongside 12 (the majors coexist), pin ONNX Runtime 1.26
+in your own project, or use DirectML on Windows — details in
+[the GPU package README](src/PaddleOcrNet.Gpu/README.md#running-on-cuda-12).
+
+### Local / offline models
+
+To pin exact model files and guarantee no download is ever attempted, point the service at ONNX files on
+disk. Local paths bypass the registry entirely — nothing is downloaded and no checksum is applied (the
+file is trusted as-is):
+
+```csharp
+await using var ocr = new PaddleOcrService(new PaddleOcrServiceOptions
+{
+    DetectionModelPath        = "/models/PP-OCRv5_server_det.onnx",
+    RecognitionModelPath      = "/models/PP-OCRv5_server_rec.onnx",
+    RecognitionDictionaryPath = "/models/ppocrv5_dict.txt",   // pair with a custom-trained model
+    Download = { Offline = true },   // any *other* model that would need a download fails fast instead
+});
+```
+
+`RecognitionModelPath` replaces the default (ch/en/ja) recognizer; per-script language packs are
+unaffected — for a fully offline multilingual setup, pre-seed the model cache (or point
+`PADDLEOCRNET_MODEL_BASE_URL` at an internal mirror) and set `Download.Offline = true`.
 
 ### Output formats
 
@@ -258,6 +374,16 @@ cells). The `ToDocx(image)` / `ToHtml(image)` overloads embed figure/chart/seal 
 and DOCX formulas render as **native Word equations (OMML)**. Multi-page Markdown can be stitched with
 `ConcatenateMarkdownPages`; PDFs can be re-emitted as **searchable PDFs**. All exporters are AOT-safe via a
 source-generated JSON context.
+
+Markdown rendering reproduces Python PP-StructureV3's converter and is tunable via
+`MarkdownRenderOptions`: by default page furniture (headers, footers, page numbers, footnotes, margin
+notes) is omitted, numbered titles map to heading levels, tables emit as `<table border="1">`, and
+`ConcatenateMarkdownPages` joins pages by paragraph continuation — a page ending mid-paragraph flows
+straight into the next — instead of inserting a `---` rule. Pass
+`new MarkdownRenderOptions { IgnoredBlockTypes = Array.Empty<StructureBlockType>() }` to render every
+block, `PrettyTables = false` for bare `<table>` fragments, or
+`PageSeparator = StructureMarkdownExtensions.PageSeparator` to restore the pre-2.1 horizontal-rule page
+breaks.
 
 JSON output is written with a Unicode-permissive encoder, so recognized text in Cyrillic, Greek, Arabic,
 Hebrew, CJK and every other script appears verbatim instead of as `\uXXXX` escapes; HTML-sensitive

@@ -62,4 +62,64 @@ public class PerspectiveWarpTests
         using var crop = PerspectiveWarp.Rectify(src, quad);
         Assert.Null(crop);
     }
+
+    // ---- rotateVertical (Python's post-warp rot90 heuristic) --------------------------------------
+
+    [Fact]
+    public void Rectify_rotateVertical_rotates_a_tall_crop_90_ccw()
+    {
+        using var src = new Image<Rgb24>(100, 100);
+        // Mark the pixel that lands at the crop's top-right corner; after a 90° CCW rotation
+        // (np.rot90) the top-right pixel becomes the top-left one.
+        src[29, 20] = new Rgb24(255, 0, 0);
+
+        // 20 wide × 60 tall — h/w = 3.0 ≥ 1.5, so the vertical-line heuristic fires.
+        var quad = new[]
+        {
+            new OcrPoint(10, 20), new OcrPoint(30, 20),
+            new OcrPoint(30, 80), new OcrPoint(10, 80),
+        };
+
+        using var crop = PerspectiveWarp.Rectify(src, quad, rotateVertical: true);
+
+        Assert.NotNull(crop);
+        Assert.Equal(60, crop!.Width);
+        Assert.Equal(20, crop.Height);
+        Assert.Equal(new Rgb24(255, 0, 0), crop[0, 0]);
+    }
+
+    [Fact]
+    public void Rectify_rotateVertical_leaves_a_just_below_threshold_crop_unrotated()
+    {
+        using var src = new Image<Rgb24>(100, 100);
+        // 20 wide × 29 tall — h/w = 1.45 < 1.5, just below the rot90 threshold.
+        var quad = new[]
+        {
+            new OcrPoint(10, 20), new OcrPoint(30, 20),
+            new OcrPoint(30, 49), new OcrPoint(10, 49),
+        };
+
+        using var crop = PerspectiveWarp.Rectify(src, quad, rotateVertical: true);
+
+        Assert.NotNull(crop);
+        Assert.Equal(20, crop!.Width);
+        Assert.Equal(29, crop.Height);
+    }
+
+    [Fact]
+    public void Rectify_without_rotateVertical_keeps_a_tall_crop_tall()
+    {
+        using var src = new Image<Rgb24>(100, 100);
+        var quad = new[]
+        {
+            new OcrPoint(10, 20), new OcrPoint(30, 20),
+            new OcrPoint(30, 80), new OcrPoint(10, 80),
+        };
+
+        using var crop = PerspectiveWarp.Rectify(src, quad);
+
+        Assert.NotNull(crop);
+        Assert.Equal(20, crop!.Width);
+        Assert.Equal(60, crop.Height);
+    }
 }

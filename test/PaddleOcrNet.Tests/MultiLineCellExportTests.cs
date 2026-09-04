@@ -187,7 +187,7 @@ public class MultiLineCellExportTests
         var result = Sample();
 
         string markdown = result.ToMarkdown();
-        Assert.StartsWith("<table>", markdown);
+        Assert.StartsWith("<table border=\"1\">", markdown);   // pretty tables are on by default
         Assert.EndsWith("</table>", markdown);
         Assert.DoesNotContain("<body>", markdown);
 

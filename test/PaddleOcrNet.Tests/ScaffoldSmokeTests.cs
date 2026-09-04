@@ -16,17 +16,24 @@ public class ScaffoldSmokeTests
     public void DetectionOptions_Defaults_MatchPaddle()
     {
         var d = DetectionOptions.Default;
-        Assert.Equal(960, d.LimitSideLen);
+        // PaddleOCR 3.x pipeline defaults: limit_type=min with side 64, max_side_limit 4000, no NMS.
+        Assert.Equal(64, d.LimitSideLen);
+        Assert.False(d.LimitTypeMax);
+        Assert.Equal(4000, d.MaxSideLimit);
         Assert.Equal(0.3, d.DetThreshold);
         Assert.Equal(0.6, d.BoxThreshold);
         Assert.Equal(1.5, d.UnclipRatio);
+        Assert.Equal(0, d.NmsIouThreshold);
     }
 
     [Fact]
     public void RecognitionOptions_Defaults_MatchPaddle()
     {
         var r = RecognitionOptions.Default;
-        Assert.Equal(0.5, r.DropScore);
+        // Python score_thresh default is 0.0; textline orientation is on by default in PaddleOCR 3.x.
+        Assert.Equal(0.0, r.DropScore);
+        Assert.True(r.UseTextLineOrientation);
+        Assert.Equal(0, r.CropPadding);
         Assert.Equal(TextGrouping.Line, r.Grouping);
     }
 
