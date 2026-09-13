@@ -25,6 +25,23 @@ public sealed class PaddleOcrServiceOptions
     public long MaxImagePixels { get; set; } = 100_000_000;
 
     /// <summary>
+    /// Rotate/flip images loaded from a file, stream, or byte buffer according to their EXIF
+    /// <c>Orientation</c> tag, so a portrait phone photo is OCR'd — and its boxes reported — the way image
+    /// viewers display it (Python's <c>cv2.imread</c> does the same). Default <c>true</c>. Already-decoded
+    /// <see cref="EasyImageSharp.Image{TPixel}"/> inputs are used as given.
+    /// </summary>
+    public bool ApplyExifOrientation { get; set; } = true;
+
+    /// <summary>
+    /// Composite images with an alpha channel (PNG, WebP, GIF, TIFF, …) onto an opaque background when they
+    /// are loaded from a file, stream, or byte buffer. Without it the alpha is simply dropped, and black
+    /// text on a transparent background turns into an all-black image. The background is white, or black
+    /// when the visible content is light (white text on transparency). Fully opaque images are unaffected.
+    /// Default <c>true</c>.
+    /// </summary>
+    public bool FlattenTransparency { get; set; } = true;
+
+    /// <summary>
     /// Convenience flag kept for ergonomics: when true (and <see cref="ExecutionProvider"/> has not been
     /// set to an explicit provider) the CUDA provider is forced. Prefer leaving
     /// <see cref="ExecutionProvider"/> at <see cref="OcrExecutionProvider.Auto"/>, which already enables a
