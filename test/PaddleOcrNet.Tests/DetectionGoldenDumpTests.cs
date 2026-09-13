@@ -111,6 +111,7 @@ public sealed class DetectionGoldenDumpTests
                     golden.Append('\n');
                 }
 
+                if (Environment.GetEnvironmentVariable("PADDLEOCRNET_GOLDEN_SKIP_OCR_TIMING") is "1") continue;
                 var samples = new List<double>();
                 for (int i = 0; i < 3; i++)
                 {
