@@ -64,6 +64,12 @@ unchanged — every behaviour change below is listed with the switch that restor
   inches, 150, 400)` per page — Letter renders at 363 DPI, A4 at 342 — so small print is not starved and
   nothing is rendered past the detector's 4000 px cap. `PdfPageResult.Dpi` reports it. The default stays
   200.
+- **Word-accurate searchable PDFs.** The invisible text layer is placed word by word: each OCR word is its
+  own run scaled to its box, with spaces only where the recognized text has them (none between CJK
+  characters), falling back to one run per line when words are unavailable. Re-extracted with PDFium,
+  word alignment rose from a mean IoU of 0.51–0.67 to 0.98, with 100 % of characters inside their word's
+  box. `CreateSearchablePdfAsync` always requests word boxes — they don't change OCR results — so the
+  returned lines include `Words`.
 - **Streaming.** `ExtractTextFromPdfPagesAsync` yields pages as `IAsyncEnumerable<PdfPageResult>` as they
   finish (breaking out stops rendering), and `ExtractTextFromPdfAsync` / `CreateSearchablePdfAsync` gained
   `Stream` overloads — searchable PDFs can be written to non-seekable outputs.
@@ -158,6 +164,10 @@ corpus plus half-scale, faded and 9600 px tall-receipt variants:
   Type0/Identity-H glyphless font with a ToUnicode CMap and `Tz` width scaling — CJK, €, ₹ and emoji
   copy and search correctly, and selections line up with the OCR boxes (verified by re-extracting the text
   with PDFium).
+- **Searchable PDF text lost in PDFium/Chrome for one-character runs** (single-character lines, CJK
+  characters, one-letter words): the glyphless font's glyph had an empty bounding box, so those runs
+  measured zero wide and were dropped. The glyph now has a full-size box and still draws nothing;
+  extracted characters also report their real height.
 
 ## [2.1.0] - 2026-09-03
 
