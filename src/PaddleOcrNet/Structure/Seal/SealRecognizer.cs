@@ -4,6 +4,7 @@ using PaddleOcrNet.Internal.Detection;
 using PaddleOcrNet.Internal.Geometry;
 using PaddleOcrNet.Internal.Recognition;
 using PaddleOcrNet.Models;
+using PaddleOcrNet.Structure.Preprocess;
 using EasyImageSharp;
 using EasyImageSharp.PixelFormats;
 using EasyImageSharp.Processing;
@@ -36,11 +37,9 @@ namespace PaddleOcrNet.Structure.Seal;
 /// </summary>
 internal sealed class SealRecognizer : ISealRecognizer
 {
-    // ImageNet mean/std (PaddleOCR det normalization), applied to pixel/255 in index order over the B,G,R
-    // planes — the seal det model, like the main DB detector, consumes BGR input (DecodeImage img_mode: BGR
-    // in the exported inference config).
-    private static readonly float[] Mean = { 0.485f, 0.456f, 0.406f };
-    private static readonly float[] Std = { 0.229f, 0.224f, 0.225f };
+    // Normalization: ImageNet mean/std (PaddleOCR det normalization, PlanarTensorPacker.ImageNet0..2)
+    // applied to pixel/255 in index order over the B,G,R planes — the seal det model, like the main DB
+    // detector, consumes BGR input (DecodeImage img_mode: BGR in the exported inference config).
 
     // PaddleX seal-recognition config caps the resized dims at 4000 px (max_side_limit) so the min-side
     // upscale below cannot blow up on elongated crops.
@@ -233,23 +232,11 @@ internal sealed class SealRecognizer : ISealRecognizer
         int plane = resizeH * resizeW;
         Memory<float> bufferMem = tensor.Buffer;
 
-        resized.ProcessPixelRows(accessor =>
-        {
-            var buffer = bufferMem.Span;
-            for (int y = 0; y < resizeH; y++)
-            {
-                var row = accessor.GetRowSpan(y);
-                int rowOffset = y * resizeW;
-                for (int x = 0; x < resizeW; x++)
-                {
-                    var px = row[x];
-                    int idx = rowOffset + x;
-                    buffer[idx] = (px.B / 255f - Mean[0]) / Std[0];            // B plane (BGR input)
-                    buffer[plane + idx] = (px.G / 255f - Mean[1]) / Std[1];     // G plane
-                    buffer[2 * plane + idx] = (px.R / 255f - Mean[2]) / Std[2]; // R plane
-                }
-            }
-        });
+        // BGR planes, each normalized with the ImageNet statistics of its plane INDEX (plane 0 = B uses
+        // mean[0]/std[0]), via the bit-identical lookup tables.
+        PlanarTensorPacker.Pack(
+            resized, 0, 0, resizeW, resizeH, bufferMem, resizeW, plane,
+            PlanarTensorPacker.ImageNet0, PlanarTensorPacker.ImageNet1, PlanarTensorPacker.ImageNet2, bgr: true);
 
         return tensor;
     }
