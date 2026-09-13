@@ -743,6 +743,7 @@ public sealed class PaddleOcrService : IPaddleOcrService
             {
                 BoundingPolygon = poly,
                 BoundingBox = new OcrBoundingBox(box.MinX + dx, box.MinY + dy, box.MaxX + dx, box.MaxY + dy),
+                Words = Internal.Recognition.WordBoxBuilder.Transform(line.Words, p => new OcrPoint(p.X + dx, p.Y + dy)),
             });
         }
         return translated;

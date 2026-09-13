@@ -12,8 +12,12 @@ public sealed record RecognitionOptions
     public TextGrouping Grouping { get; init; } = TextGrouping.Line;
 
     /// <summary>
-    /// Maximum number of text regions recognized concurrently. Defaults to the processor count.
-    /// Set to 1 to force sequential recognition.
+    /// Upper bound on the CPU threads the recognition stage uses at once: rectifying the detected regions
+    /// into crops, resizing and normalizing crops for the text-line classifier and the recognizer, and — on
+    /// the CPU execution provider only — how many recognition batches run concurrently on the shared model
+    /// session (at most a small, measured cap, so ONNX Runtime's own intra-op threads are not oversubscribed).
+    /// Defaults to the processor count; values ≤ 0 also mean the processor count. Set to 1 to force fully
+    /// sequential recognition. Parallelism never changes results: batch composition is fixed.
     /// </summary>
     public int MaxDegreeOfParallelism { get; init; } = Environment.ProcessorCount;
 
@@ -38,8 +42,29 @@ public sealed record RecognitionOptions
     /// Run the text-line orientation classifier (180° flip detection) before recognition, rotating boxes
     /// that the classifier marks as upside-down. PaddleOCR's <c>use_textline_orientation</c>. Default true
     /// (the Python pipeline default). When false, the classifier model is never loaded for this call.
+    /// <para>
+    /// Precedence with <see cref="Services.PaddleOcrServiceOptions.UseTextLineOrientation"/>: a value set
+    /// explicitly on these options always wins; when it is left at its default, the service-level option
+    /// applies if it was set, and otherwise the classifier runs.
+    /// </para>
     /// </summary>
-    public bool UseTextLineOrientation { get; init; } = true;
+    public bool UseTextLineOrientation
+    {
+        get => _useTextLineOrientation;
+        init
+        {
+            _useTextLineOrientation = value;
+            UseTextLineOrientationSpecified = true;
+        }
+    }
+
+    private readonly bool _useTextLineOrientation = true;
+
+    /// <summary>
+    /// True when <see cref="UseTextLineOrientation"/> was assigned explicitly (carried through <c>with</c>
+    /// copies), so the engine can let a service-level setting apply to calls that left it at its default.
+    /// </summary>
+    internal bool UseTextLineOrientationSpecified { get; private init; }
 
     /// <summary>
     /// Minimum confidence the text-line orientation classifier's 180° label must reach before a crop is
@@ -93,6 +118,28 @@ public sealed record RecognitionOptions
     /// <see cref="DetectionOptions.UnclipRatio"/> (grow the detected boxes themselves).
     /// </summary>
     public int CropPadding { get; init; } = 0;
+
+    /// <summary>
+    /// Locate every word inside each recognized line and return it in <see cref="OcrLine.Words"/> — Python
+    /// PaddleOCR 3.x's <c>return_word_box</c>. Word positions come from the CTC timesteps at which the
+    /// recognizer emitted each character, mapped back through the line's rectification onto the page, so a
+    /// word box follows the line's slant. Words are split at spaces and every CJK character is its own
+    /// word. Default false (<see cref="OcrLine.Words"/> stays empty); enabling it does not change any line
+    /// text, confidence or box. The hOCR/ALTO/TSV exporters use these boxes when present.
+    /// </summary>
+    public bool ReturnWordBoxes { get; init; }
+
+    /// <summary>
+    /// Second-chance recognition for weak lines. When greater than 0, every non-blank line whose confidence
+    /// is below this threshold is re-read from two alternate crops — (a) its region grown along the line's own
+    /// axes by 0.3× the line height past each end and 0.15× above and below, cut from the page, and (b) the
+    /// original crop after a 1st–99th percentile contrast stretch — and the more confident alternate replaces
+    /// the reading only when its confidence rises by at least 0.05 and its text stays within
+    /// <c>max(2, 25% of the original length)</c> edits of the original, so a retry can polish a reading but
+    /// never swap in a different one. Default 0 (off). Not part of Python PaddleOCR; costs up to two extra
+    /// recognitions per weak line.
+    /// </summary>
+    public double RetryBelowConfidence { get; init; }
 
     /// <summary>
     /// Automatically detect the script/language of the image instead of trusting the requested language

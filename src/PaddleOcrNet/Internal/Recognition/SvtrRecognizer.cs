@@ -27,8 +27,15 @@ namespace PaddleOcrNet.Internal.Recognition;
 /// </para>
 /// <para>
 /// The network output is <c>[N, T, C]</c> (N rows, T timesteps, C = vocab classes). Each row is handed to
-/// <see cref="CtcDecoder.GreedyDecode"/> with the Paddle vocab (blank at index 0). The recognizer returns
-/// every result regardless of confidence; the engine applies <c>drop_score</c>.
+/// <see cref="CtcDecoder.GreedyDecode(ReadOnlySpan{float}, int, int, IReadOnlyList{string}, bool[], List{CtcCharacter})"/>
+/// with the Paddle vocab (blank at index 0), reading the output tensor's memory in place. The recognizer
+/// returns every result regardless of confidence; the engine applies <c>drop_score</c>.
+/// </para>
+/// <para>
+/// Thread safety: the character filter travels down each call (never stored on the instance) and
+/// <see cref="InferenceSession.Run(IReadOnlyCollection{NamedOnnxValue})"/> is thread-safe, so one cached
+/// recognizer can serve concurrent calls, and one call can run several batches concurrently. Batch
+/// composition is fixed by the aspect sort, so concurrency never changes a result.
 /// </para>
 /// </summary>
 internal sealed class SvtrRecognizer : ITextRecognizer
@@ -50,21 +57,21 @@ internal sealed class SvtrRecognizer : ITextRecognizer
     /// </summary>
     private const int MaxTensorWidth = 3200;
 
+    /// <summary>
+    /// <c>(x/255 − 0.5)/0.5</c> for every byte value, computed with exactly the per-pixel expression
+    /// <c>x / 127.5f − 1f</c> so the table lookup is bit-identical to evaluating it inline.
+    /// </summary>
+    private static readonly float[] NormalizeTable = BuildNormalizeTable();
+
     private readonly InferenceSession _session;
     private readonly IReadOnlyList<string> _dictLines;
     // Built lazily on the first decode, once the model's actual output class count is known, so the vocab
     // length matches the network exactly (community dicts disagree on whether the blank/space are included).
-    private IReadOnlyList<string>? _vocab;
+    // Every batch builds the same list, so a benign race only duplicates work.
+    private volatile IReadOnlyList<string>? _vocab;
     private readonly int _imageHeight;
     private readonly string _inputName;
-    private readonly string _outputName;
     private readonly int _batchSize;
-
-    // The most recently requested character filter. The recognizer is shared/cached across calls, while
-    // Allowlist/Blocklist are per-call options, so the engine sets this immediately before invoking
-    // Recognize, or passes options to the options-aware overload. Null = no filtering.
-    private IReadOnlyCollection<string>? _allowlist;
-    private IReadOnlyCollection<string>? _blocklist;
 
     /// <summary>
     /// Creates the recognizer over an already-built ONNX <see cref="InferenceSession"/> and a loaded
@@ -85,57 +92,23 @@ internal sealed class SvtrRecognizer : ITextRecognizer
         _imageHeight = imageHeight > 0 ? imageHeight : 48;
         _batchSize = batchSize > 0 ? batchSize : DefaultBatchSize;
 
-        // The recognition graph has a single input and a single output; resolve their names once.
+        // The recognition graph has a single input; resolve its name once.
         _inputName = _session.InputMetadata.Keys.First();
-        _outputName = _session.OutputMetadata.Keys.First();
     }
 
     /// <summary>
-    /// Applies the per-call character filter (<see cref="RecognitionOptions.Allowlist"/> /
-    /// <see cref="RecognitionOptions.Blocklist"/>) used by subsequent <see cref="Recognize(IReadOnlyList{Image{Rgb24}})"/>
-    /// calls. The recognizer is shared and cached across recognition calls while these options are per-call,
-    /// so the engine sets the filter immediately before each <c>Recognize</c> (or uses the
-    /// <see cref="Recognize(IReadOnlyList{Image{Rgb24}}, RecognitionOptions)"/> overload, which scopes it
-    /// automatically). Passing <c>null</c>, or options with empty lists, clears the filter.
-    /// </summary>
-    /// <param name="options">The recognition options whose allow/block lists to honor, or <c>null</c> to clear.</param>
-    public void SetCharacterFilter(RecognitionOptions? options)
-    {
-        _allowlist = options?.Allowlist;
-        _blocklist = options?.Blocklist;
-    }
-
-    /// <summary>
-    /// Recognizes a batch of crops while honoring the character filter (allow/block lists) and
-    /// <see cref="RecognitionOptions.BatchSize"/> carried by <paramref name="options"/>. The filter is
-    /// scoped to this call: it is applied for the duration of the recognition and the previously active
-    /// filter is restored afterwards, so a shared recognizer stays safe to reuse across calls with
-    /// different options. A non-positive <see cref="RecognitionOptions.BatchSize"/> falls back to the
-    /// constructor's batch size.
+    /// Recognizes a batch of crops while honoring the character filter (allow/block lists),
+    /// <see cref="RecognitionOptions.BatchSize"/> and <see cref="RecognitionOptions.MaxDegreeOfParallelism"/>
+    /// carried by <paramref name="options"/>. The filter is passed down this call only, so a shared recognizer
+    /// stays safe to use concurrently with different options. A non-positive
+    /// <see cref="RecognitionOptions.BatchSize"/> falls back to the constructor's batch size.
     /// </summary>
     /// <param name="crops">The upright text-line crops (caller retains ownership of each).</param>
     /// <param name="options">The recognition options whose allow/block lists and batch size to honor.</param>
     /// <returns>One (text, confidence) tuple per input crop, in the same order.</returns>
     public IReadOnlyList<(string Text, float Confidence)> Recognize(
         IReadOnlyList<Image<Rgb24>> crops, RecognitionOptions options)
-    {
-        ArgumentNullException.ThrowIfNull(crops);
-        ArgumentNullException.ThrowIfNull(options);
-
-        var prevAllow = _allowlist;
-        var prevBlock = _blocklist;
-        _allowlist = options.Allowlist;
-        _blocklist = options.Blocklist;
-        try
-        {
-            return RecognizeCore(crops, options.BatchSize > 0 ? options.BatchSize : _batchSize);
-        }
-        finally
-        {
-            _allowlist = prevAllow;
-            _blocklist = prevBlock;
-        }
-    }
+        => ToTuples(RecognizeDetailed(crops, options, maxConcurrentBatches: 1, includeCharacters: false));
 
     /// <inheritdoc />
     public (string Text, float Confidence) Recognize(Image<Rgb24> crop)
@@ -146,14 +119,38 @@ internal sealed class SvtrRecognizer : ITextRecognizer
 
     /// <inheritdoc />
     public IReadOnlyList<(string Text, float Confidence)> Recognize(IReadOnlyList<Image<Rgb24>> crops)
-        => RecognizeCore(crops, _batchSize);
-
-    private IReadOnlyList<(string Text, float Confidence)> RecognizeCore(
-        IReadOnlyList<Image<Rgb24>> crops, int batchSize)
     {
         ArgumentNullException.ThrowIfNull(crops);
+        return ToTuples(RecognizeCore(crops, _batchSize, null, null, 1, 1, false));
+    }
+
+    /// <inheritdoc />
+    public IReadOnlyList<RecognizedText> RecognizeDetailed(
+        IReadOnlyList<Image<Rgb24>> crops, RecognitionOptions options, int maxConcurrentBatches, bool includeCharacters)
+    {
+        ArgumentNullException.ThrowIfNull(crops);
+        ArgumentNullException.ThrowIfNull(options);
+        return RecognizeCore(
+            crops,
+            options.BatchSize > 0 ? options.BatchSize : _batchSize,
+            options.Allowlist,
+            options.Blocklist,
+            maxConcurrentBatches,
+            BoundedParallel.ResolveDegree(options.MaxDegreeOfParallelism),
+            includeCharacters);
+    }
+
+    private RecognizedText[] RecognizeCore(
+        IReadOnlyList<Image<Rgb24>> crops,
+        int batchSize,
+        IReadOnlyCollection<string>? allowlist,
+        IReadOnlyCollection<string>? blocklist,
+        int maxConcurrentBatches,
+        int maxDegreeOfParallelism,
+        bool includeCharacters)
+    {
         int count = crops.Count;
-        var results = new (string Text, float Confidence)[count];
+        var results = new RecognizedText[count];
         if (count == 0) return results;
 
         // Sort by aspect ratio (width / height) so adjacent crops have similar normalized widths and a
@@ -168,57 +165,45 @@ internal sealed class SvtrRecognizer : ITextRecognizer
         }
         Array.Sort(ratios, order);
 
-        // Snapshot the active character filter for the whole call so concurrent mutation can't change it
-        // mid-batch. The actual mask is built lazily below, once the vocab (and thus class indices) is known.
-        var allowlist = _allowlist;
-        var blocklist = _blocklist;
-        bool[]? selectable = null;
-        bool selectableBuilt = false;
+        int batchCount = (count + batchSize - 1) / batchSize;
+        int concurrentBatches = Math.Clamp(maxConcurrentBatches, 1, batchCount);
+        // Batches running concurrently already spread the crop preprocessing across threads; only a
+        // sequential run parallelizes the per-crop resize inside each batch.
+        int cropParallelism = concurrentBatches > 1 ? 1 : maxDegreeOfParallelism;
 
-        // Process in fixed-size batches; each batch is padded to the Python-parity tensor width.
-        for (int start = 0; start < count; start += batchSize)
+        // The allow/block mask needs the vocab, which needs the model's class count from the first output.
+        // The first batch therefore runs alone and fixes both for the rest of the call.
+        bool[]? selectable = null;
+        RunBatch(0);
+        if (batchCount > 1)
         {
+            BoundedParallel.For(batchCount - 1, concurrentBatches, CancellationToken.None, b => RunBatch(b + 1));
+        }
+        return results;
+
+        void RunBatch(int batchIndex)
+        {
+            int start = batchIndex * batchSize;
             int end = Math.Min(start + batchSize, count);
-            int batchCount = end - start;
+            int batchCountInTensor = end - start;
 
             // ratios is sorted ascending, so the batch maximum is its last element.
             int imgW = ComputeBatchTensorWidth(_imageHeight, ratios[end - 1]);
 
-            // Resize-and-normalize each crop to min(ceil(H * w/h), imgW) — the widest crop lands on
-            // the *floored* imgW, matching Python's int() truncation.
-            var normalized = new float[batchCount][];
-            var widths = new int[batchCount];
-            for (int b = 0; b < batchCount; b++)
+            // Build the [N, 3, H, imgW] CHW tensor in place: each crop is resized to
+            // min(ceil(H * w/h), imgW) — the widest crop lands on the *floored* imgW, matching Python's int()
+            // truncation — and its normalized pixels are written straight into its row of the batch buffer.
+            // The remaining (imgW - w) columns stay zero — DenseTensor is zero-initialized.
+            var tensor = new DenseTensor<float>(new[] { batchCountInTensor, 3, _imageHeight, imgW });
+            Memory<float> buffer = tensor.Buffer;
+            var widths = new int[batchCountInTensor];
+            int imageStride = 3 * _imageHeight * imgW;
+            BoundedParallel.For(batchCountInTensor, cropParallelism, CancellationToken.None, b =>
             {
-                int srcIndex = order[start + b];
                 int w = Math.Max(1, Math.Min((int)Math.Ceiling(_imageHeight * ratios[start + b]), imgW));
-                normalized[b] = ResizeNormalize(crops[srcIndex], w);
                 widths[b] = w;
-            }
-
-            // Build the [N, 3, H, imgW] CHW tensor, right-padding each row's width with zeros.
-            var tensor = new DenseTensor<float>(new[] { batchCount, 3, _imageHeight, imgW });
-            Span<float> buffer = tensor.Buffer.Span;
-            int planeStride = _imageHeight * imgW;            // one channel plane per image
-            int imageStride = 3 * planeStride;                // one full image
-            for (int b = 0; b < batchCount; b++)
-            {
-                float[] src = normalized[b];
-                int w = widths[b];
-                int dstBase = b * imageStride;
-                // src is laid out as [3, H, w]; copy each row run into the padded destination.
-                for (int ch = 0; ch < 3; ch++)
-                {
-                    int srcChannelBase = ch * _imageHeight * w;
-                    int dstChannelBase = dstBase + ch * planeStride;
-                    for (int y = 0; y < _imageHeight; y++)
-                    {
-                        var srcRow = src.AsSpan(srcChannelBase + y * w, w);
-                        srcRow.CopyTo(buffer.Slice(dstChannelBase + y * imgW, w));
-                        // The remaining (imgW - w) columns stay zero — DenseTensor is zero-initialized.
-                    }
-                }
-            }
+                WriteNormalized(crops[order[start + b]], w, imgW, buffer, b * imageStride);
+            });
 
             // Run inference and decode each output row, scattering back to the caller's order.
             var inputs = new[] { NamedOnnxValue.CreateFromTensor(_inputName, tensor) };
@@ -232,28 +217,43 @@ internal sealed class SvtrRecognizer : ITextRecognizer
             // Build the vocab to match the model's class count on first use (then reuse it).
             var vocab = _vocab ??= CharacterDictionary.BuildVocab(_dictLines, numClasses);
 
-            // Build the allow/block selectable mask once for the whole call, now that the vocab (and so the
-            // class→token mapping) is known. Null when no filter is requested — the decoder then runs
-            // byte-identically to the unfiltered path.
-            if (!selectableBuilt)
+            // Build the allow/block selectable mask once for the whole call (first batch), now that the vocab
+            // (and so the class→token mapping) is known. Null when no filter is requested — the decoder then
+            // runs byte-identically to the unfiltered path.
+            if (batchIndex == 0)
             {
                 selectable = CharacterDictionary.BuildSelectableMask(vocab, allowlist, blocklist);
-                selectableBuilt = true;
             }
 
-            // Materialize once to a flat span so the decoder can index by (row, t, c) without per-element
-            // overhead from the tensor indexer.
-            ReadOnlySpan<float> flat = output.ToArray();
+            // Decode straight from the output tensor's memory while the results are still alive (no copy).
+            ReadOnlySpan<float> flat = output is DenseTensor<float> dense ? dense.Buffer.Span : output.ToArray();
             int rowStride = timeSteps * numClasses;
 
-            for (int b = 0; b < batchCount; b++)
+            for (int b = 0; b < batchCountInTensor; b++)
             {
                 ReadOnlySpan<float> rowLogits = flat.Slice(b * rowStride, rowStride);
-                results[order[start + b]] = CtcDecoder.GreedyDecode(rowLogits, timeSteps, numClasses, vocab, selectable);
+                int source = order[start + b];
+                if (!includeCharacters)
+                {
+                    var (text, confidence) = CtcDecoder.GreedyDecode(rowLogits, timeSteps, numClasses, vocab, selectable);
+                    results[source] = new RecognizedText(text, confidence);
+                    continue;
+                }
+
+                var characters = new List<CtcCharacter>();
+                var (detailedText, detailedConfidence) = CtcDecoder.GreedyDecode(
+                    rowLogits, timeSteps, numClasses, vocab, selectable, characters);
+                results[source] = new RecognizedText(detailedText, detailedConfidence)
+                {
+                    Characters = characters,
+                    // One timestep covers imgW/T tensor pixels; the crop occupies only its resized width w of
+                    // the tensor, so scale back by cropWidth/w.
+                    StepWidth = timeSteps > 0
+                        ? imgW / (double)timeSteps * (crops[source].Width / (double)widths[b])
+                        : 0,
+                };
             }
         }
-
-        return results;
     }
 
     /// <summary>
@@ -274,11 +274,11 @@ internal sealed class SvtrRecognizer : ITextRecognizer
 
     /// <summary>
     /// Resizes <paramref name="crop"/> to <see cref="_imageHeight"/> × <paramref name="targetWidth"/>
-    /// (the caller computes the width from the batch policy), then normalizes pixels to
-    /// <c>(x/255 − 0.5) / 0.5</c> (i.e. [−1,1]) in a planar CHW <b>BGR</b> float array of length
-    /// <c>3 · H · targetWidth</c>.
+    /// (the caller computes the width from the batch policy), then writes the pixels normalized to
+    /// <c>(x/255 − 0.5) / 0.5</c> (i.e. [−1,1]) as planar CHW <b>BGR</b> into
+    /// <paramref name="buffer"/> at <paramref name="imageOffset"/>, each plane <paramref name="tensorWidth"/> wide.
     /// </summary>
-    private float[] ResizeNormalize(Image<Rgb24> crop, int targetWidth)
+    private void WriteNormalized(Image<Rgb24> crop, int targetWidth, int tensorWidth, Memory<float> buffer, int imageOffset)
     {
         int h = _imageHeight;
         int w = targetWidth;
@@ -291,31 +291,48 @@ internal sealed class SvtrRecognizer : ITextRecognizer
             Sampler = KnownResamplers.Triangle,
         }));
 
-        var data = new float[3 * h * w];
-        int planeStride = h * w;
+        int planeStride = h * tensorWidth;
+        float[] table = NormalizeTable;
         resized.ProcessPixelRows(accessor =>
         {
+            // Re-acquire the span inside the delegate: a ref-struct Span<T> can't be captured by a lambda.
+            Span<float> data = buffer.Span;
             for (int y = 0; y < h; y++)
             {
                 Span<Rgb24> row = accessor.GetRowSpan(y);
-                int rowBase = y * w;
+                int rowBase = imageOffset + y * tensorWidth;
+                // The ONNX rec export consumes BGR crops (inference.yml DecodeImage img_mode: BGR).
+                Span<float> blue = data.Slice(rowBase, w);                     // channel 0 (B)
+                Span<float> green = data.Slice(rowBase + planeStride, w);      // channel 1 (G)
+                Span<float> red = data.Slice(rowBase + 2 * planeStride, w);    // channel 2 (R)
                 for (int x = 0; x < w; x++)
                 {
                     Rgb24 px = row[x];
-                    // (x/255 - 0.5)/0.5 == x/127.5 - 1
-                    float r = px.R / 127.5f - 1f;
-                    float g = px.G / 127.5f - 1f;
-                    float bch = px.B / 127.5f - 1f;
-                    int p = rowBase + x;
-                    // The ONNX rec export consumes BGR crops (inference.yml DecodeImage img_mode: BGR).
-                    data[p] = bch;                    // channel 0 (B)
-                    data[planeStride + p] = g;        // channel 1 (G)
-                    data[2 * planeStride + p] = r;    // channel 2 (R)
+                    blue[x] = table[px.B];
+                    green[x] = table[px.G];
+                    red[x] = table[px.R];
                 }
             }
         });
+    }
 
-        return data;
+    private static float[] BuildNormalizeTable()
+    {
+        var table = new float[256];
+        for (int i = 0; i < table.Length; i++)
+        {
+            byte value = (byte)i;
+            // (x/255 - 0.5)/0.5 == x/127.5 - 1 — the exact expression the per-pixel loop used.
+            table[i] = value / 127.5f - 1f;
+        }
+        return table;
+    }
+
+    private static (string Text, float Confidence)[] ToTuples(IReadOnlyList<RecognizedText> readings)
+    {
+        var tuples = new (string Text, float Confidence)[readings.Count];
+        for (int i = 0; i < tuples.Length; i++) tuples[i] = (readings[i].Text, readings[i].Confidence);
+        return tuples;
     }
 
     /// <inheritdoc />

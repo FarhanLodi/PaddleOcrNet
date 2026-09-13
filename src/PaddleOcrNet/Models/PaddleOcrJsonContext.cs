@@ -12,6 +12,8 @@ namespace PaddleOcrNet.Models;
 [JsonSerializable(typeof(OcrResult))]
 [JsonSerializable(typeof(OcrLine))]
 [JsonSerializable(typeof(IReadOnlyList<OcrLine>))]
+[JsonSerializable(typeof(OcrWord))]
+[JsonSerializable(typeof(IReadOnlyList<OcrWord>))]
 [JsonSerializable(typeof(OcrPoint))]
 [JsonSerializable(typeof(OcrBoundingBox))]
 [JsonSerializable(typeof(DetectedRegion))]

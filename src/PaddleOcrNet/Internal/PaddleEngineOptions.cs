@@ -72,7 +72,7 @@ internal sealed record PaddleEngineOptions
     /// the classifier model is never loaded. Can also be requested per call via
     /// <see cref="RecognitionOptions.UseTextLineOrientation"/>.
     /// </summary>
-    public bool UseTextLineOrientation { get; init; }
+    public bool? UseTextLineOrientation { get; init; }
 
     /// <summary>
     /// Log the GPU upgrade hint as a one-time startup warning (default false). The hint string is always
