@@ -1,175 +1,237 @@
 using System.Globalization;
+using System.IO.Compression;
 using System.Text;
-using PaddleOcrNet.Models;
 using EasyImageSharp;
 using EasyImageSharp.Formats.Jpeg;
 using EasyImageSharp.PixelFormats;
+using PaddleOcrNet.Models;
 
 namespace PaddleOcrNet.Pdf.Internal;
 
 /// <summary>
-/// Builds a searchable PDF by hand: each page is the rendered image (embedded as a JPEG XObject) with
-/// an invisible OCR text layer (text render mode 3) positioned over it. Uses the standard base-14
-/// Helvetica font, so no font files or font resolver are required and the output is fully self-contained.
-/// Pure (no native dependency) and therefore unit-testable on its own.
+/// Writes a searchable PDF straight to a stream: each page is its rendered image (a JPEG XObject) under an
+/// invisible text layer (render mode 3).
+/// <para>
+/// The text uses Tesseract's approach so any script round-trips: a Type0 font with Identity-H encoding over a
+/// CIDFontType2 that embeds a glyphless TrueType program (<see cref="GlyphlessFont"/>). A ToUnicode CMap
+/// (<see cref="PdfTextEncoder"/>) makes the text extractable, and <c>Tz</c> horizontal scaling stretches each run
+/// across its box.
+/// </para>
+/// <para>
+/// Pages are written as they are added, with byte offsets tracked for the xref table. Only small per-page
+/// bookkeeping is kept in memory, so the output stream may be non-seekable. The shared font, page tree and
+/// catalog objects, which have reserved object numbers, are written by <see cref="Finish"/>.
+/// </para>
 /// </summary>
 internal sealed class SearchablePdfBuilder
 {
-    private sealed record Page(byte[] Jpeg, int PixelWidth, int PixelHeight, double WidthPt, double HeightPt, string Content);
+    private const int CatalogObj = 1;
+    private const int PagesObj = 2;
+    private const int FontObj = 3;
+    private const int CidFontObj = 4;
+    private const int FontDescriptorObj = 5;
+    private const int FontFileObj = 6;
+    private const int CidToGidMapObj = 7;
+    private const int ToUnicodeObj = 8;
+    private const int FirstPageObj = 9;
 
-    private readonly List<Page> _pages = new();
+    private static readonly Lazy<byte[]> s_fontFile = new(() => Deflate(GlyphlessFont.TrueTypeProgram, CompressionLevel.SmallestSize));
+    private static readonly Lazy<byte[]> s_cidToGidMap = new(() => Deflate(GlyphlessFont.BuildCidToGidMap(), CompressionLevel.SmallestSize));
+
+    private readonly Stream _output;
+    private readonly List<long> _offsets = new() { 0 }; // index = object number; 0 is the free-list head
+    private readonly List<int> _pageObjects = new();
+    private readonly PdfTextEncoder _encoder = new();
+    private long _position;
+    private int _nextObject = FirstPageObj;
+    private bool _finished;
 
     /// <summary>
-    /// Adds one page: its rendered image and the OCR result whose text becomes the hidden layer.
+    /// Starts a document on <paramref name="output"/> and writes the header immediately.
     /// </summary>
-    public void AddPage(Image<Rgb24> image, OcrResult ocr, int dpi, int jpegQuality)
+    public SearchablePdfBuilder(Stream output)
     {
-        double scale = 72.0 / dpi;                 // points per pixel (PDF user space is 72 dpi)
-        double widthPt = image.Width * scale;
-        double heightPt = image.Height * scale;
+        ArgumentNullException.ThrowIfNull(output);
+        _output = output;
+        WriteAscii("%PDF-1.7\n");
+        WriteBytes(new byte[] { (byte)'%', 0xE2, 0xE3, 0xCF, 0xD3, (byte)'\n' }); // binary marker
+    }
 
+    /// <summary>
+    /// Encodes a page image as the JPEG embedded by <see cref="AddPage"/>. The image is only read, so this may run
+    /// concurrently with OCR on the same image.
+    /// </summary>
+    public static byte[] EncodeJpeg(Image<Rgb24> image, int jpegQuality)
+    {
         using var ms = new MemoryStream();
         image.Save(ms, new JpegEncoder { Quality = jpegQuality });
-
-        var content = BuildContent(ocr, widthPt, heightPt, scale);
-        _pages.Add(new Page(ms.ToArray(), image.Width, image.Height, widthPt, heightPt, content));
+        return ms.ToArray();
     }
 
     /// <summary>
-    /// Serializes the accumulated pages to a complete PDF document.
+    /// Writes one page: the JPEG image scaled to the page at <paramref name="dpi"/>, and the invisible text of
+    /// <paramref name="lines"/> (pixel coordinates at that DPI).
     /// </summary>
-    public byte[] Build()
+    public void AddPage(ReadOnlySpan<byte> jpeg, int pixelWidth, int pixelHeight, double dpi, IReadOnlyList<OcrLine> lines)
     {
-        // Object numbering: 1=Catalog, 2=Pages, 3=Font, then per page (content, image, page).
-        const int firstPageObj = 4;
-        int objCount = 3 + _pages.Count * 3;
+        ObjectDisposedException.ThrowIf(_finished, this);
+        double scale = 72.0 / dpi;                 // points per pixel (PDF user space is 72 dpi)
+        double widthPt = pixelWidth * scale;
+        double heightPt = pixelHeight * scale;
 
-        var stream = new MemoryStream();
-        var offsets = new long[objCount + 1]; // 1-based; index 0 unused
+        int contentObj = _nextObject++;
+        int imageObj = _nextObject++;
+        int pageObj = _nextObject++;
 
-        WriteAscii(stream, "%PDF-1.7\n");
-        // Binary marker so tools treat the file as binary.
-        stream.WriteByte((byte)'%');
-        stream.Write(new byte[] { 0xE2, 0xE3, 0xCF, 0xD3 });
-        stream.WriteByte((byte)'\n');
+        string content = BuildContent(lines, widthPt, heightPt, scale, _encoder);
+        WriteStreamObject(contentObj, string.Empty, Deflate(Encoding.ASCII.GetBytes(content), CompressionLevel.Fastest), deflated: true);
 
-        int ContentObjNum(int p) => firstPageObj + p * 3;
-        int ImageObjNum(int p) => firstPageObj + p * 3 + 1;
-        int PageObjNum(int p) => firstPageObj + p * 3 + 2;
+        BeginObject(imageObj);
+        WriteAscii(
+            $"<< /Type /XObject /Subtype /Image /Width {pixelWidth} /Height {pixelHeight} " +
+            $"/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length {jpeg.Length} >>\nstream\n");
+        WriteBytes(jpeg);
+        WriteAscii("\nendstream\nendobj\n");
 
-        // 1: Catalog
-        offsets[1] = stream.Position;
-        WriteAscii(stream, "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+        BeginObject(pageObj);
+        WriteAscii(
+            $"<< /Type /Page /Parent {PagesObj} 0 R " +
+            $"/MediaBox [0 0 {Num(widthPt)} {Num(heightPt)}] " +
+            $"/Resources << /XObject << /Im0 {imageObj} 0 R >> /Font << /F1 {FontObj} 0 R >> >> " +
+            $"/Contents {contentObj} 0 R >>\nendobj\n");
 
-        // 2: Pages
-        offsets[2] = stream.Position;
-        var kids = new StringBuilder();
-        for (int p = 0; p < _pages.Count; p++)
-        {
-            if (p > 0) kids.Append(' ');
-            kids.Append(PageObjNum(p)).Append(" 0 R");
-        }
-        WriteAscii(stream, $"2 0 obj\n<< /Type /Pages /Count {_pages.Count} /Kids [{kids}] >>\nendobj\n");
-
-        // 3: Font (base-14 Helvetica, WinAnsi so Latin text copies/searches correctly)
-        offsets[3] = stream.Position;
-        WriteAscii(stream, "3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\nendobj\n");
-
-        for (int p = 0; p < _pages.Count; p++)
-        {
-            var page = _pages[p];
-
-            // Content stream
-            offsets[ContentObjNum(p)] = stream.Position;
-            var contentBytes = Encoding.Latin1.GetBytes(page.Content);
-            WriteAscii(stream, $"{ContentObjNum(p)} 0 obj\n<< /Length {contentBytes.Length} >>\nstream\n");
-            stream.Write(contentBytes);
-            WriteAscii(stream, "\nendstream\nendobj\n");
-
-            // Image (JPEG / DCTDecode)
-            offsets[ImageObjNum(p)] = stream.Position;
-            WriteAscii(stream,
-                $"{ImageObjNum(p)} 0 obj\n<< /Type /XObject /Subtype /Image /Width {page.PixelWidth} /Height {page.PixelHeight} " +
-                $"/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length {page.Jpeg.Length} >>\nstream\n");
-            stream.Write(page.Jpeg);
-            WriteAscii(stream, "\nendstream\nendobj\n");
-
-            // Page
-            offsets[PageObjNum(p)] = stream.Position;
-            WriteAscii(stream,
-                $"{PageObjNum(p)} 0 obj\n<< /Type /Page /Parent 2 0 R " +
-                $"/MediaBox [0 0 {Num(page.WidthPt)} {Num(page.HeightPt)}] " +
-                $"/Resources << /XObject << /Im0 {ImageObjNum(p)} 0 R >> /Font << /F1 3 0 R >> >> " +
-                $"/Contents {ContentObjNum(p)} 0 R >>\nendobj\n");
-        }
-
-        // xref
-        long xrefPos = stream.Position;
-        WriteAscii(stream, $"xref\n0 {objCount + 1}\n");
-        WriteAscii(stream, "0000000000 65535 f \n");
-        for (int i = 1; i <= objCount; i++)
-        {
-            WriteAscii(stream, $"{offsets[i]:D10} 00000 n \n");
-        }
-
-        WriteAscii(stream, $"trailer\n<< /Size {objCount + 1} /Root 1 0 R >>\nstartxref\n{xrefPos}\n%%EOF\n");
-        return stream.ToArray();
+        _pageObjects.Add(pageObj);
     }
 
     /// <summary>
-    /// Builds the page content stream: draw the image full-bleed, then emit invisible (Tr 3) text for
-    /// each recognized line, positioned to match its on-page location.
+    /// Writes the shared font objects, page tree, catalog, xref table and trailer, then flushes the stream.
     /// </summary>
-    private static string BuildContent(OcrResult ocr, double widthPt, double heightPt, double scale)
+    public void Finish()
+    {
+        ObjectDisposedException.ThrowIf(_finished, this);
+        _finished = true;
+
+        string name = GlyphlessFont.FontName;
+        BeginObject(FontObj);
+        WriteAscii(
+            $"<< /Type /Font /Subtype /Type0 /BaseFont /{name} /Encoding /Identity-H " +
+            $"/DescendantFonts [{CidFontObj} 0 R] /ToUnicode {ToUnicodeObj} 0 R >>\nendobj\n");
+
+        BeginObject(CidFontObj);
+        WriteAscii(
+            $"<< /Type /Font /Subtype /CIDFontType2 /BaseFont /{name} " +
+            "/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> " +
+            $"/FontDescriptor {FontDescriptorObj} 0 R /DW {GlyphlessFont.AdvanceWidth} /CIDToGIDMap {CidToGidMapObj} 0 R >>\nendobj\n");
+
+        BeginObject(FontDescriptorObj);
+        WriteAscii(
+            $"<< /Type /FontDescriptor /FontName /{name} /Flags 5 /FontBBox [0 0 {GlyphlessFont.AdvanceWidth} {GlyphlessFont.UnitsPerEm}] " +
+            $"/ItalicAngle 0 /Ascent {GlyphlessFont.UnitsPerEm} /Descent -1 /CapHeight {GlyphlessFont.UnitsPerEm} /StemV 80 " +
+            $"/FontFile2 {FontFileObj} 0 R >>\nendobj\n");
+
+        WriteStreamObject(FontFileObj, $"/Length1 {GlyphlessFont.TrueTypeProgram.Length} ", s_fontFile.Value, deflated: true);
+        WriteStreamObject(CidToGidMapObj, string.Empty, s_cidToGidMap.Value, deflated: true);
+        WriteStreamObject(ToUnicodeObj, string.Empty,
+            Deflate(Encoding.ASCII.GetBytes(_encoder.BuildToUnicodeCMap()), CompressionLevel.Optimal), deflated: true);
+
+        BeginObject(PagesObj);
+        var kids = new StringBuilder();
+        foreach (int pageObj in _pageObjects)
+        {
+            if (kids.Length > 0) kids.Append(' ');
+            kids.Append(pageObj).Append(" 0 R");
+        }
+        WriteAscii($"<< /Type /Pages /Count {_pageObjects.Count} /Kids [{kids}] >>\nendobj\n");
+
+        BeginObject(CatalogObj);
+        WriteAscii($"<< /Type /Catalog /Pages {PagesObj} 0 R >>\nendobj\n");
+
+        long xrefPos = _position;
+        int size = _nextObject;
+        var xref = new StringBuilder(32 + size * 20);
+        xref.Append("xref\n0 ").Append(size).Append('\n');
+        xref.Append("0000000000 65535 f \n");
+        for (int i = 1; i < size; i++)
+            xref.Append(_offsets[i].ToString("D10", CultureInfo.InvariantCulture)).Append(" 00000 n \n");
+        WriteAscii(xref.ToString());
+        WriteAscii($"trailer\n<< /Size {size} /Root {CatalogObj} 0 R >>\nstartxref\n{xrefPos}\n%%EOF\n");
+        _output.Flush();
+    }
+
+    /// <summary>
+    /// Builds a page content stream: draw the image full-bleed, then emit the invisible text runs.
+    /// </summary>
+    internal static string BuildContent(IReadOnlyList<OcrLine> lines, double widthPt, double heightPt, double scale, PdfTextEncoder encoder)
     {
         var sb = new StringBuilder();
-
-        // Draw the page image to fill the MediaBox.
         sb.Append("q\n").Append(Num(widthPt)).Append(" 0 0 ").Append(Num(heightPt)).Append(" 0 0 cm\n/Im0 Do\nQ\n");
 
-        // Invisible OCR text layer.
         sb.Append("BT\n3 Tr\n");
-        foreach (var line in ocr.Lines)
+        foreach (var line in lines)
         {
-            if (string.IsNullOrWhiteSpace(line.Text)) continue;
-            var b = line.BoundingBox;
-            double size = Math.Max(1.0, (b.MaxY - b.MinY) * scale);
-            double x = b.MinX * scale;
-            double yBaseline = heightPt - b.MaxY * scale; // PDF origin is bottom-left
-
-            sb.Append("/F1 ").Append(Num(size)).Append(" Tf\n");
-            sb.Append("1 0 0 1 ").Append(Num(x)).Append(' ').Append(Num(yBaseline)).Append(" Tm\n");
-            sb.Append('(').Append(EscapePdfText(line.Text)).Append(") Tj\n");
+            // Per-word placement can call AppendTextRun once per word box instead of once per line.
+            AppendTextRun(sb, encoder, line.Text, line.BoundingBox, scale, heightPt);
         }
         sb.Append("ET\n");
         return sb.ToString();
     }
 
-    private static string EscapePdfText(string text)
+    /// <summary>
+    /// Appends one invisible text run whose glyphs span <paramref name="box"/> (pixels): font size = box height,
+    /// baseline on the box bottom, and <c>Tz</c> scaling so the advance widths add up to the box width.
+    /// </summary>
+    internal static void AppendTextRun(StringBuilder sb, PdfTextEncoder encoder, string text, OcrBoundingBox box, double scale, double pageHeightPt)
     {
-        var sb = new StringBuilder(text.Length + 8);
-        foreach (char ch in text)
-        {
-            // WinAnsi/Latin1 only; replace anything outside with '?' so the (invisible) layer stays valid.
-            char c = ch > 0xFF ? '?' : ch;
-            switch (c)
-            {
-                case '\\': sb.Append("\\\\"); break;
-                case '(': sb.Append("\\("); break;
-                case ')': sb.Append("\\)"); break;
-                case '\r': sb.Append(' '); break;
-                case '\n': sb.Append(' '); break;
-                default: sb.Append(c); break;
-            }
-        }
-        return sb.ToString();
+        if (string.IsNullOrWhiteSpace(text)) return;
+
+        var hex = new StringBuilder(text.Length * 4);
+        int glyphs = encoder.Encode(text, hex);
+        if (glyphs == 0) return;
+
+        double size = Math.Max(1.0, box.Height * scale);
+        double naturalWidth = glyphs * size * GlyphlessFont.AdvanceWidth / GlyphlessFont.UnitsPerEm;
+        double boxWidth = box.Width * scale;
+        double horizontalScale = boxWidth > 0 ? Math.Clamp(100.0 * boxWidth / naturalWidth, 0.1, 100_000) : 100.0;
+        double x = box.MinX * scale;
+        double yBaseline = pageHeightPt - box.MaxY * scale; // PDF origin is bottom-left
+
+        sb.Append("/F1 ").Append(Num(size)).Append(" Tf\n");
+        sb.Append(Num(horizontalScale)).Append(" Tz\n");
+        sb.Append("1 0 0 1 ").Append(Num(x)).Append(' ').Append(Num(yBaseline)).Append(" Tm\n");
+        sb.Append('<').Append(hex).Append("> Tj\n");
     }
 
-    private static string Num(double value) => value.ToString("0.##", CultureInfo.InvariantCulture);
+    private static string Num(double value) => value.ToString("0.###", CultureInfo.InvariantCulture);
 
-    private static void WriteAscii(Stream stream, string s)
+    private static byte[] Deflate(byte[] data, CompressionLevel level)
     {
-        var bytes = Encoding.ASCII.GetBytes(s);
-        stream.Write(bytes);
+        using var ms = new MemoryStream();
+        using (var z = new ZLibStream(ms, level, leaveOpen: true))
+            z.Write(data);
+        return ms.ToArray();
+    }
+
+    private void BeginObject(int number)
+    {
+        while (_offsets.Count <= number) _offsets.Add(0);
+        _offsets[number] = _position;
+        WriteAscii($"{number} 0 obj\n");
+    }
+
+    private void WriteStreamObject(int number, string extraDictEntries, byte[] data, bool deflated)
+    {
+        BeginObject(number);
+        string filter = deflated ? "/Filter /FlateDecode " : string.Empty;
+        WriteAscii($"<< {extraDictEntries}{filter}/Length {data.Length} >>\nstream\n");
+        WriteBytes(data);
+        WriteAscii("\nendstream\nendobj\n");
+    }
+
+    private void WriteAscii(string s) => WriteBytes(Encoding.ASCII.GetBytes(s));
+
+    private void WriteBytes(ReadOnlySpan<byte> bytes)
+    {
+        _output.Write(bytes);
+        _position += bytes.Length;
     }
 }

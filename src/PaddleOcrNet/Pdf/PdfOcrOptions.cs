@@ -8,10 +8,30 @@ namespace PaddleOcrNet.Pdf;
 public sealed class PdfOcrOptions
 {
     /// <summary>
+    /// The <see cref="Dpi"/> value that selects a resolution per page from its size.
+    /// </summary>
+    public const int AutoDpi = 0;
+
+    /// <summary>
     /// Rendering resolution. Higher = better OCR accuracy but slower and larger searchable PDFs.
     /// 200–300 is a good range for scanned documents. Default 200.
+    /// <para>
+    /// Set to <see cref="AutoDpi"/> (0) to choose each page's resolution from its size:
+    /// <c>clamp(4000 / longestSideInches, 150, 400)</c>, so the longest rendered side approaches the 4000 px text
+    /// detection limit. A Letter or A4 page renders at about 340–360 DPI, and a very large page never drops below
+    /// 150 DPI. Otherwise the value must be between 36 and 1200.
+    /// </para>
     /// </summary>
     public int Dpi { get; set; } = 200;
+
+    /// <summary>
+    /// Whether to read a born-digital PDF's embedded text layer instead of OCR-ing the page. Default
+    /// <see cref="PdfTextLayerMode.Ignore"/> (OCR every page). Embedded pages report
+    /// <see cref="PdfPageResult.Source"/> = <see cref="PdfPageSource.EmbeddedText"/>, a confidence of 1.0, and
+    /// coordinates in the same pixel space as OCR at the page's DPI. They are much faster, because extraction skips
+    /// rendering entirely.
+    /// </summary>
+    public PdfTextLayerMode TextLayer { get; set; } = PdfTextLayerMode.Ignore;
 
     /// <summary>
     /// JPEG quality (1–100) for the page images embedded in a <i>searchable</i> PDF. Lower = smaller
@@ -89,8 +109,10 @@ public sealed class PdfOcrOptions
 
     internal void Validate()
     {
-        if (Dpi is < 36 or > 1200)
-            throw new ArgumentOutOfRangeException(nameof(Dpi), Dpi, "Dpi must be between 36 and 1200.");
+        if (Dpi != AutoDpi && Dpi is < 36 or > 1200)
+            throw new ArgumentOutOfRangeException(nameof(Dpi), Dpi, "Dpi must be 0 (auto) or between 36 and 1200.");
+        if (!Enum.IsDefined(TextLayer))
+            throw new ArgumentOutOfRangeException(nameof(TextLayer), TextLayer, "TextLayer is not a defined PdfTextLayerMode value.");
         if (JpegQuality is < 1 or > 100)
             throw new ArgumentOutOfRangeException(nameof(JpegQuality), JpegQuality, "JpegQuality must be between 1 and 100.");
         if (MaxPages < 0)
