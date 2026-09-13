@@ -132,6 +132,34 @@ await foreach (var item in ocr.ExtractTextFromImagesAsync(Directory.EnumerateFil
 }
 ```
 
+### PDFs
+
+PDF pages are rasterized with PDFium and OCR'd — or, for born-digital pages, read straight from the
+embedded text layer, which is exact and takes milliseconds instead of seconds. A quality gate falls back
+to OCR when a PDF's text layer is broken, and `Auto` also OCRs scanned pages that carry only a stray line
+of real text:
+
+```csharp
+using PaddleOcrNet.Pdf;
+
+var pdfOptions = new PdfOcrOptions
+{
+    TextLayer = PdfTextLayerMode.Auto,   // Ignore (default) | PreferEmbedded | Auto
+    Dpi = PdfOcrOptions.AutoDpi,         // per page: clamp(4000 / longest side in inches, 150, 400); default 200
+    PageRange = "1-10",
+};
+
+// Pages arrive as they finish; breaking out of the loop stops rendering.
+await foreach (var page in ocr.ExtractTextFromPdfPagesAsync("report.pdf", OcrLanguage.English, pdfOptions: pdfOptions))
+    Console.WriteLine($"page {page.PageNumber} ({page.Source}, {page.Dpi} DPI): {page.Ocr.FullText}");
+
+// Scanned PDF → searchable PDF, stream to stream. The invisible text layer is Unicode (CJK, €, emoji)
+// and each line is scaled to its box, so copy, search and selection work in any PDF reader.
+await using var input  = File.OpenRead("scan.pdf");
+await using var output = File.Create("scan.searchable.pdf");
+await ocr.CreateSearchablePdfAsync(input, output, OcrLanguage.ChineseSimplified);
+```
+
 ---
 
 ## Document structure analysis

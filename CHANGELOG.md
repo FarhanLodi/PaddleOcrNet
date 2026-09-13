@@ -51,6 +51,23 @@ unchanged — every behaviour change below is listed with the switch that restor
   pages to square pixels before OCR and maps boxes back to the original grid.
 - Tracing spans for `AnalyzeDocumentAsync`, frame runs and batch runs.
 
+### Added — PDF
+
+- **Embedded text layers.** `PdfOcrOptions.TextLayer` (`PdfTextLayerMode.Ignore` — default, `PreferEmbedded`,
+  `Auto`) reads born-digital pages from their text layer instead of OCR — milliseconds per page instead of
+  seconds, with exact text. A quality gate (≥ 20 characters, < 5 % replacement/control/private-use
+  characters, ≥ 60 % letters or digits) falls back to OCR for broken ToUnicode maps; `Auto` also OCRs
+  pages whose text lines cover under 1 % of the page (a scan with a stray header). Lines and words are
+  rebuilt from PDFium's character boxes in the same pixel space OCR reports. `PdfPageResult.Source` says
+  which path produced a page.
+- **Auto render DPI.** `PdfOcrOptions.Dpi = PdfOcrOptions.AutoDpi` (0) picks `clamp(4000 / longest side in
+  inches, 150, 400)` per page — Letter renders at 363 DPI, A4 at 342 — so small print is not starved and
+  nothing is rendered past the detector's 4000 px cap. `PdfPageResult.Dpi` reports it. The default stays
+  200.
+- **Streaming.** `ExtractTextFromPdfPagesAsync` yields pages as `IAsyncEnumerable<PdfPageResult>` as they
+  finish (breaking out stops rendering), and `ExtractTextFromPdfAsync` / `CreateSearchablePdfAsync` gained
+  `Stream` overloads — searchable PDFs can be written to non-seekable outputs.
+
 ### Added — word-level boxes
 
 - **Real word boxes.** `RecognitionOptions.ReturnWordBoxes` fills the new `OcrLine.Words` (`OcrWord`: text,
@@ -73,6 +90,10 @@ unchanged — every behaviour change below is listed with the switch that restor
   LaTeX formula decoder no longer copies its logits on every step.
 - `RecognitionOptions.MaxDegreeOfParallelism` is now honoured — it was previously ignored. It caps the
   recognition stage's threads (`1` = fully sequential) and never changes results.
+- **PDF pipeline.** Pages render one ahead on a single PDFium thread, convert straight from BGRA to RGB
+  (byte-identical to before), and are JPEG-encoded for searchable output concurrently with their OCR.
+  Searchable PDFs are streamed to the output page by page instead of holding every page image until the
+  end. OCR results are unchanged (identical output hash on an 8-page scan).
 
 ### Fixed
 
@@ -97,6 +118,11 @@ unchanged — every behaviour change below is listed with the switch that restor
   (default `true`) was OR'd with it. The service value now applies to every call that doesn't set
   `RecognitionOptions.UseTextLineOrientation` explicitly; an explicit per-call value still wins. (Record
   equality now also reflects whether that option was set explicitly.)
+- **Searchable PDFs beyond Latin-1.** Every character above U+00FF became `?`, and Latin-1 bytes were
+  declared as WinAnsi (so €, curly quotes and dashes were wrong too). The invisible text layer now uses a
+  Type0/Identity-H glyphless font with a ToUnicode CMap and `Tz` width scaling — CJK, €, ₹ and emoji
+  copy and search correctly, and selections line up with the OCR boxes (verified by re-extracting the text
+  with PDFium).
 
 ## [2.1.0] - 2026-09-03
 
