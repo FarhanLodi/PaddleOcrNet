@@ -79,6 +79,27 @@ unchanged — every behaviour change below is listed with the switch that restor
 - **hOCR, ALTO and TSV use the real word boxes and confidences** when present, falling back to the
   proportional estimate otherwise.
 
+### Added — detection and runtime options
+
+All off by default — with them off, detection is exactly the 2.1.0 single pass. Measured on the bundled
+corpus plus half-scale, faded and 9600 px tall-receipt variants:
+
+- **`DetectionOptions.TileLargeImages`** detects very tall or wide pages in overlapping full-resolution
+  tiles instead of shrinking them to the 4000 px cap. On a 9600 px receipt it recovered 2 % more
+  characters; nothing else changed. Recommended for long receipts and large drawings.
+- **`DetectionOptions.MinTextHeight`** re-detects at a higher resolution when the typical line is shorter
+  than the given height (and retries an empty small page at 2×). At `16` it recovered a missed line on
+  half-resolution pages (confidence 0.849 → 0.883) and left full-resolution pages unchanged. Recommended
+  for screenshots, faxes and low-DPI photos.
+- **`DetectionOptions.EnhanceContrast`** runs detection on a background-normalized, contrast-stretched copy
+  while recognition still reads the original pixels. Faded scans improved (0.949 → 0.983) but some clean
+  pages lost slightly, so use it for faded or unevenly lit input only.
+- **`PaddleOcrServiceOptions.CudnnConvAlgoSearch`** (`Exhaustive` / `Heuristic` / `Default`) selects cuDNN's
+  convolution algorithm search on CUDA. `Heuristic` avoids re-benchmarking for every new recognizer batch
+  width.
+- **`PaddleOcrServiceOptions.AllowIntraOpSpinning`** controls ONNX Runtime's intra-op thread spinning —
+  turning it off can help busy servers that run other work between OCR calls.
+
 ### Performance
 
 - **Recognition is ~43% faster on CPU with byte-identical output** (7-image golden set, warm: 34.5 s →
@@ -94,6 +115,20 @@ unchanged — every behaviour change below is listed with the switch that restor
   (byte-identical to before), and are JPEG-encoded for searchable output concurrently with their OCR.
   Searchable PDFs are streamed to the output page by page instead of holding every page image until the
   end. OCR results are unchanged (identical output hash on an 8-page scan).
+- **Detection post-processing** fits each region from its per-row extreme pixels instead of every pixel,
+  scores boxes with a scanline instead of a point-in-polygon test per pixel, keeps connected-component
+  labels in flat arrays, binarizes with SIMD, and normalizes the detector input through lookup tables on
+  parallel rows. Results are bit-identical (verified against the old implementations on random masks and
+  on the golden set); dense high-resolution pages gain the most.
+- **Document analysis** recognizes formulas at the same time as the whole-page OCR pass instead of before
+  it (the OCR only needs the formula rectangles), which roughly halved a formula-heavy page, and
+  recognizes independent table and seal regions concurrently (bounded, sequential on DirectML). Layout,
+  table, seal and document-orientation models normalize their input through lookup tables. Output is
+  byte-identical.
+- **No idle page copies.** Document pre-processing no longer clones the full page when it is already
+  upright and unwarping is off, nor each upright table crop.
+- **`WarmUp` now runs each model once** (detector, classifier, recognizer) instead of only loading them, so
+  the first real request no longer pays kernel selection and memory-arena growth.
 
 ### Fixed
 
