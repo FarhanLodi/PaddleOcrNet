@@ -205,7 +205,9 @@ public static class PdfOcrExtensions
 
     /// <summary>
     /// OCRs a PDF and writes a searchable PDF (page images + invisible selectable text) to
-    /// <paramref name="outputPdfPath"/>. Returns the per-page OCR results. The output is written to a temporary file
+    /// <paramref name="outputPdfPath"/>. Returns the per-page OCR results. <see cref="RecognitionOptions.ReturnWordBoxes"/> is always turned on (whatever
+    /// <paramref name="options"/> sets) so the text is placed word by word; word boxes do not change the OCR results, and
+    /// the returned lines carry <see cref="OcrLine.Words"/>. The output is written to a temporary file
     /// next to the destination and moved into place only on success.
     /// </summary>
     public static async Task<PdfOcrResult> CreateSearchablePdfAsync(
@@ -243,7 +245,9 @@ public static class PdfOcrExtensions
 
     /// <summary>
     /// OCRs a PDF and writes a searchable PDF (page images + invisible selectable text) to
-    /// <paramref name="outputPdfPath"/>. Returns the per-page OCR results.
+    /// <paramref name="outputPdfPath"/>. Returns the per-page OCR results. <see cref="RecognitionOptions.ReturnWordBoxes"/> is always turned on (whatever
+    /// <paramref name="options"/> sets) so the text is placed word by word; word boxes do not change the OCR results, and
+    /// the returned lines carry <see cref="OcrLine.Words"/>.
     /// </summary>
     public static Task<PdfOcrResult> CreateSearchablePdfAsync(
         this IPaddleOcrService service,
@@ -257,6 +261,9 @@ public static class PdfOcrExtensions
 
     /// <summary>
     /// OCRs an in-memory PDF and returns both the per-page results and the searchable PDF bytes.
+    /// <see cref="RecognitionOptions.ReturnWordBoxes"/> is always turned on (whatever <paramref name="options"/> sets) so
+    /// the text is placed word by word; word boxes do not change the OCR results, and the returned lines carry
+    /// <see cref="OcrLine.Words"/>.
     /// </summary>
     public static async Task<(PdfOcrResult Result, byte[] Pdf)> CreateSearchablePdfAsync(
         this IPaddleOcrService service,
@@ -274,6 +281,9 @@ public static class PdfOcrExtensions
 
     /// <summary>
     /// OCRs an in-memory PDF and returns both the per-page results and the searchable PDF bytes.
+    /// <see cref="RecognitionOptions.ReturnWordBoxes"/> is always turned on (whatever <paramref name="options"/> sets) so
+    /// the text is placed word by word; word boxes do not change the OCR results, and the returned lines carry
+    /// <see cref="OcrLine.Words"/>.
     /// </summary>
     public static Task<(PdfOcrResult Result, byte[] Pdf)> CreateSearchablePdfAsync(
         this IPaddleOcrService service,
@@ -287,7 +297,9 @@ public static class PdfOcrExtensions
     /// <summary>
     /// OCRs a PDF read from <paramref name="inputPdf"/> and writes the searchable PDF to <paramref name="outputPdf"/>
     /// page by page as each page finishes. Neither stream is disposed, and the output does not need to be seekable.
-    /// Returns the per-page OCR results.
+    /// Returns the per-page OCR results. <see cref="RecognitionOptions.ReturnWordBoxes"/> is always turned on (whatever
+    /// <paramref name="options"/> sets) so the text is placed word by word; word boxes do not change the OCR results, and
+    /// the returned lines carry <see cref="OcrLine.Words"/>.
     /// </summary>
     public static async Task<PdfOcrResult> CreateSearchablePdfAsync(
         this IPaddleOcrService service,
@@ -308,7 +320,9 @@ public static class PdfOcrExtensions
 
     /// <summary>
     /// OCRs a PDF read from <paramref name="inputPdf"/> and writes the searchable PDF to <paramref name="outputPdf"/>.
-    /// Neither stream is disposed. Returns the per-page OCR results.
+    /// Neither stream is disposed. Returns the per-page OCR results. <see cref="RecognitionOptions.ReturnWordBoxes"/> is always turned on (whatever
+    /// <paramref name="options"/> sets) so the text is placed word by word; word boxes do not change the OCR results, and
+    /// the returned lines carry <see cref="OcrLine.Words"/>.
     /// </summary>
     public static Task<PdfOcrResult> CreateSearchablePdfAsync(
         this IPaddleOcrService service,
@@ -341,6 +355,10 @@ public static class PdfOcrExtensions
         PdfOcrOptions pdfOptions,
         CancellationToken cancellationToken)
     {
+        // Word boxes place the invisible text word by word. They never change line text, confidence or boxes, so
+        // they are always requested here, whatever the caller set.
+        options = (options ?? RecognitionOptions.Default) with { ReturnWordBoxes = true };
+
         var builder = new SearchablePdfBuilder(output);
         var pages = new List<PdfPageResult>();
         await foreach (var page in ProcessPagesAsync(service, pdfBytes, languages, options, pdfOptions, builder, cancellationToken).ConfigureAwait(false))

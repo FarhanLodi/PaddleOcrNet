@@ -4,9 +4,15 @@ namespace PaddleOcrNet.Pdf.Internal;
 
 /// <summary>
 /// A tiny TrueType program with no visible glyphs, modeled on Tesseract's <c>GlyphLessFont</c>. Every CID maps
-/// to glyph 1 (via <see cref="BuildCidToGidMap"/>), which has no outline and a fixed advance of
+/// to glyph 1 (via <see cref="BuildCidToGidMap"/>), which has a fixed advance of
 /// <see cref="AdvanceWidth"/>/<see cref="UnitsPerEm"/>. Embedding it keeps the invisible text layer valid for any
 /// script, while text extraction relies on the ToUnicode CMap.
+/// <para>
+/// Glyph 1's outline is a single zero-area contour (a diagonal from (0, 0) to (advance, em)), so it paints nothing,
+/// but its control box covers the whole glyph cell. PDFium measures text objects and character boxes from glyph
+/// boxes: with an empty glyph, a one-glyph run (a CJK character, a one-letter word, a lone space) measured zero wide
+/// and was dropped from the extracted text, and every character box had zero height.
+/// </para>
 /// </summary>
 internal static class GlyphlessFont
 {
@@ -56,7 +62,7 @@ internal static class GlyphlessFont
         var tables = new SortedDictionary<string, byte[]>(StringComparer.Ordinal)
         {
             ["cmap"] = Cmap(),
-            ["glyf"] = Array.Empty<byte>(),
+            ["glyf"] = Glyf(),
             ["head"] = Head(),
             ["hhea"] = Hhea(),
             ["hmtx"] = Hmtx(),
@@ -135,7 +141,7 @@ internal static class GlyphlessFont
         U16(ms, 0);                   // lineGap
         U16(ms, AdvanceWidth);        // advanceWidthMax
         U16(ms, 0); U16(ms, 0);       // minLeftSideBearing, minRightSideBearing
-        U16(ms, 0);                   // xMaxExtent
+        U16(ms, AdvanceWidth);        // xMaxExtent
         U16(ms, 1); U16(ms, 0);       // caretSlopeRise, caretSlopeRun
         U16(ms, 0);                   // caretOffset
         U16(ms, 0); U16(ms, 0); U16(ms, 0); U16(ms, 0); // reserved
@@ -155,15 +161,42 @@ internal static class GlyphlessFont
         return ms.ToArray();
     }
 
-    // Both glyphs are empty (all offsets equal), so the glyf table itself is empty.
-    private static byte[] Loca() => new byte[6];
+    /// <summary>
+    /// Glyph 0 (.notdef) is empty; glyph 1 is a simple glyph with one contour of two on-curve points, (0, 0) and
+    /// (<see cref="AdvanceWidth"/>, <see cref="UnitsPerEm"/>): zero area, full-cell control box.
+    /// </summary>
+    private static byte[] Glyf()
+    {
+        var ms = new MemoryStream();
+        U16(ms, 1);                   // numberOfContours
+        U16(ms, 0); U16(ms, 0);       // xMin, yMin
+        U16(ms, AdvanceWidth);        // xMax
+        U16(ms, UnitsPerEm);          // yMax
+        U16(ms, 1);                   // endPtsOfContours[0]
+        U16(ms, 0);                   // instructionLength
+        ms.WriteByte(0x01);           // flags: on curve, int16 x and y deltas
+        ms.WriteByte(0x01);
+        U16(ms, 0); U16(ms, AdvanceWidth);   // x deltas
+        U16(ms, 0); U16(ms, UnitsPerEm);     // y deltas
+        return ms.ToArray();
+    }
+
+    // Short offsets (actual offset / 2): glyph 0 is empty at 0, glyph 1 spans the whole 24-byte glyf table.
+    private static byte[] Loca()
+    {
+        var ms = new MemoryStream();
+        U16(ms, 0);
+        U16(ms, 0);
+        U16(ms, Glyf().Length / 2);
+        return ms.ToArray();
+    }
 
     private static byte[] Maxp()
     {
         var ms = new MemoryStream();
         U32(ms, 0x00010000);          // version 1.0
         U16(ms, 2);                   // numGlyphs
-        U16(ms, 0); U16(ms, 0);       // maxPoints, maxContours
+        U16(ms, 2); U16(ms, 1);       // maxPoints, maxContours
         U16(ms, 0); U16(ms, 0);       // maxCompositePoints, maxCompositeContours
         U16(ms, 2);                   // maxZones
         for (int i = 0; i < 9; i++) U16(ms, 0);
