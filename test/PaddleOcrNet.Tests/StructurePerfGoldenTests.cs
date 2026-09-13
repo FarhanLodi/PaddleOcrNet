@@ -57,7 +57,12 @@ public sealed class StructurePerfGoldenTests
         var options = StructureOptions.Default;
         var report = new List<string>();
 
-        foreach (var asset in Assets)
+        // Optional comma-separated subset (PADDLEOCRNET_GOLDEN_ASSETS) for quick back-to-back A/B timing runs.
+        var selected = Environment.GetEnvironmentVariable("PADDLEOCRNET_GOLDEN_ASSETS") is { Length: > 0 } filter
+            ? Assets.Where(a => filter.Split(',', StringSplitOptions.TrimEntries).Contains(a, StringComparer.OrdinalIgnoreCase)).ToArray()
+            : Assets;
+
+        foreach (var asset in selected)
         {
             var path = Path.Combine(RepoRoot, "test", "Assets", asset);
             Skip.IfNot(File.Exists(path), $"{asset} missing.");
