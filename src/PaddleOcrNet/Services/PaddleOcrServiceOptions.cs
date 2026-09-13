@@ -101,12 +101,18 @@ public sealed class PaddleOcrServiceOptions
 
     /// <summary>
     /// Run the text-line orientation classifier (180° flip detection) before recognition. PaddleOCR's
-    /// <c>use_textline_orientation</c>. Default false at the service level, but note that the per-call
-    /// <see cref="PaddleOcrNet.Models.RecognitionOptions.UseTextLineOrientation"/> defaults to true (the
-    /// Python pipeline default), so the classifier runs for default recognition calls regardless; a call
-    /// must set it to false to skip the classifier.
+    /// <c>use_textline_orientation</c>. When left unset the classifier runs (the Python pipeline default).
+    /// Setting it — to <c>false</c> or <c>true</c> — makes that the default for every recognition call that
+    /// does not set <see cref="PaddleOcrNet.Models.RecognitionOptions.UseTextLineOrientation"/> explicitly;
+    /// a value set explicitly on a call's options always wins. Reads as false while unset.
     /// </summary>
-    public bool UseTextLineOrientation { get; set; }
+    public bool UseTextLineOrientation
+    {
+        get => _useTextLineOrientation ?? false;
+        set => _useTextLineOrientation = value;
+    }
+
+    private bool? _useTextLineOrientation;
 
     /// <summary>
     /// When <c>true</c>, a one-time startup <b>warning</b> is logged if a usable GPU is physically present
@@ -143,7 +149,7 @@ public sealed class PaddleOcrServiceOptions
             IntraOpNumThreads = IntraOpNumThreads,
             InterOpNumThreads = InterOpNumThreads,
             Download = Download,
-            UseTextLineOrientation = UseTextLineOrientation,
+            UseTextLineOrientation = _useTextLineOrientation,
             LogGpuHint = LogGpuHint,
         };
     }

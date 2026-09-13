@@ -713,6 +713,8 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
             Grouping = TextGrouping.Word,
             UseDocOrientation = false,
             UseDocUnwarp = false,
+            // Structure blocks re-map and re-translate lines without their words; don't compute them.
+            ReturnWordBoxes = false,
         };
 
     /// <summary>

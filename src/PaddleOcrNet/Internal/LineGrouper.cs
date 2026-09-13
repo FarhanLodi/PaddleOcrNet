@@ -74,6 +74,7 @@ internal static class LineGrouper
             Confidence = ordered.Average(l => l.Confidence),
             BoundingPolygon = poly,
             BoundingBox = new OcrBoundingBox(minX, minY, maxX, maxY),
+            Words = ordered.SelectMany(l => l.Words).ToArray(),
         };
     }
 }
