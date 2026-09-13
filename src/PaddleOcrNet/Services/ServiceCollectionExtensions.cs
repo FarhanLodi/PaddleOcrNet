@@ -24,11 +24,14 @@ public static class ServiceCollectionExtensions
         var options = new PaddleOcrServiceOptions();
         configure?.Invoke(options);
 
+        // Both registrations are TryAdd, and the service is built from the REGISTERED options, so calling this
+        // twice (or pre-registering PaddleOcrServiceOptions) can never leave the service and add-ons such as
+        // the health check looking at different option instances.
         services.TryAddSingleton(options);
-        services.AddSingleton<IPaddleOcrService>(sp =>
+        services.TryAddSingleton<IPaddleOcrService>(sp =>
         {
             var logger = sp.GetService<ILogger<PaddleOcrService>>();
-            return new PaddleOcrService(options, logger);
+            return new PaddleOcrService(sp.GetRequiredService<PaddleOcrServiceOptions>(), logger);
         });
 
         return services;
