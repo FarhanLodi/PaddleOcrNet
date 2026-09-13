@@ -168,25 +168,90 @@ internal sealed class SearchablePdfBuilder
 
         sb.Append("BT\n3 Tr\n");
         foreach (var line in lines)
-        {
-            // Per-word placement can call AppendTextRun once per word box instead of once per line.
-            AppendTextRun(sb, encoder, line.Text, line.BoundingBox, scale, heightPt);
-        }
+            AppendLine(sb, encoder, line, scale, heightPt);
         sb.Append("ET\n");
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Appends the invisible text of one line. When the line carries <see cref="OcrLine.Words"/> that spell out
+    /// its text, each word becomes its own run at its word box, so selection and search hits land on the word
+    /// instead of a guessed slice of the line. Otherwise (no words, or words that do not match the line text) the
+    /// whole line is one run across the line box.
+    /// <para>
+    /// Where the line text has whitespace between two words, a single space glyph is written after the first word,
+    /// <c>Tz</c>-scaled on its own to span the gap up to the next word, so extracted text reads "word word" while
+    /// every word's glyphs still fill exactly its box. (Tesseract's pdfrenderer instead appends the space inside
+    /// the word's run and squeezes it into the word width.) No space is written where the text has none, e.g.
+    /// between CJK characters, which are one word each. Like the line run, word runs are placed on the axis-aligned
+    /// box, so rotated or slanted text is handled exactly as before, only at word granularity.
+    /// </para>
+    /// </summary>
+    internal static void AppendLine(StringBuilder sb, PdfTextEncoder encoder, OcrLine line, double scale, double pageHeightPt)
+    {
+        var words = line.Words;
+        if (words is { Count: > 0 })
+        {
+            var spaceAfter = new bool[words.Count];
+            // RTL lines keep display-order text, so their words (in recognition order) may spell it backwards.
+            bool reversed = !MatchWords(line.Text, words, reversed: false, spaceAfter);
+            if (!reversed || MatchWords(line.Text, words, reversed: true, spaceAfter))
+            {
+                for (int k = 0; k < words.Count; k++)
+                {
+                    var word = words[reversed ? words.Count - 1 - k : k];
+                    double size = AppendTextRun(sb, encoder, word.Text, word.BoundingBox, scale, pageHeightPt);
+                    if (spaceAfter[k] && size > 0)
+                    {
+                        var next = words[reversed ? words.Count - 2 - k : k + 1];
+                        AppendSpace(sb, encoder, word.BoundingBox, next.BoundingBox, size, scale);
+                    }
+                }
+                return;
+            }
+        }
+
+        AppendTextRun(sb, encoder, line.Text, line.BoundingBox, scale, pageHeightPt);
+    }
+
+    /// <summary>
+    /// Checks that <paramref name="words"/> (in order, or reversed) spell out <paramref name="text"/> with only
+    /// whitespace between and around them, and records in <paramref name="spaceAfter"/> (indexed in that order)
+    /// which words are followed by whitespace.
+    /// </summary>
+    internal static bool MatchWords(string text, IReadOnlyList<OcrWord> words, bool reversed, bool[] spaceAfter)
+    {
+        int cursor = 0;
+        for (int k = 0; k < words.Count; k++)
+        {
+            string word = words[reversed ? words.Count - 1 - k : k].Text;
+            if (string.IsNullOrWhiteSpace(word)) return false;
+
+            int start = cursor;
+            while (start < text.Length && char.IsWhiteSpace(text[start])) start++;
+            if (string.CompareOrdinal(text, start, word, 0, word.Length) != 0 || start + word.Length > text.Length) return false;
+
+            if (k > 0) spaceAfter[k - 1] = start > cursor;
+            cursor = start + word.Length;
+        }
+        spaceAfter[words.Count - 1] = false;
+
+        while (cursor < text.Length && char.IsWhiteSpace(text[cursor])) cursor++;
+        return cursor == text.Length;
     }
 
     /// <summary>
     /// Appends one invisible text run whose glyphs span <paramref name="box"/> (pixels): font size = box height,
     /// baseline on the box bottom, and <c>Tz</c> scaling so the advance widths add up to the box width.
     /// </summary>
-    internal static void AppendTextRun(StringBuilder sb, PdfTextEncoder encoder, string text, OcrBoundingBox box, double scale, double pageHeightPt)
+    /// <returns>The font size (points) of the run, or 0 when nothing was written.</returns>
+    internal static double AppendTextRun(StringBuilder sb, PdfTextEncoder encoder, string text, OcrBoundingBox box, double scale, double pageHeightPt)
     {
-        if (string.IsNullOrWhiteSpace(text)) return;
+        if (string.IsNullOrWhiteSpace(text)) return 0;
 
         var hex = new StringBuilder(text.Length * 4);
         int glyphs = encoder.Encode(text, hex);
-        if (glyphs == 0) return;
+        if (glyphs == 0) return 0;
 
         double size = Math.Max(1.0, box.Height * scale);
         double naturalWidth = glyphs * size * GlyphlessFont.AdvanceWidth / GlyphlessFont.UnitsPerEm;
@@ -198,6 +263,23 @@ internal sealed class SearchablePdfBuilder
         sb.Append("/F1 ").Append(Num(size)).Append(" Tf\n");
         sb.Append(Num(horizontalScale)).Append(" Tz\n");
         sb.Append("1 0 0 1 ").Append(Num(x)).Append(' ').Append(Num(yBaseline)).Append(" Tm\n");
+        sb.Append('<').Append(hex).Append("> Tj\n");
+        return size;
+    }
+
+    /// <summary>
+    /// Appends a space glyph right after a word run (the text position is then at the word box's right edge),
+    /// scaled to reach the next word's left edge. When the next word does not lie to the right (a wrapped,
+    /// flipped or vertical line), the space gets a small fixed width instead.
+    /// </summary>
+    private static void AppendSpace(StringBuilder sb, PdfTextEncoder encoder, OcrBoundingBox word, OcrBoundingBox next, double size, double scale)
+    {
+        var hex = new StringBuilder(4);
+        encoder.Encode(" ", hex);
+        double naturalWidth = size * GlyphlessFont.AdvanceWidth / GlyphlessFont.UnitsPerEm;
+        double gap = Math.Max((next.MinX - word.MaxX) * scale, 0.1 * size);
+        double horizontalScale = Math.Clamp(100.0 * gap / naturalWidth, 0.1, 100_000);
+        sb.Append(Num(horizontalScale)).Append(" Tz\n");
         sb.Append('<').Append(hex).Append("> Tj\n");
     }
 
