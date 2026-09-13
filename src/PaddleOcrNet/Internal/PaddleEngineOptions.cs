@@ -63,6 +63,16 @@ internal sealed record PaddleEngineOptions
     public int? InterOpNumThreads { get; init; }
 
     /// <summary>
+    /// ONNX Runtime <c>session.intra_op.allow_spinning</c> (null = runtime default).
+    /// </summary>
+    public bool? AllowIntraOpSpinning { get; init; }
+
+    /// <summary>
+    /// CUDA provider <c>cudnn_conv_algo_search</c> (null = runtime default).
+    /// </summary>
+    public CudnnConvolutionAlgorithmSearch? CudnnConvAlgoSearch { get; init; }
+
+    /// <summary>
     /// How model files are downloaded and cached.
     /// </summary>
     public ModelDownloadOptions Download { get; init; } = new();

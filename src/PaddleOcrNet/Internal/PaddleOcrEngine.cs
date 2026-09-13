@@ -938,13 +938,15 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
     /// </summary>
     public async Task WarmUp(IReadOnlyList<string> languages, CancellationToken cancellationToken)
     {
-        await GetOrLoadDetectorAsync(cancellationToken).ConfigureAwait(false);
+        var warmDetector = await GetOrLoadDetectorAsync(cancellationToken).ConfigureAwait(false);
+        IAngleClassifier? warmClassifier = null;
+        var warmRecognizers = new List<ITextRecognizer>();
         // RecognitionOptions.UseTextLineOrientation defaults to true (the Python pipeline default), so the
         // classifier participates in a default recognition call unless the service-level option turned it
         // off — pre-load it whenever a default call would bring it in.
         if (ResolveUseTextLineOrientation(RecognitionOptions.Default, _options.UseTextLineOrientation))
         {
-            await GetOrLoadClassifierAsync(cancellationToken).ConfigureAwait(false);
+            warmClassifier = await GetOrLoadClassifierAsync(cancellationToken).ConfigureAwait(false);
         }
         // Doc orientation defaults on too (RecognitionOptions.UseDocOrientation, the Python pipeline
         // default) — pre-load its classifier as well. A failed load degrades gracefully (never throws).
@@ -955,8 +957,11 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
         foreach (var pack in ResolvePacks(languages))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            await GetOrLoadRecognizerAsync(pack, cancellationToken).ConfigureAwait(false);
+            warmRecognizers.Add(await GetOrLoadRecognizerAsync(pack, cancellationToken).ConfigureAwait(false));
         }
+        // Loading a session does not run it: one dummy inference per model moves kernel selection and
+        // arena growth out of the first real request.
+        Detection.ModelWarmUp.Run(warmDetector, warmClassifier, warmRecognizers, _logger);
     }
 
     /// <summary>
