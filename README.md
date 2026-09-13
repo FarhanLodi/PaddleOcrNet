@@ -106,6 +106,32 @@ OcrResult r = await ocr.ExtractTextFromImage("multilingual.png", OcrLanguage.Aut
 Console.WriteLine(string.Join(", ", r.DetectedLanguages)); // e.g. "arabic, latin, ch"
 ```
 
+### Multi-page images, batches and phone photos
+
+Phone photos are rotated upright from their EXIF orientation, transparent PNGs are flattened onto a
+contrasting background, and fax pages with non-square pixels are resampled before OCR (boxes are always
+reported on the original image). Multi-page TIFFs and animated GIF/WebP/APNG files have a per-frame API,
+and many files can be processed with bounded concurrency:
+
+```csharp
+// Every page of a multi-page TIFF (or every frame of an animation):
+await foreach (var frame in ocr.ExtractTextFromImageFramesAsync("fax.tif", OcrLanguage.English))
+    Console.WriteLine($"Page {frame.FrameIndex + 1}: {frame.Result.FullText}");
+
+// A folder of images, two at a time, with progress and per-file error capture:
+var batch = new OcrBatchOptions
+{
+    MaxConcurrency = 2,   // keep MaxConcurrency × IntraOpNumThreads near your physical core count
+    Progress = new Progress<OcrBatchProgress>(p => Console.WriteLine($"{p.Completed}/{p.Total}")),
+};
+await foreach (var item in ocr.ExtractTextFromImagesAsync(Directory.EnumerateFiles("inbox"),
+                   OcrLanguage.English, batchOptions: batch))
+{
+    if (item.Succeeded) Console.WriteLine($"{item.Path}: {item.Result!.FullText.Length} chars");
+    else Console.WriteLine($"{item.Path} failed: {item.Exception!.Message}");
+}
+```
+
 ---
 
 ## Document structure analysis
@@ -259,7 +285,9 @@ share across threads. Call `WarmUp(...)` to pre-load models off the request path
 | **Local models** | `DetectionModelPath` / `RecognitionModelPath` / `RecognitionDictionaryPath` load your own ONNX/dictionary files with no download at all. See [Local / offline models](#local--offline-models). |
 | **Offline / air-gapped** | Pre-seed the cache (or a mirror) and run fully offline; downloads are SHA-256 verified. |
 | **Throughput** | `BatchSize` (applied per call), `MaxDegreeOfParallelism`, and reading-order / paragraph grouping via `RecognitionOptions`. |
-| **Input limits** | Built-in max-pixel / PDF page guards against decompression bombs. |
+| **Input clean-up** | `PaddleOcrServiceOptions.ApplyExifOrientation` and `FlattenTransparency` (both on by default) upright phone photos and keep transparent images from turning black; `PreprocessingOptions.CorrectNonSquarePixels` (on) fixes 204×98-DPI fax pages. `Preprocessing.Deskew` straightens the page and still reports boxes on the original image. |
+| **Batches** | `ExtractTextFromImagesAsync` with `OcrBatchOptions` (`MaxConcurrency`, `ContinueOnError`, `Progress`, `PreserveOrder`); `ExtractTextFromImageFramesAsync` for multi-page/animated files. |
+| **Input limits** | Built-in max-pixel / PDF page guards against decompression bombs; single-image calls decode only the first frame, and every frame counts against `MaxImagePixels`. |
 | **Table model** | `StructureOptions.TableModel` — `SlanetPlus` (default, single end-to-end model) or `SlaNeXt` (v2 path: wired/wireless classifier → SLANeXt_wired or SLANet_plus). `UseTableOrientationClassification` (on by default) uprights sideways tables first. |
 | **Layout model** | `StructureOptions.LayoutModel` — `RtDetrL` (default, PP-DocLayoutV3, 25 classes, most accurate) or `PicoDetS` / `PicoDetM` (PP-DocLayout-S/M, far smaller and faster, fewer regions). |
 | **Layout threshold** | `StructureOptions.LayoutScoreThreshold` — global confidence floor, default `0.5`. Per-class floors via `LayoutClassThresholds`; left null, the PP-StructureV3 per-class defaults apply (`paragraph_title` 0.3, `text` 0.4, `formula` 0.3, `seal` 0.45). |
@@ -395,6 +423,69 @@ using System.Text.Encodings.Web;
 
 string pretty  = result.ToJson(new JsonSerializerOptions { WriteIndented = true });
 string escaped = doc.ToJson(new JsonSerializerOptions { Encoder = JavaScriptEncoder.Default });  // pre-2.0.2 escaping
+```
+
+---
+
+## Extracting data from results
+
+`PaddleOcrNet.Extraction` turns an `OcrResult` into application data without an LLM: typed matches with
+positions, quality signals for human review, passport/ID MRZ parsing, layout-preserving text, and
+template OCR for fixed forms.
+
+```csharp
+using PaddleOcrNet.Extraction;
+
+var result = await ocr.ExtractTextFromImage("invoice.png", OcrLanguage.English);
+
+// Typed values with a normalized form and an estimated box on the page.
+// Built-ins: Email, Url, Phone, Date, Amount, Iban (mod-97), PaymentCard (Luhn), Percentage, All.
+foreach (var m in result.FindMatches(OcrPatterns.All))
+    Console.WriteLine($"{m.Kind}: {m.Value} -> {m.Normalized} @ {m.BoundingBox}");
+
+// Route doubtful pages to a person.
+var quality = result.GetQuality();
+if (quality.LowConfidenceRatio > 0.2)
+    foreach (var line in result.GetLinesForReview(threshold: 0.8))
+        Console.WriteLine($"check: {line.Text}");
+
+// Text with columns kept aligned — handy for receipts and LLM prompts.
+Console.WriteLine(result.ToLayoutText(new LayoutTextOptions { MaxBlankLines = 1 }));
+```
+
+**Passports and ID cards (ICAO 9303 TD1/TD2/TD3).** Misreads are corrected by field position and every
+check digit is verified:
+
+```csharp
+var mrzText = await ocr.ExtractTextFromImage("passport.jpg", OcrLanguage.English,
+    MrzParser.RecommendedRecognitionOptions with { Region = OcrRegion.Fraction(0, 0.7, 1, 0.3) });
+
+if (MrzParser.TryParse(mrzText, out var mrz) && mrz.IsValid)
+    Console.WriteLine($"{mrz.Surname}, {mrz.GivenNames} — {mrz.DocumentNumber}, expires {mrz.ExpiryDate}");
+```
+
+**Zone (template) OCR** reads named regions of a fixed layout, each detected normally or read as a single
+line with its own allowlist:
+
+```csharp
+var zones = new[]
+{
+    new OcrZone("vendor", OcrRegion.Fraction(0, 0, 0.5, 0.15)),
+    new OcrZone("total",  OcrRegion.Pixels(820, 1400, 300, 60), ZoneMode.SingleLine,
+                RecognitionOptions.FromCharacters("0123456789.,")),
+};
+var fields = await ocr.RecognizeZonesAsync("invoice.png", zones, OcrLanguage.English);
+Console.WriteLine(fields["total"].Text);
+```
+
+**Pre-downloading models** for Docker images and air-gapped hosts:
+
+```csharp
+var report = await PaddleOcrModels.DownloadAsync(
+    new[] { OcrLanguage.English, OcrLanguage.German }, PaddleModelSet.Ocr | PaddleModelSet.Layout);
+report.EnsureSuccess();   // throws if any file failed
+Console.WriteLine($"{report.DownloadedCount} downloaded, {report.CachedCount} already cached in {report.CacheDirectory}");
+// At runtime: new PaddleOcrServiceOptions { Download = { Offline = true } }
 ```
 
 ---

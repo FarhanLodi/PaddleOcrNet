@@ -4,6 +4,71 @@ All notable changes to PaddleOcrNet are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - Unreleased
+
+A release for **applications**: new ways to get data out of a result, input handling that copes with
+real-world files (phone photos, transparent PNGs, multi-page TIFFs, faxes), batch processing for
+background workers, and up-to-date dependencies. OCR numerics on ordinary upright images are
+unchanged — every behaviour change below is listed with the switch that restores the old one.
+
+### Dependencies
+
+- **EasyImageSharp 1.1.0** (was 1.0.1): APNG, BigTIFF decoding, and a total-pixel budget across frames.
+- **ONNX Runtime 1.30.0** (was 1.27.0). The GPU build still links **CUDA 13 / cuDNN 9**, so the CUDA 12
+  guidance in the GPU package README is unchanged apart from the version numbers.
+- Microsoft.Extensions.* 10.0.12; test tooling Microsoft.NET.Test.Sdk 18.10.0, xunit.runner.visualstudio
+  4.0.0, Xunit.SkippableFact 1.5.85.
+
+### Added — extracting data from results (`PaddleOcrNet.Extraction`)
+
+- **Pattern extraction with page positions.** `OcrResult.FindMatches` finds values in a result and returns
+  the matched text, a normalized form, the line and an estimated box. Built-in `OcrPatterns` cover
+  e-mail, URL, phone, date, amount, IBAN (mod-97), payment card (Luhn) and percentage; validators tolerate
+  OCR look-alikes such as `O` for `0` but never alter the matched text.
+- **Quality helpers.** `GetQuality` reports mean, character-weighted and minimum confidence and
+  low-confidence counts; `GetLinesForReview` lists the lines a person should check.
+- **MRZ parsing.** `MrzParser` reads ICAO 9303 TD1/TD2/TD3 zones from passports and ID cards, corrects
+  common misreads by field position and verifies every check digit;
+  `MrzParser.RecommendedRecognitionOptions` restricts recognition to the MRZ alphabet.
+- **Layout-preserving text.** `ToLayoutText` renders a result like `pdftotext -layout` — columns stay
+  aligned, CJK characters take two columns, right-to-left lines stay right-aligned. Useful for receipts
+  and LLM prompts.
+- **Zone (template) OCR.** `RecognizeZonesAsync` reads named regions — in pixels or fractions of the page —
+  each detected normally or read as a single line with its own allowlist.
+- **Model pre-download.** `PaddleOcrModels.DownloadAsync` fills the model cache ahead of time for Docker
+  images and air-gapped deployments and returns a per-file cached/downloaded report
+  (`report.EnsureSuccess()` fails a build step).
+
+### Added — input and throughput
+
+- **Multi-page and animated images.** `ExtractTextFromImageFramesAsync` OCRs every page of a multi-page
+  TIFF and every frame of an animated GIF, WebP or APNG, yielding an `OcrFrameResult` per frame.
+- **Batch OCR.** `ExtractTextFromImagesAsync` processes many files with bounded concurrency
+  (`OcrBatchOptions`: `MaxConcurrency` — default 2, `ContinueOnError`, `Progress`, `PreserveOrder`) and
+  yields an `OcrBatchItem` per file. Keep `MaxConcurrency × IntraOpNumThreads` near your physical core
+  count.
+- **Fax pages.** `PreprocessingOptions.CorrectNonSquarePixels` (default **true**) resamples 204×98-DPI-style
+  pages to square pixels before OCR and maps boxes back to the original grid.
+- Tracing spans for `AnalyzeDocumentAsync`, frame runs and batch runs.
+
+### Fixed
+
+- **EXIF orientation is applied on load** (`PaddleOcrServiceOptions.ApplyExifOrientation`, default
+  **true**) — portrait phone photos were OCR'd sideways. This matches Python's `cv2.imread`.
+- **Transparent images no longer turn black.** PNG/WebP/GIF inputs with transparency are flattened onto
+  white, or onto black for light-on-transparent content (`FlattenTransparency`, default **true**).
+  Opaque images are byte-identical to before.
+- **Single-image calls decode only the first frame**, and `MaxImagePixels` now guards every frame.
+- **Reading order.** Boxes on one row are no longer split by band rounding, and pages skewed by 0.5° or
+  more read row by row. Unskewed pages keep Python's exact `sorted_boxes` order.
+- **`Preprocessing.Deskew`** now returns boxes on the original image instead of the rotated canvas, and
+  estimates skew with a Hough transform instead of 42 trial rotations.
+- `DetectRegionsAsync(string)` validates its argument, the file and disposal like the other entry points.
+- The health check reports the models the configured service actually loads (server/local detectors,
+  orientation classifiers) and can now report *Degraded* when the classifiers are not yet cached.
+- Diagnostics report the real library version instead of `1.0.0`.
+- Calling `AddPaddleOcrNet` twice no longer registers two services with separate options.
+
 ## [2.1.0] - 2026-09-03
 
 Two large pushes in one release: an **accuracy pass** that aligns the OCR pipeline with Python
