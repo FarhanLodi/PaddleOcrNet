@@ -51,6 +51,29 @@ unchanged — every behaviour change below is listed with the switch that restor
   pages to square pixels before OCR and maps boxes back to the original grid.
 - Tracing spans for `AnalyzeDocumentAsync`, frame runs and batch runs.
 
+### Added — word-level boxes
+
+- **Real word boxes.** `RecognitionOptions.ReturnWordBoxes` fills the new `OcrLine.Words` (`OcrWord`: text,
+  mean character confidence, polygon, box), placed from the recognizer's CTC timesteps — Python PaddleOCR
+  3.x's `return_word_box`. Word boxes follow the line's slant, vertical text and 180° flips; Han/Kana
+  characters are one word each (widths as PaddleOCR's `cal_ocr_word_box`), Hangul splits at spaces, and
+  RTL words carry display-order text. Line text, confidence and boxes are identical with the option on or
+  off.
+- **hOCR, ALTO and TSV use the real word boxes and confidences** when present, falling back to the
+  proportional estimate otherwise.
+
+### Performance
+
+- **Recognition is ~43% faster on CPU with byte-identical output** (7-image golden set, warm: 34.5 s →
+  19.8 s). The CTC decode reads the model output in place instead of copying up to ~170 MB per batch
+  and uses a vectorized argmax; batch tensors are filled directly through a lookup table; the text-line
+  classifier runs six crops per model call instead of one; crops are rectified in parallel; and up to
+  two recognition batches — plus the 180° confirmation pass — run concurrently on the CPU provider
+  (DirectML and CUDA stay sequential; batch composition, and therefore numerics, is unchanged). The
+  LaTeX formula decoder no longer copies its logits on every step.
+- `RecognitionOptions.MaxDegreeOfParallelism` is now honoured — it was previously ignored. It caps the
+  recognition stage's threads (`1` = fully sequential) and never changes results.
+
 ### Fixed
 
 - **EXIF orientation is applied on load** (`PaddleOcrServiceOptions.ApplyExifOrientation`, default
@@ -68,6 +91,12 @@ unchanged — every behaviour change below is listed with the switch that restor
   orientation classifiers) and can now report *Degraded* when the classifiers are not yet cached.
 - Diagnostics report the real library version instead of `1.0.0`.
 - Calling `AddPaddleOcrNet` twice no longer registers two services with separate options.
+- **Thread safety:** concurrent recognition calls with different `Allowlist` / `Blocklist` values could
+  decode with each other's filter on the shared recognizer. The filter is now passed per call.
+- `PaddleOcrServiceOptions.UseTextLineOrientation = false` had no effect, because the per-call option
+  (default `true`) was OR'd with it. The service value now applies to every call that doesn't set
+  `RecognitionOptions.UseTextLineOrientation` explicitly; an explicit per-call value still wins. (Record
+  equality now also reflects whether that option was set explicitly.)
 
 ## [2.1.0] - 2026-09-03
 

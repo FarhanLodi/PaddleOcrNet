@@ -279,12 +279,12 @@ share across threads. Call `WarmUp(...)` to pre-load models off the request path
 | **GPU** | Add `PaddleOcrNet.Gpu` (CUDA 13.x); it is detected and used automatically, otherwise CPU. For CUDA 12, pin ONNX Runtime 1.26 in your project. `DeviceId` picks the GPU on multi-GPU hosts. When OCR runs on CPU and you expected otherwise, see [GPU diagnostics](#gpu-diagnostics). |
 | **Model variant** | `DetectionModel` / `RecognitionModel` — `OcrModelVariant.Mobile` (default) or `Server` for the larger, more accurate PP-OCRv5 networks. See [Server models](#server-models). |
 | **Crop padding** | `RecognitionOptions.CropPadding` — white border in pixels added around every detected line before recognition (default `0`). A few pixels help when glyphs sit flush against the detected box. |
-| **Orientation handling** | `UseTextLineOrientation` / `UseDocOrientation` correct upside-down lines and pages (both on by default). The classifiers do misfire on upright text, so a verdict must clear `TextLineOrientationThreshold` (default `0.9`) and is then confirmed by `VerifyOrientationByRecognition` (default `true`), which recognizes the crop both ways and keeps the more confident reading. Set the threshold to `0` and the verification to `false` for raw PaddleX 3.x behaviour. |
+| **Orientation handling** | `UseTextLineOrientation` / `UseDocOrientation` correct upside-down lines and pages (both on by default). The classifiers do misfire on upright text, so a verdict must clear `TextLineOrientationThreshold` (default `0.9`) and is then confirmed by `VerifyOrientationByRecognition` (default `true`), which recognizes the crop both ways and keeps the more confident reading. Set the threshold to `0` and the verification to `false` for raw PaddleX 3.x behaviour. `PaddleOcrServiceOptions.UseTextLineOrientation = false` turns the line classifier off for every call that doesn't set it explicitly. |
 | **Model cache** | `%LOCALAPPDATA%` / `~/.local/share` by default; override via `ModelCachePath` or `PADDLEOCRNET_CACHE`. |
 | **Model host** | Defaults to the public Hugging Face repo; point at a private mirror via `PADDLEOCRNET_MODEL_BASE_URL` or `ModelDownloadOptions.BaseUrlOverride`. |
 | **Local models** | `DetectionModelPath` / `RecognitionModelPath` / `RecognitionDictionaryPath` load your own ONNX/dictionary files with no download at all. See [Local / offline models](#local--offline-models). |
 | **Offline / air-gapped** | Pre-seed the cache (or a mirror) and run fully offline; downloads are SHA-256 verified. |
-| **Throughput** | `BatchSize` (applied per call), `MaxDegreeOfParallelism`, and reading-order / paragraph grouping via `RecognitionOptions`. |
+| **Throughput** | `BatchSize` (applied per call) and reading-order / paragraph grouping via `RecognitionOptions`. `MaxDegreeOfParallelism` caps the recognition stage's threads (default: processor count; `1` = fully sequential) and never changes results. |
 | **Input clean-up** | `PaddleOcrServiceOptions.ApplyExifOrientation` and `FlattenTransparency` (both on by default) upright phone photos and keep transparent images from turning black; `PreprocessingOptions.CorrectNonSquarePixels` (on) fixes 204×98-DPI fax pages. `Preprocessing.Deskew` straightens the page and still reports boxes on the original image. |
 | **Batches** | `ExtractTextFromImagesAsync` with `OcrBatchOptions` (`MaxConcurrency`, `ContinueOnError`, `Progress`, `PreserveOrder`); `ExtractTextFromImageFramesAsync` for multi-page/animated files. |
 | **Input limits** | Built-in max-pixel / PDF page guards against decompression bombs; single-image calls decode only the first frame, and every frame counts against `MaxImagePixels`. |
@@ -393,6 +393,23 @@ await using var ocr = new PaddleOcrService(new PaddleOcrServiceOptions
 `RecognitionModelPath` replaces the default (ch/en/ja) recognizer; per-script language packs are
 unaffected — for a fully offline multilingual setup, pre-seed the model cache (or point
 `PADDLEOCRNET_MODEL_BASE_URL` at an internal mirror) and set `Download.Offline = true`.
+
+### Word-level boxes
+
+Set `ReturnWordBoxes` to get a box and confidence for every word, placed from the recognizer's own
+character timings rather than estimated from character counts. Words follow slanted and vertical lines,
+CJK characters are one word each, and hOCR/ALTO/TSV exports use these boxes automatically:
+
+```csharp
+var result = await ocr.ExtractTextFromImage("scan.png", OcrLanguage.English,
+    RecognitionOptions.Default with { ReturnWordBoxes = true });
+
+foreach (var line in result.Lines)
+    foreach (var word in line.Words)
+        Console.WriteLine($"{word.Text} {word.Confidence:0.00} {word.BoundingBox}");
+
+string hocr = result.ToHocr();   // ocrx_word elements carry the real word boxes
+```
 
 ### Output formats
 

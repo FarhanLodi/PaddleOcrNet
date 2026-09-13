@@ -138,8 +138,13 @@ public sealed record RecognitionOptions
     /// <c>max(2, 25% of the original length)</c> edits of the original, so a retry can polish a reading but
     /// never swap in a different one. Default 0 (off). Not part of Python PaddleOCR; costs up to two extra
     /// recognitions per weak line.
+    /// <para>
+    /// Internal and experimental: on the 2.2.0 measurement corpus it raised mean confidence (0.940 → 0.948)
+    /// but some replacements read worse (the grown region tends to drop spaces, e.g. <c>8:47</c> → <c>8147</c>),
+    /// so it is not exposed publicly until the acceptance rule is improved.
+    /// </para>
     /// </summary>
-    public double RetryBelowConfidence { get; init; }
+    internal double RetryBelowConfidence { get; init; }
 
     /// <summary>
     /// Automatically detect the script/language of the image instead of trusting the requested language
