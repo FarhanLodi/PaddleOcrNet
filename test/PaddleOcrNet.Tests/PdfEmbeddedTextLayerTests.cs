@@ -51,22 +51,23 @@ public class PdfEmbeddedTextLayerTests
     }
 
     [Fact]
-    public void Coverage_is_the_share_of_the_page_covered_by_character_boxes()
+    public void Coverage_is_the_share_of_the_page_covered_by_line_boxes()
     {
-        var chars = Run(new string('a', 20) + "   ", 0, 0); // 20 x (10x20) px; spaces ignored
-        Assert.Equal(4000.0 / 1_000_000, EmbeddedTextLayer.CoverageRatio(chars, 1000, 1000), 9);
+        var lines = EmbeddedTextLayer.BuildLines(Run(new string('a', 20), 0, 0).Concat(Run(new string('b', 10), 0, 40)).ToList());
+        Assert.Equal(2, lines.Count);
+        Assert.Equal(6000.0 / 1_000_000, EmbeddedTextLayer.CoverageRatio(lines, 1000, 1000), 9); // 200x20 + 100x20 px
     }
 
     [Fact]
     public void Modes_decide_between_embedded_text_and_ocr()
     {
-        var chars = Run(new string('a', 30), 0, 0); // 6000 px2: 0.6% of 1000x1000, 60% of 100x100
+        var chars = Run(new string('a', 30), 0, 0); // one 300x20 px line: 0.6% of 1000x1000, 6% of 300x333
 
-        Assert.False(EmbeddedTextLayer.ShouldUse(chars, PdfTextLayerMode.Ignore, 100, 100));
-        Assert.True(EmbeddedTextLayer.ShouldUse(chars, PdfTextLayerMode.PreferEmbedded, 1000, 1000));
-        Assert.False(EmbeddedTextLayer.ShouldUse(chars, PdfTextLayerMode.Auto, 1000, 1000));
-        Assert.True(EmbeddedTextLayer.ShouldUse(chars, PdfTextLayerMode.Auto, 100, 100));
-        Assert.False(EmbeddedTextLayer.ShouldUse(Run(new string('�', 30), 0, 0), PdfTextLayerMode.PreferEmbedded, 100, 100));
+        Assert.Null(EmbeddedTextLayer.SelectLines(chars, PdfTextLayerMode.Ignore, 300, 333));
+        Assert.NotNull(EmbeddedTextLayer.SelectLines(chars, PdfTextLayerMode.PreferEmbedded, 1000, 1000));
+        Assert.Null(EmbeddedTextLayer.SelectLines(chars, PdfTextLayerMode.Auto, 1000, 1000));
+        Assert.NotNull(EmbeddedTextLayer.SelectLines(chars, PdfTextLayerMode.Auto, 300, 333));
+        Assert.Null(EmbeddedTextLayer.SelectLines(Run(new string('�', 30), 0, 0), PdfTextLayerMode.PreferEmbedded, 300, 333));
     }
 
     [Fact]

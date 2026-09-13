@@ -19,8 +19,8 @@ public enum PdfTextLayerMode
     PreferEmbedded = 1,
 
     /// <summary>
-    /// Like <see cref="PreferEmbedded"/>, but also OCRs pages whose embedded characters cover less than about 2%
-    /// of the page area. That catches scanned pages carrying only a small digital stamp, header or page number.
+    /// Like <see cref="PreferEmbedded"/>, but also OCRs pages whose embedded text lines cover less than 1% of the
+    /// page area. That catches scanned pages carrying only a small digital stamp, header or footer line.
     /// </summary>
     Auto = 2,
 }

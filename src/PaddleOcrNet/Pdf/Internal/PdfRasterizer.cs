@@ -323,9 +323,7 @@ internal static class PdfRasterizer
             if (options.TextLayer != PdfTextLayerMode.Ignore)
             {
                 var sw = Stopwatch.StartNew();
-                var chars = ReadCharacters(pageReader, dpi / 72.0);
-                if (EmbeddedTextLayer.ShouldUse(chars, options.TextLayer, width, height))
-                    embeddedLines = EmbeddedTextLayer.BuildLines(chars);
+                embeddedLines = EmbeddedTextLayer.SelectLines(ReadCharacters(pageReader, dpi / 72.0), options.TextLayer, width, height);
                 embeddedDuration = sw.Elapsed;
             }
 

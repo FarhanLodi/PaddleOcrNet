@@ -65,6 +65,20 @@ public class PdfEmbeddedTextApiTests
         Assert.InRange(title.BoundingBox.MinX, 716 * 342 / 200.0 - 6, 716 * 342 / 200.0 + 6);
     }
 
+    [Theory]
+    [InlineData("invoice_778899.pdf")]
+    [InlineData("Monthly_Report_With_Image.pdf")]
+    [InlineData("Quantum_Harvest_Magazine_Article.pdf")]
+    [InlineData("README.pdf")]
+    public async Task Auto_mode_reads_ordinary_born_digital_pages_from_the_text_layer(string file)
+    {
+        await using var service = new PaddleOcrService();
+
+        var result = await service.ExtractTextFromPdfAsync(Pdf(file), OcrLanguage.English, pdfOptions: new PdfOcrOptions { TextLayer = PdfTextLayerMode.Auto });
+
+        Assert.All(result.Pages, p => Assert.Equal(PdfPageSource.EmbeddedText, p.Source));
+    }
+
     [Fact]
     public async Task Page_stream_yields_only_the_selected_pages_in_order()
     {
