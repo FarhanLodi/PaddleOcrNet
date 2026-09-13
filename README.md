@@ -62,7 +62,7 @@ dotnet add package PaddleOcrNet.Gpu
 
 Requires **.NET 10** (`net10.0`). Windows, Linux, and macOS (x64/arm64).
 
-`PaddleOcrNet.Gpu` targets **CUDA 13.x** (ONNX Runtime 1.27, cuDNN 9). To run it on a **CUDA 12** machine,
+`PaddleOcrNet.Gpu` targets **CUDA 13.x** (ONNX Runtime 1.30, cuDNN 9). To run it on a **CUDA 12** machine,
 pin ONNX Runtime 1.26 in your own project — see
 [the GPU package README](src/PaddleOcrNet.Gpu/README.md#running-on-cuda-12).
 
@@ -323,7 +323,7 @@ await using var ocr = new PaddleOcrService(new PaddleOcrServiceOptions { UseGpu 
 
 Console.WriteLine(ocr.GetRuntimeInfo());
 // PaddleOcrNet runtime:
-//   ONNX Runtime:        1.27.0
+//   ONNX Runtime:        1.30.0
 //   Available providers: TensorrtExecutionProvider, CUDAExecutionProvider, CPUExecutionProvider
 //   Requested provider:  Cuda
 //   Resolved provider:   Cuda

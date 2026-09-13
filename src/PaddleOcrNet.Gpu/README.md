@@ -62,8 +62,8 @@ await using var ocr = new PaddleOcrService(new PaddleOcrServiceOptions
 
 ### Running on CUDA 12
 
-This package brings in **ONNX Runtime 1.27**, whose GPU build targets **CUDA 13** — as does every ONNX
-Runtime release after it:
+This package brings in **ONNX Runtime 1.30**, whose GPU build targets **CUDA 13** — as has every ONNX
+Runtime release since 1.27:
 
 | ONNX Runtime | CUDA | cuDNN |
 |---|---|---|
@@ -75,8 +75,8 @@ On a machine with only the **CUDA 12** toolkit, that runtime looks for `cublasLt
 logs names the missing library and the CUDA major version the runtime wanted, so the mismatch is visible
 without decoding `Error 126`.
 
-There are three ways to get a GPU out of a CUDA 12 machine. Installing PaddleOcrNet 2.0.2 or older does not
-help — every release so far has referenced ONNX Runtime 1.27.
+There are three ways to get a GPU out of a CUDA 12 machine. Installing an older PaddleOcrNet does not
+help — every release so far has referenced a CUDA 13 build of ONNX Runtime (1.27 up to 2.1.0, 1.30 since 2.2.0).
 
 **1. Install the CUDA 13 runtime next to CUDA 12.** The two majors coexist: their libraries are suffixed
 (`cublasLt64_12.dll` vs `cublasLt64_13.dll`), so adding CUDA 13 leaves existing CUDA 12 workloads alone. This
@@ -123,7 +123,7 @@ Console.WriteLine(ocr.GetRuntimeInfo());
 
 ```
 PaddleOcrNet runtime:
-  ONNX Runtime:        1.27.0
+  ONNX Runtime:        1.30.0
   Available providers: TensorrtExecutionProvider, CUDAExecutionProvider, CPUExecutionProvider
   Requested provider:  Auto
   Resolved provider:   Cuda
@@ -163,7 +163,7 @@ change in your project. To opt out (for instance to deliberately ship the CPU ru
 On an older version, the equivalent manual fix is to keep the CPU package's natives out of the build:
 
 ```xml
-<PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.27.0" ExcludeAssets="native" />
+<PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.30.0" ExcludeAssets="native" />
 ```
 
 ## Notes
