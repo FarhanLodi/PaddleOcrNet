@@ -150,14 +150,15 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
                     options.UseDocOrientation, options.UseDocUnwarp, cancellationToken).ConfigureAwait(false);
                 if (preprocessor is not null)
                 {
-                    // Apply always returns a NEW image the caller owns (even when no stage changed pixels).
-                    var (processed, rotation) = preprocessor.Apply(image, options.UseDocOrientation, options.UseDocUnwarp);
-                    owned = processed;
-                    page = processed;
-                    appliedRotation = rotation;
-                    if (rotation != 0)
+                    // Apply returns the caller's image itself when no stage changed pixels (OwnsImage false);
+                    // only an image it created is ours to dispose.
+                    var preprocessed = preprocessor.Apply(image, options.UseDocOrientation, options.UseDocUnwarp);
+                    page = preprocessed.Image;
+                    if (preprocessed.OwnsImage) owned = preprocessed.Image;
+                    appliedRotation = preprocessed.RotationApplied;
+                    if (appliedRotation != 0)
                     {
-                        _logger?.LogInformation("Document orientation: page rotated {Deg}° clockwise to upright.", rotation);
+                        _logger?.LogInformation("Document orientation: page rotated {Deg}° clockwise to upright.", appliedRotation);
                     }
                 }
             }
