@@ -50,7 +50,9 @@ public static class OcrExportExtensions
     /// <summary>
     /// Renders the result as <a href="https://kba.cloud/hocr-spec/1.2/">hOCR</a> — an HTML format
     /// understood by DMS tooling and convertible to searchable PDF. Pass the source image size for
-    /// correct page bounds (defaults to the result's own extents when omitted).
+    /// correct page bounds (defaults to the result's own extents when omitted). Word elements use the
+    /// recognizer's real word boxes and confidences when the result was produced with
+    /// <see cref="RecognitionOptions.ReturnWordBoxes"/>, and a proportional estimate otherwise.
     /// </summary>
     public static string ToHocr(this OcrResult result, int pageWidth = 0, int pageHeight = 0, string? imageName = null)
     {
@@ -79,11 +81,11 @@ public static class OcrExportExtensions
               .Append(BboxTitle(b)).AppendLine("'>");
 
             int wordNo = 0;
-            foreach (var (text, wb) in SplitWords(line))
+            foreach (var (text, wb, confidence) in SplitWords(line))
             {
                 wordNo++;
                 sb.Append("      <span class='ocrx_word' id='word_").Append(lineNo).Append('_').Append(wordNo)
-                  .Append("' title='").Append(BboxTitle(wb)).Append("; x_wconf ").Append(Conf100(line.Confidence))
+                  .Append("' title='").Append(BboxTitle(wb)).Append("; x_wconf ").Append(Conf100(confidence))
                   .Append("'>").Append(Xml(text)).AppendLine("</span>");
             }
             sb.AppendLine("    </span>");
@@ -97,7 +99,8 @@ public static class OcrExportExtensions
 
     /// <summary>
     /// Renders the result as <a href="https://www.loc.gov/standards/alto/">ALTO XML v4</a>, the
-    /// layout format used by libraries and digitization workflows.
+    /// layout format used by libraries and digitization workflows. <c>String</c> elements use real word
+    /// boxes when present (see <see cref="RecognitionOptions.ReturnWordBoxes"/>).
     /// </summary>
     public static string ToAlto(this OcrResult result, int pageWidth = 0, int pageHeight = 0, string? imageName = null)
     {
@@ -125,11 +128,11 @@ public static class OcrExportExtensions
             var b = line.BoundingBox;
             sb.Append("          <TextLine ID=\"line_").Append(lineNo).Append("\" ").Append(AltoBox(b)).AppendLine(">");
             int wordNo = 0;
-            foreach (var (text, wb) in SplitWords(line))
+            foreach (var (text, wb, confidence) in SplitWords(line))
             {
                 wordNo++;
                 sb.Append("            <String ID=\"string_").Append(lineNo).Append('_').Append(wordNo).Append("\" ")
-                  .Append(AltoBox(wb)).Append(" WC=\"").Append(line.Confidence.ToString("0.###", CultureInfo.InvariantCulture))
+                  .Append(AltoBox(wb)).Append(" WC=\"").Append(confidence.ToString("0.###", CultureInfo.InvariantCulture))
                   .Append("\" CONTENT=\"").Append(Xml(text)).AppendLine("\"/>");
             }
             sb.AppendLine("          </TextLine>");
@@ -145,7 +148,8 @@ public static class OcrExportExtensions
 
     /// <summary>
     /// Renders the result as Tesseract-style tab-separated values (one row per word), handy for
-    /// spreadsheets and downstream parsing.
+    /// spreadsheets and downstream parsing. Rows use real word boxes when present (see
+    /// <see cref="RecognitionOptions.ReturnWordBoxes"/>).
     /// </summary>
     public static string ToTsv(this OcrResult result)
     {
@@ -158,13 +162,13 @@ public static class OcrExportExtensions
         {
             lineNo++;
             int wordNo = 0;
-            foreach (var (text, wb) in SplitWords(line))
+            foreach (var (text, wb, confidence) in SplitWords(line))
             {
                 wordNo++;
                 sb.Append("5\t1\t1\t1\t").Append(lineNo).Append('\t').Append(wordNo).Append('\t')
                   .Append((int)Math.Round(wb.MinX)).Append('\t').Append((int)Math.Round(wb.MinY)).Append('\t')
                   .Append((int)Math.Round(wb.Width)).Append('\t').Append((int)Math.Round(wb.Height)).Append('\t')
-                  .Append(Conf100(line.Confidence)).Append('\t').Append(text.Replace('\t', ' ')).Append('\n');
+                  .Append(Conf100(confidence)).Append('\t').Append(text.Replace('\t', ' ')).Append('\n');
             }
         }
         return sb.ToString();
@@ -185,11 +189,23 @@ public static class OcrExportExtensions
     }
 
     /// <summary>
-    /// Splits a line into whitespace-separated words, approximating each word's box by allocating the
-    /// line width proportionally to character count (we only have line-level geometry from the model).
+    /// The words of a line with their boxes and confidences. When the line carries real word boxes
+    /// (<see cref="OcrLine.Words"/>, from <see cref="RecognitionOptions.ReturnWordBoxes"/>) those are used;
+    /// otherwise the line is split at whitespace and each word's box is estimated by allocating the line
+    /// width proportionally to character count, with the line's confidence.
     /// </summary>
-    private static IEnumerable<(string Text, OcrBoundingBox Box)> SplitWords(OcrLine line)
+    private static IEnumerable<(string Text, OcrBoundingBox Box, double Confidence)> SplitWords(OcrLine line)
     {
+        if (line.Words is { Count: > 0 } realWords)
+        {
+            foreach (var word in realWords)
+            {
+                if (!string.IsNullOrWhiteSpace(word.Text))
+                    yield return (word.Text, word.BoundingBox, word.Confidence);
+            }
+            yield break;
+        }
+
         var b = line.BoundingBox;
         if (string.IsNullOrWhiteSpace(line.Text))
         {
@@ -199,7 +215,7 @@ public static class OcrExportExtensions
         var words = line.Text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
         if (words.Length <= 1)
         {
-            yield return (line.Text.Trim(), b);
+            yield return (line.Text.Trim(), b, line.Confidence);
             yield break;
         }
 
@@ -210,7 +226,7 @@ public static class OcrExportExtensions
         {
             double frac = totalChars > 0 ? (double)word.Length / totalChars : 1.0 / words.Length;
             double width = usable * frac;
-            yield return (word, new OcrBoundingBox(x, b.MinY, x + width, b.MaxY));
+            yield return (word, new OcrBoundingBox(x, b.MinY, x + width, b.MaxY), line.Confidence);
             x += width;
         }
     }

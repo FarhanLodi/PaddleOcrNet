@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -89,5 +89,38 @@ public class OcrLanguageTests
         public Task<OcrResult> ExtractTextFromImage(EasyImageSharp.Image<EasyImageSharp.PixelFormats.Rgb24> image, IReadOnlyList<OcrLanguage> languages, RecognitionOptions? options = null, CancellationToken cancellationToken = default) => Record(languages);
         public void Dispose() { }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    /// <summary>
+    /// Several packs are named after PaddleOCR's pack file rather than the language ("korean", "japan",
+    /// "ch"), which is an internal convention callers should not have to know: code read out of config
+    /// or a CLI is far more likely to be the ISO tag. Those tags parse too — without shadowing any
+    /// canonical code (notably "cy", which is Welsh, not Cyrillic).
+    /// </summary>
+    [Theory]
+    [InlineData("ko", OcrLanguage.Korean)]
+    [InlineData("ja", OcrLanguage.Japanese)]
+    [InlineData("zh", OcrLanguage.ChineseSimplified)]
+    [InlineData("zh-Hans", OcrLanguage.ChineseSimplified)]
+    [InlineData("zh-Hant", OcrLanguage.ChineseTraditional)]
+    [InlineData("cht", OcrLanguage.ChineseTraditional)]
+    [InlineData("th", OcrLanguage.Thai)]
+    [InlineData("el", OcrLanguage.Greek)]
+    [InlineData("ta", OcrLanguage.Tamil)]
+    [InlineData("te", OcrLanguage.Telugu)]
+    public void Iso_tags_parse_for_pack_named_languages(string code, OcrLanguage expected)
+    {
+        Assert.Equal(expected, OcrLanguageExtensions.FromCode(code));
+    }
+
+    [Fact]
+    public void Aliases_never_shadow_a_canonical_code()
+    {
+        // "cy" is Welsh's own canonical code; an alias must not steal it for Cyrillic.
+        Assert.Equal(OcrLanguage.Welsh, OcrLanguageExtensions.FromCode("cy"));
+
+        // Every canonical code still round-trips to its own language.
+        foreach (var language in Enum.GetValues<OcrLanguage>())
+            Assert.Equal(language, OcrLanguageExtensions.FromCode(language.ToCode()));
     }
 }

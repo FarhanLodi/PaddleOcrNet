@@ -14,29 +14,36 @@ namespace PaddleOcrNet.Structure.Preprocess;
 /// <para>
 /// <b>Implementation status:</b> both stages are <b>fully implemented</b>. Orientation: PP-LCNet doc-ori
 /// (input <c>x</c> <c>[N,3,224,224]</c> → output <c>[N,4]</c> over {0°,90°,180°,270°}) → argmax → in-place
-/// 90° rotation. Unwarp: UVDoc (input <c>image</c> <c>[N,3,H,W]</c>, [0,1]-normalized → output
-/// <c>[N,3,H,W]</c>) which emits a <b>dewarped RGB image</b> at the input resolution (verified against the
-/// real <c>UVDoc.onnx</c> export: the output is a rectified picture in [0,1], not a sampling grid/flow),
-/// which we resize back to the original page size.
+/// 90° rotation; preprocessing follows PaddleX (<c>ResizeImage resize_short=256</c> + center
+/// <c>CropImage 224</c> + ImageNet normalize, RGB). Unwarp: UVDoc (input <c>image</c> <c>[N,3,H,W]</c>,
+/// <b>BGR</b>, [0,1]-normalized → output <c>[N,3,H,W]</c>) which emits a <b>dewarped BGR image</b> at the
+/// input resolution (verified against the real <c>UVDoc.onnx</c> export: the output is a rectified picture
+/// in [0,1], not a sampling grid/flow). PaddleX feeds the page at full resolution with no resize; we do
+/// the same, except that the working resolution is capped at <see cref="UnwarpMaxSide"/> px on the longest
+/// side to bound memory on very large pages (the dewarped result is upscaled back to the page size).
 /// </para>
 /// Reference: PaddleX <c>doc_orientation_classify</c> (PP-LCNet_x1_0_doc_ori) and <c>UVDoc</c> dewarp.
 /// </summary>
 internal sealed class DocPreprocessor : IDocPreprocessor
 {
-    // ImageNet mean/std (RGB), applied to pixel/255 — the PP-LCNet doc-ori classifier's normalization.
-    private static readonly float[] Mean = { 0.485f, 0.456f, 0.406f };
-    private static readonly float[] Std = { 0.229f, 0.224f, 0.225f };
+    // The PP-LCNet doc-ori classifier normalizes pixel/255 with ImageNet mean/std in RGB order
+    // (PlanarTensorPacker.ImageNet0..2).
 
     // PP-LCNet_x1_0_doc_ori input is a fixed 3×224×224 (standard PP-LCNet classification head). Verified
     // against the real export: input "x" [N,3,224,224] tensor(float), output [N,4] tensor(float).
+    // PaddleX preprocessing: aspect-preserving resize so the SHORT side is 256 (LINEAR), then center-crop 224.
     private const int OrientSize = 224;
+    private const int OrientResizeShort = 256;
 
-    // UVDoc.onnx accepts a dynamic [N,3,H,W] input; we feed the model's canonical training size
-    // (488 wide × 712 tall, i.e. tensor [N,3,712,488]). The output is a dewarped RGB image with the SAME
-    // spatial dims as the input (verified: out H,W == in H,W for every probed size), which we then resize
-    // back to the original page resolution.
-    private const int UnwarpWidth = 488;
-    private const int UnwarpHeight = 712;
+    // UVDoc.onnx accepts a dynamic [N,3,H,W] input and its output keeps the input's spatial dims
+    // (verified: out H,W == in H,W for every probed size). PaddleX feeds the page at FULL resolution with
+    // no resize at all; we mirror that but cap the working resolution at UnwarpMaxSide on the longest side
+    // (downscaling above it, then upscaling the dewarped result) because a full-res float tensor of a very
+    // large scan can exhaust memory. H/W are padded up to a multiple of UnwarpStride with edge-replicate
+    // pixels so the fully-convolutional graph downsamples cleanly at any page size; the padding is cropped
+    // off the output again.
+    private const int UnwarpMaxSide = 2000;
+    private const int UnwarpStride = 32;
 
     // Output index -> clockwise rotation (degrees) PaddleX assigns to the page. Index i means "the page is
     // currently rotated by OrientationAngles[i]° clockwise from upright"; we rotate by the inverse to correct.
@@ -65,50 +72,67 @@ internal sealed class DocPreprocessor : IDocPreprocessor
     /// <inheritdoc />
     /// <remarks>
     /// Order matches PaddleX's document pipeline: orientation correction first (so unwarp sees an upright
-    /// page), then unwarp. The returned image is always a fresh image the caller owns and disposes — even
-    /// when no stage changes the pixels we hand back a clone so callers can dispose the input independently.
+    /// page), then unwarp. The input is never modified or disposed: the orientation classifier reads it
+    /// directly and a copy is made only when a stage actually changes the pixels (a non-zero rotation or a
+    /// dewarp). When nothing changes, the input itself comes back with
+    /// <see cref="DocPreprocessResult.OwnsImage"/> false, so an upright page costs no full-page clone.
     /// </remarks>
-    public (Image<Rgb24> image, int rotationApplied) Apply(Image<Rgb24> input, bool useOrientation, bool useUnwarp)
+    public DocPreprocessResult Apply(Image<Rgb24> input, bool useOrientation, bool useUnwarp)
     {
         ArgumentNullException.ThrowIfNull(input);
 
-        // Work on an owned copy so the input remains the caller's to dispose and intermediate stages can be
-        // swapped without aliasing. Each stage replaces 'current' and disposes the one it consumed.
-        Image<Rgb24> current = input.Clone();
+        // 'current' starts as the caller's input and is replaced by an owned image the first time a stage
+        // changes pixels; each later stage disposes the owned image it consumed.
+        Image<Rgb24> current = input;
+        bool owns = false;
         int rotationApplied = 0;
 
         try
         {
-            // --- Orientation: classify {0,90,180,270} and rotate the whole page upright (FULLY IMPLEMENTED).
+            // --- Orientation: classify {0,90,180,270} on the input, rotate an owned copy only when needed.
             if (useOrientation && _orientation is not null)
             {
-                rotationApplied = ClassifyAndRotate(current);
+                rotationApplied = ClassifyCorrection(input);
+                var mode = rotationApplied switch
+                {
+                    90 => RotateMode.Rotate90,
+                    180 => RotateMode.Rotate180,
+                    270 => RotateMode.Rotate270,
+                    _ => RotateMode.None,
+                };
+                if (mode != RotateMode.None)
+                {
+                    current = input.Clone();
+                    owns = true;
+                    current.Mutate(ctx => ctx.Rotate(mode));
+                }
             }
 
-            // --- Unwarp: UVDoc dewarp (FULLY IMPLEMENTED — returns a rectified image; see Unwarp()).
+            // --- Unwarp: UVDoc dewarp (returns a new rectified image, or its input on an unexpected output).
             if (useUnwarp && _unwarp is not null)
             {
                 Image<Rgb24> dewarped = Unwarp(current);
                 if (!ReferenceEquals(dewarped, current))
                 {
-                    current.Dispose();
+                    if (owns) current.Dispose();
                     current = dewarped;
+                    owns = true;
                 }
             }
 
-            return (current, rotationApplied);
+            return new DocPreprocessResult(current, rotationApplied, owns);
         }
         catch
         {
-            current.Dispose();
+            if (owns) current.Dispose();
             throw;
         }
     }
 
     /// <summary>
-    /// Runs the PP-LCNet doc-orientation classifier on <paramref name="image"/>, takes the argmax over the
-    /// four {0,90,180,270} logits, and rotates the image in place to upright it. Returns the rotation (in
-    /// degrees, clockwise) that was actually applied to the image (0 when the page is already upright).
+    /// Runs the PP-LCNet doc-orientation classifier on <paramref name="image"/> (read-only), takes the
+    /// argmax over the four {0,90,180,270} logits, and returns the corrective clockwise rotation (in degrees)
+    /// that uprights the page (0 when it is already upright). The caller applies the rotation.
     /// </summary>
     /// <remarks>
     /// PaddleX labels index <c>i</c> with <see cref="OrientationAngles"/>[i] = the clockwise angle by which
@@ -117,7 +141,7 @@ internal sealed class DocPreprocessor : IDocPreprocessor
     /// upright. We report the applied (corrective) clockwise rotation so the caller can map any downstream
     /// coordinates back to the original page if needed.
     /// </remarks>
-    private int ClassifyAndRotate(Image<Rgb24> image)
+    private int ClassifyCorrection(Image<Rgb24> image)
     {
         var input = BuildOrientationTensor(image);
 
@@ -134,55 +158,41 @@ internal sealed class DocPreprocessor : IDocPreprocessor
         }
 
         // Corrective clockwise rotation = 360 - detected (e.g. detected 90 -> rotate 270 CW to upright).
-        int correction = (360 - detected) % 360;
-        var mode = correction switch
-        {
-            90 => RotateMode.Rotate90,
-            180 => RotateMode.Rotate180,
-            270 => RotateMode.Rotate270,
-            _ => RotateMode.None,
-        };
-        if (mode != RotateMode.None)
-        {
-            image.Mutate(ctx => ctx.Rotate(mode));
-        }
-        return correction;
+        return (360 - detected) % 360;
     }
 
     /// <summary>
-    /// Preprocesses <paramref name="image"/> into the doc-ori model's <c>[1,3,224,224]</c> input: resize
-    /// (stretch) to 224×224, ImageNet-normalize <c>(pixel/255 - mean)/std</c> in RGB order, CHW layout.
+    /// Preprocesses <paramref name="image"/> into the doc-ori model's <c>[1,3,224,224]</c> input the way
+    /// PaddleX does: aspect-preserving resize so the short side is <see cref="OrientResizeShort"/> (256,
+    /// bilinear), center-crop <see cref="OrientSize"/>×<see cref="OrientSize"/> (224), then
+    /// ImageNet-normalize <c>(pixel/255 - mean)/std</c> in RGB order, CHW layout.
     /// </summary>
     private static DenseTensor<float> BuildOrientationTensor(Image<Rgb24> image)
     {
+        // ResizeByShort: scale so min(H,W) becomes 256 (round like Python's round()); both dims end >= 224.
+        double scale = (double)OrientResizeShort / Math.Min(image.Width, image.Height);
+        int resizeW = Math.Max(OrientSize, (int)Math.Round(image.Width * scale));
+        int resizeH = Math.Max(OrientSize, (int)Math.Round(image.Height * scale));
+
         using var resized = image.Clone(ctx => ctx.Resize(new ResizeOptions
         {
-            Size = new Size(OrientSize, OrientSize),
+            Size = new Size(resizeW, resizeH),
             Mode = ResizeMode.Stretch,
-            Sampler = KnownResamplers.Bicubic,
+            Sampler = KnownResamplers.Triangle, // bilinear (cv2 LINEAR)
         }));
+
+        // Center crop 224×224 (PaddleX Crop mode "C"): read the sub-window directly into the tensor.
+        int cropX = Math.Max(0, (resizeW - OrientSize) / 2);
+        int cropY = Math.Max(0, (resizeH - OrientSize) / 2);
 
         var tensor = new DenseTensor<float>(new[] { 1, 3, OrientSize, OrientSize });
         int plane = OrientSize * OrientSize;
         Memory<float> bufferMem = tensor.Buffer;
 
-        resized.ProcessPixelRows(accessor =>
-        {
-            var buffer = bufferMem.Span;
-            for (int y = 0; y < OrientSize; y++)
-            {
-                var row = accessor.GetRowSpan(y);
-                int rowOffset = y * OrientSize;
-                for (int x = 0; x < OrientSize; x++)
-                {
-                    var px = row[x];
-                    int idx = rowOffset + x;
-                    buffer[idx] = (px.R / 255f - Mean[0]) / Std[0];            // R channel
-                    buffer[plane + idx] = (px.G / 255f - Mean[1]) / Std[1];     // G channel
-                    buffer[2 * plane + idx] = (px.B / 255f - Mean[2]) / Std[2]; // B channel
-                }
-            }
-        });
+        // ImageNet-normalize the center window in RGB order via the bit-identical lookup tables.
+        PlanarTensorPacker.Pack(
+            resized, cropX, cropY, OrientSize, OrientSize, bufferMem, OrientSize, plane,
+            PlanarTensorPacker.ImageNet0, PlanarTensorPacker.ImageNet1, PlanarTensorPacker.ImageNet2, bgr: false);
 
         return tensor;
     }
@@ -193,24 +203,42 @@ internal sealed class DocPreprocessor : IDocPreprocessor
     /// </summary>
     /// <remarks>
     /// Verified against the real <c>UVDoc.onnx</c> export: the model takes input <c>image</c>
-    /// <c>[N,3,H,W]</c> (RGB, CHW, simply <c>pixel/255</c> — <b>no</b> ImageNet mean/std; ImageNet
+    /// <c>[N,3,H,W]</c> (<b>BGR</b>, CHW, simply <c>pixel/255</c> — <b>no</b> ImageNet mean/std; ImageNet
     /// normalization drives the output out of [0,1] and corrupts it) and emits <c>[N,3,H,W]</c> which is a
-    /// <b>rectified RGB image</b> in [0,1] at the same spatial size as the input — not a sampling grid or
-    /// flow field, so no <c>grid_sample</c> remap is needed. We feed the canonical 488×712 size, decode the
-    /// returned image, and resize it back to the original page dimensions so downstream stages see the page
-    /// at its expected resolution.
+    /// <b>rectified BGR image</b> in [0,1] at the same spatial size as the input — not a sampling grid or
+    /// flow field, so no <c>grid_sample</c> remap is needed. Like PaddleX we feed the page at its own
+    /// resolution — no fixed-size round trip — but cap the working size at <see cref="UnwarpMaxSide"/> px
+    /// on the longest side to bound memory (a full-res float tensor of a very large scan is enormous),
+    /// upscaling the dewarped result back to the page size when the cap applied. H/W are padded up to a
+    /// multiple of <see cref="UnwarpStride"/> with edge-replicate pixels and the padding is cropped off the
+    /// output, so downstream stages always see the page at its original dimensions.
     /// </remarks>
     private Image<Rgb24> Unwarp(Image<Rgb24> image)
     {
         int originalWidth = image.Width;
         int originalHeight = image.Height;
 
-        var input = BuildUnwarpTensor(image);
+        // Working resolution: the page's own size, capped at UnwarpMaxSide on the longest side.
+        int workW = originalWidth;
+        int workH = originalHeight;
+        int maxSide = Math.Max(originalWidth, originalHeight);
+        if (maxSide > UnwarpMaxSide)
+        {
+            double scale = (double)UnwarpMaxSide / maxSide;
+            workW = Math.Max(1, (int)Math.Round(originalWidth * scale));
+            workH = Math.Max(1, (int)Math.Round(originalHeight * scale));
+        }
+
+        // Pad up to the stride multiple with edge-replicate pixels; cropped off the output below.
+        int padW = (workW + UnwarpStride - 1) / UnwarpStride * UnwarpStride;
+        int padH = (workH + UnwarpStride - 1) / UnwarpStride * UnwarpStride;
+
+        var input = BuildUnwarpTensor(image, workW, workH, padW, padH);
 
         using var results = _unwarp!.Run(
             new[] { NamedOnnxValue.CreateFromTensor(_unwarpInputName!, input) });
 
-        // Output [1,3,Ho,Wo] = dewarped RGB image in [0,1], CHW. Ho,Wo equal the fed input size (712×488).
+        // Output [1,3,Ho,Wo] = dewarped BGR image in [0,1], CHW. Ho,Wo equal the fed (padded) input size.
         var output = results[0].AsTensor<float>();
         int outChannels = output.Dimensions[1];
         int outHeight = output.Dimensions[2];
@@ -221,10 +249,12 @@ internal sealed class DocPreprocessor : IDocPreprocessor
             return image;
         }
 
-        var dewarped = DecodeUnwarpOutput(output, outWidth, outHeight);
+        int cropW = Math.Min(workW, outWidth);
+        int cropH = Math.Min(workH, outHeight);
+        var dewarped = DecodeUnwarpOutput(output, outWidth, outHeight, cropW, cropH);
         try
         {
-            // Resize the rectified page back to the original resolution the rest of the pipeline expects.
+            // Upscale back to the original resolution only when the memory cap shrank the working size.
             if (dewarped.Width != originalWidth || dewarped.Height != originalHeight)
             {
                 dewarped.Mutate(ctx => ctx.Resize(new ResizeOptions
@@ -244,57 +274,75 @@ internal sealed class DocPreprocessor : IDocPreprocessor
     }
 
     /// <summary>
-    /// Preprocesses <paramref name="image"/> into the UVDoc model's <c>[1,3,712,488]</c> input: resize
-    /// (stretch) to 488×712, scale to [0,1] (<c>pixel/255</c>, no ImageNet normalization), RGB, CHW layout.
+    /// Preprocesses <paramref name="image"/> into the UVDoc model's <c>[1,3,padH,padW]</c> input: resize
+    /// (bilinear) to the working size when the memory cap shrank it, scale to [0,1] (<c>pixel/255</c>, no
+    /// ImageNet normalization), <b>BGR</b> plane order (what the model was trained on), CHW layout,
+    /// edge-replicating the last row/column into the stride padding.
     /// </summary>
-    private static DenseTensor<float> BuildUnwarpTensor(Image<Rgb24> image)
+    private static DenseTensor<float> BuildUnwarpTensor(Image<Rgb24> image, int workW, int workH, int padW, int padH)
     {
-        using var resized = image.Clone(ctx => ctx.Resize(new ResizeOptions
+        Image<Rgb24>? resized = null;
+        var source = image;
+        if (image.Width != workW || image.Height != workH)
         {
-            Size = new Size(UnwarpWidth, UnwarpHeight),
-            Mode = ResizeMode.Stretch,
-            Sampler = KnownResamplers.Triangle, // bilinear
-        }));
-
-        var tensor = new DenseTensor<float>(new[] { 1, 3, UnwarpHeight, UnwarpWidth });
-        int plane = UnwarpWidth * UnwarpHeight;
-        Memory<float> bufferMem = tensor.Buffer;
-
-        resized.ProcessPixelRows(accessor =>
-        {
-            var buffer = bufferMem.Span;
-            for (int y = 0; y < UnwarpHeight; y++)
+            resized = image.Clone(ctx => ctx.Resize(new ResizeOptions
             {
-                var row = accessor.GetRowSpan(y);
-                int rowOffset = y * UnwarpWidth;
-                for (int x = 0; x < UnwarpWidth; x++)
-                {
-                    var px = row[x];
-                    int idx = rowOffset + x;
-                    buffer[idx] = px.R / 255f;                 // R channel
-                    buffer[plane + idx] = px.G / 255f;         // G channel
-                    buffer[2 * plane + idx] = px.B / 255f;     // B channel
-                }
-            }
-        });
+                Size = new Size(workW, workH),
+                Mode = ResizeMode.Stretch,
+                Sampler = KnownResamplers.Triangle, // bilinear
+            }));
+            source = resized;
+        }
 
-        return tensor;
+        try
+        {
+            var tensor = new DenseTensor<float>(new[] { 1, 3, padH, padW });
+            int plane = padW * padH;
+            Memory<float> bufferMem = tensor.Buffer;
+
+            var scale = PlanarTensorPacker.Scale01; // v / 255f, bit-identical to the per-pixel expression
+            source.ProcessPixelRows(accessor =>
+            {
+                var buffer = bufferMem.Span;
+                for (int y = 0; y < padH; y++)
+                {
+                    var row = accessor.GetRowSpan(Math.Min(y, workH - 1));
+                    int rowOffset = y * padW;
+                    for (int x = 0; x < padW; x++)
+                    {
+                        var px = row[Math.Min(x, workW - 1)];
+                        int idx = rowOffset + x;
+                        buffer[idx] = scale[px.B];                 // B plane (model consumes BGR)
+                        buffer[plane + idx] = scale[px.G];         // G plane
+                        buffer[2 * plane + idx] = scale[px.R];     // R plane
+                    }
+                }
+            });
+
+            return tensor;
+        }
+        finally
+        {
+            resized?.Dispose();
+        }
     }
 
     /// <summary>
-    /// Converts the UVDoc <c>[1,3,H,W]</c> [0,1] RGB output tensor into an <see cref="Image{Rgb24}"/>,
-    /// clamping each channel into [0,255]. The returned image is <paramref name="width"/>×<paramref name="height"/>.
+    /// Converts the UVDoc <c>[1,3,H,W]</c> [0,1] <b>BGR</b> output tensor into an <see cref="Image{Rgb24}"/>
+    /// (flipping the channels back to RGB), clamping each channel into [0,255]. Only the top-left
+    /// <paramref name="cropW"/>×<paramref name="cropH"/> window is decoded — the stride padding that was
+    /// added to the input is discarded here.
     /// </summary>
     /// <remarks>
-    /// The tensor is CHW (channel-planar): the first <c>H*W</c> values are the red plane, the next the green,
-    /// the next the blue. When the runtime hands back a contiguous <see cref="DenseTensor{T}"/> we read its
-    /// buffer span directly (fast path, matching the rest of the codebase); otherwise we fall back to
-    /// 4-index access <c>output[0, c, y, x]</c>.
+    /// The tensor is CHW (channel-planar): the first <c>H*W</c> values are the blue plane, the next the
+    /// green, the next the red (the model works in BGR end-to-end). When the runtime hands back a contiguous
+    /// <see cref="DenseTensor{T}"/> we read its buffer span directly (fast path, matching the rest of the
+    /// codebase); otherwise we fall back to 4-index access <c>output[0, c, y, x]</c>.
     /// </remarks>
-    private static Image<Rgb24> DecodeUnwarpOutput(Tensor<float> output, int width, int height)
+    private static Image<Rgb24> DecodeUnwarpOutput(Tensor<float> output, int width, int height, int cropW, int cropH)
     {
         int plane = width * height;
-        var result = new Image<Rgb24>(width, height);
+        var result = new Image<Rgb24>(cropW, cropH);
         try
         {
             if (output is DenseTensor<float> dense)
@@ -303,15 +351,15 @@ internal sealed class DocPreprocessor : IDocPreprocessor
                 // Leading singleton/batch dims are absorbed by the offset of the last 3*H*W contiguous values.
                 int baseOffset = data.Length - 3 * plane;
                 if (baseOffset < 0) baseOffset = 0;
-                int rOff = baseOffset, gOff = baseOffset + plane, bOff = baseOffset + 2 * plane;
+                int bOff = baseOffset, gOff = baseOffset + plane, rOff = baseOffset + 2 * plane;
                 result.ProcessPixelRows(accessor =>
                 {
                     var d = dense.Buffer.Span;
-                    for (int y = 0; y < height; y++)
+                    for (int y = 0; y < cropH; y++)
                     {
                         var row = accessor.GetRowSpan(y);
                         int rowOffset = y * width;
-                        for (int x = 0; x < width; x++)
+                        for (int x = 0; x < cropW; x++)
                         {
                             int idx = rowOffset + x;
                             row[x] = new Rgb24(ToByte(d[rOff + idx]), ToByte(d[gOff + idx]), ToByte(d[bOff + idx]));
@@ -323,15 +371,15 @@ internal sealed class DocPreprocessor : IDocPreprocessor
             {
                 result.ProcessPixelRows(accessor =>
                 {
-                    for (int y = 0; y < height; y++)
+                    for (int y = 0; y < cropH; y++)
                     {
                         var row = accessor.GetRowSpan(y);
-                        for (int x = 0; x < width; x++)
+                        for (int x = 0; x < cropW; x++)
                         {
                             row[x] = new Rgb24(
-                                ToByte(output[0, 0, y, x]),
-                                ToByte(output[0, 1, y, x]),
-                                ToByte(output[0, 2, y, x]));
+                                ToByte(output[0, 2, y, x]),  // R (plane 2 of the BGR output)
+                                ToByte(output[0, 1, y, x]),  // G
+                                ToByte(output[0, 0, y, x])); // B (plane 0)
                         }
                     }
                 });

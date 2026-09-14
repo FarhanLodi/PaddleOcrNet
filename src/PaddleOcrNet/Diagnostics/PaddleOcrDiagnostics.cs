@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
+using System.Reflection;
 
 namespace PaddleOcrNet.Diagnostics;
 
@@ -25,7 +26,13 @@ public static class PaddleOcrDiagnostics
     /// </summary>
     public const string ActivitySourceName = "PaddleOcrNet";
 
-    private const string Version = "1.0.0";
+    /// <summary>
+    /// The library version reported on the activity source and meter: the assembly's informational version
+    /// without the <c>+commit</c> source-link suffix.
+    /// </summary>
+    internal static readonly string Version = ResolveVersion(
+        typeof(PaddleOcrDiagnostics).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion,
+        typeof(PaddleOcrDiagnostics).Assembly.GetName().Version);
 
     /// <summary>
     /// Activity source for per-operation OCR spans.
@@ -33,6 +40,21 @@ public static class PaddleOcrDiagnostics
     public static readonly ActivitySource ActivitySource = new(ActivitySourceName, Version);
 
     internal static readonly Meter Meter = new(MeterName, Version);
+
+    /// <summary>
+    /// Strips build metadata (<c>+sha</c>) from an informational version, falling back to the assembly
+    /// version when no informational version is present.
+    /// </summary>
+    internal static string ResolveVersion(string? informationalVersion, Version? assemblyVersion)
+    {
+        if (!string.IsNullOrWhiteSpace(informationalVersion))
+        {
+            int plus = informationalVersion.IndexOf('+');
+            var trimmed = (plus >= 0 ? informationalVersion[..plus] : informationalVersion).Trim();
+            if (trimmed.Length > 0) return trimmed;
+        }
+        return assemblyVersion?.ToString(3) ?? "0.0.0";
+    }
 
     internal static readonly Counter<long> Operations =
         Meter.CreateCounter<long>("paddleocr.operations", unit: "{operation}", description: "OCR operations performed.");

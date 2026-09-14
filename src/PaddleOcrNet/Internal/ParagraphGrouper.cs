@@ -7,7 +7,8 @@ namespace PaddleOcrNet.Internal;
 /// overlap/closeness. Lines that sit close together vertically and either overlap horizontally or are
 /// within a line-height of each other are concatenated (newline-separated) into one result whose
 /// bounding box is the union of the merged lines. The vertical/horizontal join distances are expressed
-/// as multiples of the line height.
+/// as multiples of the line height. On a significantly skewed page (see <see cref="TextSkew"/>) all the
+/// proximity tests and the line order inside a paragraph use boxes rotated into the deskewed frame.
 /// </summary>
 internal static class ParagraphGrouper
 {
@@ -26,30 +27,38 @@ internal static class ParagraphGrouper
         double yThreshold = DefaultYThreshold,
         double xThreshold = DefaultXThreshold)
     {
-        var remaining = lines.Where(l => !string.IsNullOrEmpty(l.Text)).ToList();
-        remaining.Sort((a, b) => a.BoundingBox.MinY.CompareTo(b.BoundingBox.MinY));
+        var visible = lines.Where(l => !string.IsNullOrEmpty(l.Text)).ToList();
+        double skew = TextSkew.Estimate(visible);
+        bool deskew = TextSkew.IsSignificant(skew);
 
-        var paragraphs = new List<List<OcrLine>>();
+        // Geometry keys: the plain bounding box, or the box in the deskewed frame. The same comparisons on
+        // the same initial order give the same (unstable) sort permutation, so unskewed pages are unchanged.
+        var remaining = visible
+            .Select(l => (Line: l, Box: deskew ? TextSkew.DeskewedBox(l, skew) : l.BoundingBox))
+            .ToList();
+        remaining.Sort((a, b) => a.Box.MinY.CompareTo(b.Box.MinY));
+
+        var paragraphs = new List<List<(OcrLine Line, OcrBoundingBox Box)>>();
         foreach (var line in remaining)
         {
             var placed = false;
             foreach (var para in paragraphs)
             {
                 var last = para[^1];
-                double lineHeight = Math.Max(line.BoundingBox.Height, last.BoundingBox.Height);
-                double verticalGap = line.BoundingBox.MinY - last.BoundingBox.MaxY;
+                double lineHeight = Math.Max(line.Box.Height, last.Box.Height);
+                double verticalGap = line.Box.MinY - last.Box.MaxY;
 
                 // Same block if the next line starts within ~y_ths line-heights below the previous one
                 // and their horizontal spans either overlap or sit within ~x_ths line-heights.
                 if (verticalGap <= lineHeight * yThreshold && verticalGap >= -lineHeight
-                    && HorizontalClose(last.BoundingBox, line.BoundingBox, lineHeight * xThreshold))
+                    && HorizontalClose(last.Box, line.Box, lineHeight * xThreshold))
                 {
                     para.Add(line);
                     placed = true;
                     break;
                 }
             }
-            if (!placed) paragraphs.Add(new List<OcrLine> { line });
+            if (!placed) paragraphs.Add(new List<(OcrLine Line, OcrBoundingBox Box)> { line });
         }
 
         var result = new List<OcrLine>(paragraphs.Count);
@@ -57,11 +66,11 @@ internal static class ParagraphGrouper
         {
             if (para.Count == 1)
             {
-                result.Add(para[0]);
+                result.Add(para[0].Line);
                 continue;
             }
 
-            var ordered = para.OrderBy(l => l.BoundingBox.MinY).ThenBy(l => l.BoundingBox.MinX).ToList();
+            var ordered = para.OrderBy(k => k.Box.MinY).ThenBy(k => k.Box.MinX).Select(k => k.Line).ToList();
             var text = string.Join("\n", ordered.Select(l => l.Text));
             double minX = ordered.Min(l => l.BoundingBox.MinX);
             double minY = ordered.Min(l => l.BoundingBox.MinY);
@@ -79,6 +88,7 @@ internal static class ParagraphGrouper
                 Confidence = ordered.Average(l => l.Confidence),
                 BoundingPolygon = poly,
                 BoundingBox = new OcrBoundingBox(minX, minY, maxX, maxY),
+                Words = ordered.SelectMany(l => l.Words).ToArray(),
             });
         }
         return result;

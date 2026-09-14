@@ -1,5 +1,6 @@
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
+using PaddleOcrNet.Internal.Recognition;
 using EasyImageSharp;
 using EasyImageSharp.PixelFormats;
 using EasyImageSharp.Processing;
@@ -11,14 +12,20 @@ namespace PaddleOcrNet.Internal.Classification;
 /// Resizes each crop to the model's fixed input (3×80×160), runs the 2-class network, and reports whether
 /// the "180°" label won.
 /// <para>
-/// The pipeline mirrors PaddleOCR's <c>ClsResizeImg</c> / RapidOcrNet's <c>TextClassifier</c>: resize the
-/// crop to height 80 keeping aspect ratio (width capped at 160), right-pad with zeros to width 160,
-/// normalize each channel as <c>(x/255 − 0.5)/0.5</c> into RGB CHW order, and run the ONNX graph. The
-/// graph's input is named <c>x</c> with the fixed shape <c>[N, 3, 80, 160]</c> (only the batch dimension
-/// is dynamic) and its single output <c>fetch_name_0</c> is a <c>[N, 2]</c> tensor of scores over the
-/// labels {0°, 180°}; <c>argmax</c> selects the label and its value is the confidence. The 180° label
-/// (index 1) is only accepted when its score clears the configured threshold (PaddleOCR's
-/// <c>cls_thresh</c>, default 0.9). When accepted, the caller rotates the crop 180° before recognition.
+/// The pipeline mirrors PaddleX's textline-orientation preprocessing (<c>ResizeImage {size:[160,80]}</c>
+/// + ImageNet <c>NormalizeImage</c>): stretch-resize the crop to exactly 160×80 with bilinear sampling
+/// (no aspect preservation, no padding), then normalize each RGB channel as
+/// <c>(x/255 − mean)/std</c> with mean [0.485, 0.456, 0.406] / std [0.229, 0.224, 0.225] into CHW order.
+/// The graph's input is named <c>x</c> with the fixed shape <c>[N, 3, 80, 160]</c> (only the batch
+/// dimension is dynamic) and its single output <c>fetch_name_0</c> is a <c>[N, 2]</c> tensor of scores
+/// over the labels {0°, 180°}; <c>argmax</c> selects the label and its value is the confidence. This
+/// class reports that raw verdict; the caller decides whether to act on it, gating with
+/// <see cref="Models.RecognitionOptions.TextLineOrientationThreshold"/> — PaddleX 3.x rotates on plain
+/// argmax, which measurably destroys upright text when the classifier misfires.
+/// </para>
+/// <para>
+/// Many crops are classified <see cref="BatchSize"/> at a time. Every crop is stretched to the same fixed
+/// size, so a batch needs no padding and each crop's input is identical to its single-crop tensor.
 /// </para>
 /// </summary>
 internal sealed class TextLineClassifier : IAngleClassifier
@@ -29,19 +36,26 @@ internal sealed class TextLineClassifier : IAngleClassifier
     private const int TargetWidth = 160;
     private const int RotatedLabel = 1; // output index for the 180° class
 
+    /// <summary>
+    /// Crops per ONNX run when classifying many crops.
+    /// </summary>
+    private const int BatchSize = 6;
+
+    private const int ImageStride = 3 * TargetHeight * TargetWidth;
+
+    private static readonly float[] Mean = { 0.485f, 0.456f, 0.406f };
+    private static readonly float[] Std = { 0.229f, 0.224f, 0.225f };
+
     private readonly InferenceSession _session;
-    private readonly double _threshold;
     private readonly string _inputName;
 
     /// <summary>
     /// Creates the classifier over an already-built ONNX <see cref="InferenceSession"/>.
     /// </summary>
     /// <param name="session">The loaded cls model session (this instance takes ownership and disposes it).</param>
-    /// <param name="threshold">Confidence above which the 180° label is accepted (PaddleOCR's <c>cls_thresh</c>). Default 0.9.</param>
-    public TextLineClassifier(InferenceSession session, double threshold = 0.9)
+    public TextLineClassifier(InferenceSession session)
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
-        _threshold = threshold;
         // The cls graph has a single input; resolve its name once rather than per-call.
         _inputName = _session.InputMetadata.Keys.First();
     }
@@ -50,72 +64,90 @@ internal sealed class TextLineClassifier : IAngleClassifier
     public (bool Rotated, float Score) Classify(Image<Rgb24> crop)
     {
         ArgumentNullException.ThrowIfNull(crop);
+        return Classify(new[] { crop }, maxDegreeOfParallelism: 1)[0];
+    }
 
-        var input = BuildInputTensor(crop);
+    /// <inheritdoc />
+    public IReadOnlyList<(bool Rotated, float Score)> Classify(IReadOnlyList<Image<Rgb24>> crops, int maxDegreeOfParallelism)
+    {
+        ArgumentNullException.ThrowIfNull(crops);
+        var results = new (bool Rotated, float Score)[crops.Count];
 
-        using var results = _session.Run(
-            new[] { NamedOnnxValue.CreateFromTensor(_inputName, input) });
+        for (int start = 0; start < crops.Count; start += BatchSize)
+        {
+            int count = Math.Min(BatchSize, crops.Count - start);
+            int batchStart = start;
 
-        // Output "fetch_name_0" is [1, 2]: scores for {0°, 180°}. Take argmax and its value.
-        var scores = results[0].AsEnumerable<float>().ToArray();
-        int idx = ArgMax(scores, out float score);
+            var input = new DenseTensor<float>(new[] { count, 3, TargetHeight, TargetWidth });
+            Memory<float> buffer = input.Buffer;
+            BoundedParallel.For(count, maxDegreeOfParallelism, CancellationToken.None,
+                i => WriteInput(crops[batchStart + i], buffer, i * ImageStride));
 
-        bool rotated = idx == RotatedLabel && score > _threshold;
-        return (rotated, score);
+            using var outputs = _session.Run(
+                new[] { NamedOnnxValue.CreateFromTensor(_inputName, input) });
+
+            // Output "fetch_name_0" is [N, 2]: scores for {0°, 180°}. Take each row's argmax and its value.
+            var output = outputs[0].AsTensor<float>();
+            ReadOnlySpan<float> scores = output is DenseTensor<float> dense ? dense.Buffer.Span : output.ToArray();
+            int classes = scores.Length / count;
+            for (int i = 0; i < count; i++)
+            {
+                int idx = ArgMax(scores.Slice(i * classes, classes), out float score);
+                // The model's unfiltered verdict: the caller applies the confidence gate.
+                results[batchStart + i] = (idx == RotatedLabel, score);
+            }
+        }
+
+        return results;
     }
 
     /// <summary>
-    /// Preprocesses <paramref name="crop"/> into the model's <c>[1, 3, 80, 160]</c> input: resize to
-    /// height 80 keeping aspect ratio (width = min(160, ⌈80·w/h⌉)), right-pad with zeros to width 160,
-    /// and normalize each RGB channel as <c>(x/255 − 0.5)/0.5</c> in CHW layout. Padding columns stay
-    /// at the normalized value of 0 (i.e. <c>(0 − 0.5)/0.5 = −1</c>), matching PaddleOCR's zero-padding.
+    /// Preprocesses <paramref name="crop"/> into the model's <c>[1, 3, 80, 160]</c> input:
+    /// stretch-resize to exactly 160×80 with bilinear sampling (PaddleX's <c>ResizeImage</c> ignores
+    /// aspect ratio and never pads), then ImageNet-normalize each RGB channel as
+    /// <c>(x/255 − mean)/std</c> in CHW layout.
     /// </summary>
-    private static DenseTensor<float> BuildInputTensor(Image<Rgb24> crop)
+    internal static DenseTensor<float> BuildInputTensor(Image<Rgb24> crop)
     {
-        int resizeWidth = Math.Min(
-            TargetWidth,
-            (int)Math.Ceiling((double)TargetHeight * crop.Width / crop.Height));
-        resizeWidth = Math.Max(1, resizeWidth);
-
-        using var resized = crop.Clone(ctx => ctx.Resize(new ResizeOptions
-        {
-            Size = new Size(resizeWidth, TargetHeight),
-            Mode = ResizeMode.Stretch,
-            Sampler = KnownResamplers.Bicubic,
-        }));
-
-        // Tensor is zero-initialized, so padded columns [resizeWidth, 160) start at the channel mean and
-        // become −1 after normalization — exactly PaddleOCR's zero-pad-then-normalize behavior.
         var tensor = new DenseTensor<float>(new[] { 1, 3, TargetHeight, TargetWidth });
-        const int channelStride = TargetHeight * TargetWidth;
-        var bufferMemory = tensor.Buffer;
-
-        resized.ProcessPixelRows(accessor =>
-        {
-            // Re-acquire the span inside the delegate: a ref-struct Span<T> can't be captured by a lambda.
-            var buffer = bufferMemory.Span;
-            for (int y = 0; y < TargetHeight; y++)
-            {
-                var row = accessor.GetRowSpan(y);
-                int rowOffset = y * TargetWidth;
-                for (int x = 0; x < resizeWidth; x++)
-                {
-                    Rgb24 p = row[x];
-                    int pixelOffset = rowOffset + x;
-                    buffer[pixelOffset] = Normalize(p.R);                       // R
-                    buffer[channelStride + pixelOffset] = Normalize(p.G);       // G
-                    buffer[2 * channelStride + pixelOffset] = Normalize(p.B);   // B
-                }
-            }
-        });
-
+        WriteInput(crop, tensor.Buffer, 0);
         return tensor;
     }
 
     /// <summary>
-    /// Normalizes an 8-bit channel value to <c>(v/255 − 0.5)/0.5</c>, i.e. the range [−1, 1].
+    /// Writes one crop's normalized <c>[3, 80, 160]</c> input into <paramref name="buffer"/> starting at
+    /// <paramref name="offset"/> (see <see cref="BuildInputTensor"/> for the preprocessing).
     /// </summary>
-    private static float Normalize(byte value) => (value / 255f - 0.5f) / 0.5f;
+    private static void WriteInput(Image<Rgb24> crop, Memory<float> buffer, int offset)
+    {
+        using var resized = crop.Clone(ctx => ctx.Resize(new ResizeOptions
+        {
+            Size = new Size(TargetWidth, TargetHeight),
+            Mode = ResizeMode.Stretch,
+            Sampler = KnownResamplers.Triangle, // bilinear (cv2.resize default INTER_LINEAR)
+        }));
+
+        const int channelStride = TargetHeight * TargetWidth;
+
+        resized.ProcessPixelRows(accessor =>
+        {
+            // Re-acquire the span inside the delegate: a ref-struct Span<T> can't be captured by a lambda.
+            var data = buffer.Span;
+            for (int y = 0; y < TargetHeight; y++)
+            {
+                var row = accessor.GetRowSpan(y);
+                int rowOffset = offset + y * TargetWidth;
+                for (int x = 0; x < TargetWidth; x++)
+                {
+                    Rgb24 p = row[x];
+                    int pixelOffset = rowOffset + x;
+                    data[pixelOffset] = (p.R / 255f - Mean[0]) / Std[0];                       // R
+                    data[channelStride + pixelOffset] = (p.G / 255f - Mean[1]) / Std[1];       // G
+                    data[2 * channelStride + pixelOffset] = (p.B / 255f - Mean[2]) / Std[2];   // B
+                }
+            }
+        });
+    }
 
     /// <summary>
     /// Returns the index of the largest score and reports that score via <paramref name="max"/>.

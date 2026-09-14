@@ -10,12 +10,12 @@ namespace PaddleOcrNet.Tests;
 /// <summary>
 /// Pure-function tests (no model download, CI-safe) for the structure export helpers
 /// <see cref="StructureHtmlExporter.ToHtml"/> and
-/// <see cref="StructureMarkdownExtensions.ConcatenateMarkdownPages(IEnumerable{StructureResult})"/>.
+/// <see cref="StructureMarkdownExtensions.ConcatenateMarkdownPages(IEnumerable{StructureResult}, MarkdownRenderOptions)"/>.
 /// The HTML exporter walks <see cref="StructureResult.Blocks"/> in reading order and renders each block by
 /// kind (titles → headings, text → paragraphs, tables → their HTML verbatim, formulas → MathJax); the
-/// markdown concatenator joins per-page renderings in order with a horizontal-rule page separator. These
-/// tests build a small hand-assembled result and assert the emitted output's well-formedness, content and
-/// ordering.
+/// markdown concatenator joins per-page renderings in order with a blank line by default (paragraph-aware,
+/// Python parity), or an explicit separator on request. These tests build a small hand-assembled result and
+/// assert the emitted output's well-formedness, content and ordering.
 /// </summary>
 public class StructureHtmlExportTests
 {
@@ -172,7 +172,7 @@ public class StructureHtmlExportTests
     // -------------------- ConcatenateMarkdownPages --------------------
 
     [Fact]
-    public void ConcatenateMarkdownPages_joins_results_in_order_with_separator()
+    public void ConcatenateMarkdownPages_joins_results_in_order_with_blank_lines_by_default()
     {
         var page1 = Build(new StructureBlock(StructureBlockType.DocTitle, Box(0, 0, 1, 1), Order: 0, Text: "Page One"));
         var page2 = Build(new StructureBlock(StructureBlockType.DocTitle, Box(0, 0, 1, 1), Order: 0, Text: "Page Two"));
@@ -185,16 +185,32 @@ public class StructureHtmlExportTests
         int p3 = md.IndexOf("Page Three", StringComparison.Ordinal);
         Assert.True(p1 < p2 && p2 < p3, "pages must be concatenated in order");
 
-        // Two separators for three pages.
-        Assert.Equal(2, CountOccurrences(md, StructureMarkdownExtensions.PageSeparator));
+        // Python-parity default: blank-line joins, no horizontal rules.
+        Assert.DoesNotContain("---", md);
+        Assert.Equal(2, CountOccurrences(md, "\n\n"));
     }
 
     [Fact]
-    public void ConcatenateMarkdownPages_string_overload_joins_with_horizontal_rule()
+    public void ConcatenateMarkdownPages_page_separator_option_restores_the_horizontal_rule()
     {
-        var md = new[] { "# A", "# B" }.ConcatenateMarkdownPages();
-        Assert.Equal("# A" + StructureMarkdownExtensions.PageSeparator + "# B", md);
-        Assert.Contains("---", md);
+        var page1 = Build(new StructureBlock(StructureBlockType.DocTitle, Box(0, 0, 1, 1), Order: 0, Text: "Page One"));
+        var page2 = Build(new StructureBlock(StructureBlockType.DocTitle, Box(0, 0, 1, 1), Order: 0, Text: "Page Two"));
+
+        var md = new[] { page1, page2 }.ConcatenateMarkdownPages(
+            new MarkdownRenderOptions { PageSeparator = StructureMarkdownExtensions.PageSeparator });
+
+        Assert.Equal(1, CountOccurrences(md, StructureMarkdownExtensions.PageSeparator));
+    }
+
+    [Fact]
+    public void ConcatenateMarkdownPages_string_overload_joins_with_blank_line_by_default()
+    {
+        // Pre-rendered strings carry no continuation flags: blank-line join by default, explicit separator
+        // (e.g. the old horizontal rule) on request.
+        Assert.Equal("# A\n\n# B", new[] { "# A", "# B" }.ConcatenateMarkdownPages());
+        Assert.Equal(
+            "# A" + StructureMarkdownExtensions.PageSeparator + "# B",
+            new[] { "# A", "# B" }.ConcatenateMarkdownPages(StructureMarkdownExtensions.PageSeparator));
     }
 
     [Fact]
@@ -202,9 +218,9 @@ public class StructureHtmlExportTests
     {
         var md = new string?[] { null, "# A", "   ", "", "# B" }.ConcatenateMarkdownPages();
 
-        Assert.Equal("# A" + StructureMarkdownExtensions.PageSeparator + "# B", md);
-        // Exactly one separator survives (between the two non-empty pages), no leading/trailing rules.
-        Assert.Equal(1, CountOccurrences(md, StructureMarkdownExtensions.PageSeparator));
+        Assert.Equal("# A\n\n# B", md);
+        // Exactly one separator survives (between the two non-empty pages), no leading/trailing joiners.
+        Assert.Equal(1, CountOccurrences(md, "\n\n"));
     }
 
     [Fact]

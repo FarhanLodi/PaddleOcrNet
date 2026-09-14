@@ -30,8 +30,7 @@ public sealed class PaddleOcrService : IPaddleOcrService
     private readonly PaddleEngineOptions _engineOptions;
     private PaddleStructureEngine? _structureEngine;
     private readonly object _structureEngineLock = new();
-    private readonly bool _useGpu;
-    private readonly long _maxImagePixels;
+    private readonly ImageLoadSettings _loadSettings;
     private volatile bool _disposed;
     // Count of OCR operations currently touching the engine's ONNX sessions. DisposeAsync drains this
     // to zero before disposing the sessions so a session is never freed while a Recognize is in flight
@@ -65,27 +64,53 @@ public sealed class PaddleOcrService : IPaddleOcrService
     {
         ArgumentNullException.ThrowIfNull(options);
         _logger = logger;
-        _maxImagePixels = options.MaxImagePixels;
+        _loadSettings = ImageLoadSettings.From(options);
         var engineOptions = options.ToEngineOptions();
         _engineOptions = engineOptions;
         _engine = new PaddleOcrEngine(engineOptions, logger);
-        // ResolvedProvider has already turned Auto into a concrete choice based on the installed runtime.
-        _useGpu = _engine.ResolvedProvider != OcrExecutionProvider.Cpu;
     }
 
     /// <summary>
-    /// Gets a value indicating whether a GPU accelerator was selected for this service — either requested
-    /// explicitly or chosen by <see cref="OcrExecutionProvider.Auto"/> detection. (The provider may still
-    /// silently fall back to CPU if the device turns out to be unusable at the first model load.)
+    /// Gets the execution provider the ONNX sessions are actually running on <b>right now</b> —
+    /// <see cref="OcrExecutionProvider.Cpu"/> when a requested accelerator failed to attach or a session
+    /// later degraded to CPU (see <see cref="GpuAccelerationHint"/> for why). This is the truthful, live
+    /// counterpart of <see cref="UseGpu"/>.
     /// </summary>
-    public bool UseGpu => _useGpu;
+    public OcrExecutionProvider ActiveExecutionProvider => _engine.ActiveProvider;
 
     /// <summary>
-    /// When <see cref="OcrExecutionProvider.Auto"/> fell back to CPU but a usable GPU is physically present,
-    /// an actionable message naming the exact provider package to install (<c>PaddleOcrNet.Gpu</c> for an
-    /// NVIDIA GPU). Null when a GPU is already in use, CPU was chosen explicitly, or no GPU was detected.
+    /// The decode-time settings (pixel guard, EXIF orientation, transparency flattening) this service
+    /// applies to encoded inputs; shared with the multi-frame extensions.
+    /// </summary>
+    internal ImageLoadSettings LoadSettings => _loadSettings;
+
+    /// <summary>
+    /// Gets a value indicating whether a GPU accelerator is actually in use — equivalent to
+    /// <see cref="ActiveExecutionProvider"/> being a non-CPU provider. Live: an accelerator that was
+    /// requested but failed to attach (or degraded to CPU at a model load) reports <c>false</c>.
+    /// </summary>
+    public bool UseGpu => _engine.ActiveProvider != OcrExecutionProvider.Cpu;
+
+    /// <summary>
+    /// An actionable message explaining why OCR is running on CPU: the requested or auto-selected
+    /// accelerator failed to attach (with the exact fix — e.g. the CUDA-toolkit-major-mismatch hint or the
+    /// provider package to install), or <see cref="OcrExecutionProvider.Auto"/> fell back to CPU while a
+    /// usable GPU is physically present. Populated for explicit provider requests too, not only Auto.
+    /// Null when an accelerator is in use, CPU was chosen explicitly, or no GPU was detected.
     /// </summary>
     public string? GpuAccelerationHint => _engine.GpuHint;
+
+    /// <summary>
+    /// Collects a one-call diagnostic snapshot answering "why is my GPU not used": ONNX Runtime's
+    /// available providers, the requested/resolved/active execution providers, the GPU probe result and
+    /// the acceleration hint. Cheap; safe to log at startup.
+    /// </summary>
+    public OcrRuntimeInfo GetRuntimeInfo()
+        => OcrRuntimeInfo.Describe(
+            _engineOptions.ExecutionProvider,
+            _engine.ResolvedProvider,
+            _engine.ActiveProvider,
+            _engine.GpuHint);
 
     /// <inheritdoc />
     public async Task<OcrResult> ExtractTextFromImage(
@@ -265,7 +290,16 @@ public sealed class PaddleOcrService : IPaddleOcrService
         RecognitionOptions? options = null,
         CancellationToken cancellationToken = default)
     {
-        using var image = await LoadGuarded(Path.GetFullPath(imagePath), cancellationToken).ConfigureAwait(false);
+        EnsureNotDisposed();
+        if (string.IsNullOrWhiteSpace(imagePath))
+            throw new ArgumentException("Image path must be provided.", nameof(imagePath));
+
+        var fullPath = Path.GetFullPath(imagePath);
+        if (!File.Exists(fullPath))
+            throw new FileNotFoundException($"The image file '{fullPath}' could not be found.", fullPath);
+
+        cancellationToken.ThrowIfCancellationRequested();
+        using var image = await LoadGuarded(fullPath, cancellationToken).ConfigureAwait(false);
         return await DetectRegionsAsync(image, options, cancellationToken).ConfigureAwait(false);
     }
 
@@ -405,12 +439,20 @@ public sealed class PaddleOcrService : IPaddleOcrService
         Image<Rgb24> image, StructureOptions? options, CancellationToken cancellationToken)
     {
         using var op = BeginOperation();
+        using var activity = PaddleOcrDiagnostics.ActivitySource.StartActivity("PaddleOcr.AnalyzeDocument", ActivityKind.Internal);
+        activity?.SetTag("paddleocr.width", image.Width);
+        activity?.SetTag("paddleocr.height", image.Height);
         var engine = GetOrCreateStructureEngine();
-        return await engine.AnalyzeAsync(image, options ?? StructureOptions.Default, cancellationToken).ConfigureAwait(false);
+        var result = await engine.AnalyzeAsync(image, options ?? StructureOptions.Default, cancellationToken).ConfigureAwait(false);
+        activity?.SetTag("paddleocr.provider", _engine.ActiveProvider.ToString());
+        return result;
     }
 
     /// <summary>
-    /// Lazily creates (once) the structure engine, sharing the OCR engine's configuration.
+    /// Lazily creates (once) the structure engine, sharing this service's own <see cref="PaddleOcrEngine"/>
+    /// (and therefore its det/cls/rec ONNX sessions) instead of letting the structure engine build a
+    /// duplicate. The service retains ownership of the shared engine and disposes it in
+    /// <see cref="DisposeAsync"/> after the structure engine is disposed.
     /// </summary>
     private PaddleStructureEngine GetOrCreateStructureEngine()
     {
@@ -418,7 +460,7 @@ public sealed class PaddleOcrService : IPaddleOcrService
         if (existing is not null) return existing;
         lock (_structureEngineLock)
         {
-            _structureEngine ??= new PaddleStructureEngine(_engineOptions, _logger);
+            _structureEngine ??= new PaddleStructureEngine(_engineOptions, _engine, _logger);
             return _structureEngine;
         }
     }
@@ -436,28 +478,67 @@ public sealed class PaddleOcrService : IPaddleOcrService
         using var activity = PaddleOcrDiagnostics.ActivitySource.StartActivity("PaddleOcr.Extract", ActivityKind.Internal);
         var sw = Stopwatch.StartNew();
 
-        (IReadOnlyList<OcrLine> Lines, string[] Languages, IReadOnlyList<string> Detected) outcome;
-
-        if (options.Preprocessing.DetectOrientation)
+        // Non-square pixels (e.g. 204×98 DPI fax TIFFs): OCR a square-pixel copy and scale the boxes back.
+        Image<Rgb24>? squared = options.Preprocessing.CorrectNonSquarePixels
+            ? NonSquarePixels.CreateSquarePixelCopy(image)
+            : null;
+        try
         {
-            outcome = await RecognizeBestOrientationAsync(image, languages, options, cancellationToken).ConfigureAwait(false);
-        }
-        else
-        {
-            outcome = await CoreAsync(image, languages, options, cancellationToken).ConfigureAwait(false);
-        }
+            var working = squared ?? image;
+            var workingOptions = options;
+            if (squared is not null)
+            {
+                activity?.SetTag("paddleocr.pixel_aspect_corrected", true);
+                if (options.Region is { } region)
+                {
+                    workingOptions = options with
+                    {
+                        Region = NonSquarePixels.ScaleRegion(
+                            region, (double)squared.Width / image.Width, (double)squared.Height / image.Height),
+                    };
+                }
+            }
 
-        return BuildResult(outcome.Lines, outcome.Languages, sw, activity, image.Width, image.Height, outcome.Detected, options.Grouping);
+            (IReadOnlyList<OcrLine> Lines, string[] Languages, IReadOnlyList<string> Detected, int Rotation) outcome;
+
+            if (options.Preprocessing.DetectOrientation)
+            {
+                outcome = await RecognizeBestOrientationAsync(working, languages, workingOptions, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                outcome = await CoreAsync(working, languages, workingOptions, cancellationToken).ConfigureAwait(false);
+            }
+
+            var lines = squared is null
+                ? outcome.Lines
+                : NonSquarePixels.MapToSource(outcome.Lines, (double)image.Width / squared.Width, (double)image.Height / squared.Height);
+
+            return BuildResult(lines, outcome.Languages, sw, activity, image.Width, image.Height, outcome.Detected, options.Grouping, outcome.Rotation);
+        }
+        finally
+        {
+            squared?.Dispose();
+        }
     }
 
     /// <summary>
     /// Sorts into reading order, records metrics/trace tags, and assembles the result.
+    /// <paramref name="appliedRotation"/> is the clockwise rotation the pipeline applied to upright the
+    /// page (0 when none): the returned quads are in the ORIGINAL image's frame, so the reading-order
+    /// sort keys off each line's forward-rotated (uprighted) box — otherwise a 180°-rotated page would
+    /// come out with its text order reversed.
     /// </summary>
-    private OcrResult BuildResult(IReadOnlyList<OcrLine> lines, string[] languages, Stopwatch sw, Activity? activity, int sourceWidth = 0, int sourceHeight = 0, IReadOnlyList<string>? detectedLanguages = null, TextGrouping grouping = TextGrouping.Line)
+    private OcrResult BuildResult(IReadOnlyList<OcrLine> lines, string[] languages, Stopwatch sw, Activity? activity, int sourceWidth = 0, int sourceHeight = 0, IReadOnlyList<string>? detectedLanguages = null, TextGrouping grouping = TextGrouping.Line, int appliedRotation = 0)
     {
-        var ordered = SortLinesByReadingOrder(lines);
+        var ordered = SortLinesByReadingOrder(lines, appliedRotation, sourceWidth, sourceHeight);
         sw.Stop();
         _logger?.LogInformation("OCR completed: {Count} lines in {Ms:F0} ms", ordered.Count, sw.Elapsed.TotalMilliseconds);
+
+        // Read the LIVE provider at result-build time: an accelerator that failed to attach (or degraded
+        // to CPU at a model load) must not report UsedGpu = true.
+        var activeProvider = _engine.ActiveProvider;
+        bool usedGpu = activeProvider != OcrExecutionProvider.Cpu;
 
         PaddleOcrDiagnostics.Operations.Add(1);
         PaddleOcrDiagnostics.Duration.Record(sw.Elapsed.TotalMilliseconds);
@@ -466,7 +547,8 @@ public sealed class PaddleOcrService : IPaddleOcrService
         {
             activity.SetTag("paddleocr.languages", string.Join(",", languages));
             activity.SetTag("paddleocr.lines", ordered.Count);
-            activity.SetTag("paddleocr.gpu", _useGpu);
+            activity.SetTag("paddleocr.gpu", usedGpu);
+            activity.SetTag("paddleocr.provider", activeProvider.ToString());
         }
 
         return new OcrResult
@@ -475,24 +557,55 @@ public sealed class PaddleOcrService : IPaddleOcrService
             Lines = ordered,
             Languages = languages,
             DetectedLanguages = detectedLanguages ?? Array.Empty<string>(),
+            // AppliedRotation is the corrective clockwise rotation; the page was DETECTED as rotated by
+            // the inverse (e.g. correction 270 ⇒ the page sat 90° clockwise from upright).
+            DetectedOrientation = (360 - (appliedRotation % 360 + 360) % 360) % 360,
             Duration = sw.Elapsed,
-            UsedGpu = _useGpu,
+            UsedGpu = usedGpu,
+            ExecutionProvider = activeProvider,
             SourceWidth = sourceWidth,
             SourceHeight = sourceHeight,
         };
     }
 
     /// <summary>
-    /// Runs OCR at 0/90/180/270° and keeps the orientation with the strongest result.
+    /// Handles <see cref="PreprocessingOptions.DetectOrientation"/>: the page orientation is decided by
+    /// the PP-LCNet document-orientation classifier in a single pass (the same model-based path Python's
+    /// <c>use_doc_orientation_classify</c> runs, wired through <see cref="PaddleOcrEngine"/>). Only when
+    /// that classifier model is unavailable (e.g. offline with an empty cache) does it fall back to the
+    /// old brute force: OCR at 0/90/180/270° and keep the orientation with the strongest result.
+    /// Either way the returned quads are mapped back into the original image's orientation and the
+    /// corrective rotation is reported so <see cref="OcrResult.DetectedOrientation"/> can be filled.
     /// </summary>
-    private async Task<(IReadOnlyList<OcrLine>, string[], IReadOnlyList<string>)> RecognizeBestOrientationAsync(
+    private async Task<(IReadOnlyList<OcrLine>, string[], IReadOnlyList<string>, int)> RecognizeBestOrientationAsync(
         Image<Rgb24> image, IEnumerable<string> languages, RecognitionOptions options, CancellationToken ct)
     {
         var langsList = languages.ToArray();
-        var noOrient = options with { Preprocessing = options.Preprocessing with { DetectOrientation = false } };
+
+        // ---- model-based path (python parity): one pass with the doc-orientation classifier forced on.
+        if (await _engine.TryEnsureDocOrientationAsync(ct).ConfigureAwait(false))
+        {
+            var clsOptions = options with
+            {
+                Preprocessing = options.Preprocessing with { DetectOrientation = false },
+                UseDocOrientation = true,
+            };
+            return await CoreAsync(image, langsList, clsOptions, ct).ConfigureAwait(false);
+        }
+
+        // ---- brute-force fallback (classifier model unavailable). Doc preprocessing stays off so the
+        // engine never re-rotates the already-rotated candidates.
+        _logger?.LogInformation("Doc-orientation classifier unavailable; falling back to brute-force 4-rotation OCR.");
+        var noOrient = options with
+        {
+            Preprocessing = options.Preprocessing with { DetectOrientation = false },
+            UseDocOrientation = false,
+            UseDocUnwarp = false,
+        };
 
         (IReadOnlyList<OcrLine> Lines, string[] Langs, IReadOnlyList<string> Detected)? best = null;
         double bestScore = double.NegativeInfinity;
+        int bestDegrees = 0;
 
         foreach (var degrees in new[] { 0, 90, 180, 270 })
         {
@@ -500,13 +613,14 @@ public sealed class PaddleOcrService : IPaddleOcrService
             Image<Rgb24>? rotated = degrees == 0 ? null : ImagePreprocessor.RotateRightAngle(image, degrees);
             try
             {
-                var (lines, langs, detected) = await CoreAsync(rotated ?? image, langsList, noOrient, ct).ConfigureAwait(false);
+                var (lines, langs, detected, _) = await CoreAsync(rotated ?? image, langsList, noOrient, ct).ConfigureAwait(false);
                 double score = lines.Where(l => !string.IsNullOrWhiteSpace(l.Text)).Sum(l => l.Confidence * l.Text.Length);
                 _logger?.LogInformation("Orientation {Deg}° scored {Score:F1}", degrees, score);
                 if (score > bestScore)
                 {
                     bestScore = score;
                     best = (lines, langs, detected);
+                    bestDegrees = degrees;
                 }
             }
             finally
@@ -515,26 +629,45 @@ public sealed class PaddleOcrService : IPaddleOcrService
             }
         }
 
-        return best ?? (Array.Empty<OcrLine>(), langsList, Array.Empty<string>());
+        if (best is not { } winner) return (Array.Empty<OcrLine>(), langsList, Array.Empty<string>(), 0);
+
+        // Map the winning rotation's quads back into the original image's frame (the winning pass ran on
+        // the rotated copy, whose dimensions are swapped for 90/270).
+        var mapped = winner.Lines;
+        if (bestDegrees != 0)
+        {
+            int rotatedWidth = bestDegrees is 90 or 270 ? image.Height : image.Width;
+            int rotatedHeight = bestDegrees is 90 or 270 ? image.Width : image.Height;
+            mapped = Internal.Geometry.OrientationMapper.MapLinesToOriginalFrame(mapped, bestDegrees, rotatedWidth, rotatedHeight);
+        }
+        return (mapped, winner.Langs, winner.Detected, bestDegrees);
     }
 
     /// <summary>
     /// Preprocess → resolve languages → region crop → recognize. The recognition itself is delegated to
     /// <see cref="PaddleOcrEngine.RecognizeAsync"/> (det → cls → rec), whose body the downstream agent fills.
     /// </summary>
-    private async Task<(IReadOnlyList<OcrLine> Lines, string[] Languages, IReadOnlyList<string> Detected)> CoreAsync(
+    private async Task<(IReadOnlyList<OcrLine> Lines, string[] Languages, IReadOnlyList<string> Detected, int Rotation)> CoreAsync(
         Image<Rgb24> image, IEnumerable<string> languages, RecognitionOptions options, CancellationToken ct)
     {
         // Denoise / deskew / binarize into a working image (orientation handled by the caller).
         bool needsPreprocess = options.Preprocessing.Denoise || options.Preprocessing.Deskew || options.Preprocessing.Binarize;
-        Image<Rgb24> working = needsPreprocess ? ImagePreprocessor.Apply(image, options.Preprocessing) : image;
+        float deskewRotation = 0f;
+        Image<Rgb24> working = needsPreprocess ? ImagePreprocessor.Apply(image, options.Preprocessing, out deskewRotation) : image;
         try
         {
             // "auto" is a detection trigger, not a recognizer language; allow it to be the only code (it is
             // dropped by the engine's candidate resolution) so callers can pass languages: ["auto"].
             var langs = ResolveLanguages(languages, allowEmpty: IsAutoRequested(languages, options));
-            var (lines, detected) = await RecognizeWithRegionAsync(working, langs, options, ct).ConfigureAwait(false);
-            return (lines, langs, detected);
+            var (lines, detected, rotation) = await RecognizeWithRegionAsync(working, langs, options, ct).ConfigureAwait(false);
+
+            // Deskew OCR'd the rotated, enlarged canvas: map every quad back onto the caller's image.
+            if (deskewRotation != 0f)
+            {
+                lines = ImagePreprocessor.MapFromRotatedCanvas(
+                    lines, deskewRotation, working.Width, working.Height, image.Width, image.Height);
+            }
+            return (lines, langs, detected, rotation);
         }
         finally
         {
@@ -553,7 +686,7 @@ public sealed class PaddleOcrService : IPaddleOcrService
     /// <summary>
     /// Applies the optional region-of-interest crop and translates boxes back to image coordinates.
     /// </summary>
-    private async Task<(IReadOnlyList<OcrLine> Lines, IReadOnlyList<string> Detected)> RecognizeWithRegionAsync(
+    private async Task<(IReadOnlyList<OcrLine> Lines, IReadOnlyList<string> Detected, int Rotation)> RecognizeWithRegionAsync(
         Image<Rgb24> image, string[] langs, RecognitionOptions options, CancellationToken ct)
     {
         if (options.Region is not { } region)
@@ -562,11 +695,11 @@ public sealed class PaddleOcrService : IPaddleOcrService
         }
 
         var (rx, ry, rw, rh) = region.Resolve(image.Width, image.Height);
-        if (rw < 2 || rh < 2) return (Array.Empty<OcrLine>(), Array.Empty<string>());
+        if (rw < 2 || rh < 2) return (Array.Empty<OcrLine>(), Array.Empty<string>(), 0);
 
         using var roi = image.Clone(ctx => ctx.Crop(new Rectangle(rx, ry, rw, rh)));
-        var (roiLines, detected) = await _engine.RecognizeWithDetectedLanguagesAsync(roi, langs, options, ct).ConfigureAwait(false);
-        return (TranslateLines(roiLines, rx, ry), detected);
+        var (roiLines, detected, rotation) = await _engine.RecognizeWithDetectedLanguagesAsync(roi, langs, options, ct).ConfigureAwait(false);
+        return (TranslateLines(roiLines, rx, ry), detected, rotation);
     }
 
     // ---- helpers ----
@@ -610,6 +743,7 @@ public sealed class PaddleOcrService : IPaddleOcrService
             {
                 BoundingPolygon = poly,
                 BoundingBox = new OcrBoundingBox(box.MinX + dx, box.MinY + dy, box.MaxX + dx, box.MaxY + dy),
+                Words = Internal.Recognition.WordBoxBuilder.Transform(line.Words, p => new OcrPoint(p.X + dx, p.Y + dy)),
             });
         }
         return translated;
@@ -617,25 +751,111 @@ public sealed class PaddleOcrService : IPaddleOcrService
 
     /// <summary>
     /// Orders lines into human reading order: split into columns by a clear vertical gutter (read each
-    /// column top-to-bottom before moving right), and within a column band rows by a tolerance derived
-    /// from the median line height — so large headings / high-DPI scans aren't split across bands and
-    /// dense small text isn't merged, unlike a fixed pixel tolerance.
+    /// column top-to-bottom before moving right), and within a column chain boxes into rows by vertical
+    /// overlap / centre proximity (a tolerance derived from the median line height) — so boxes on one
+    /// visual row are never split by a band boundary, large headings / high-DPI scans stay together, and
+    /// dense small text isn't merged. On a significantly skewed page the keys are deskewed first.
     /// </summary>
     internal static List<OcrLine> SortLinesByReadingOrder(IReadOnlyList<OcrLine> lines)
+        => SortLinesByReadingOrder(lines, 0, 0, 0);
+
+    /// <summary>
+    /// Rotation- and skew-aware reading order. When the pipeline uprighted the page (document orientation)
+    /// the returned quads are in the ORIGINAL image's frame, so sorting by those coordinates would read a
+    /// 180°-rotated page bottom-up: each line's box is rotated forward into the uprighted frame (by
+    /// <paramref name="appliedRotation"/>° clockwise, the same rotation the pipeline applied). When the
+    /// uprighted quads then show a consistent text skew (<see cref="TextSkew"/>, |θ| ≥ 0.5°) they are also
+    /// rotated by −θ. Both rotations only produce sort keys — the emitted lines keep their coordinates.
+    /// </summary>
+    internal static List<OcrLine> SortLinesByReadingOrder(IReadOnlyList<OcrLine> lines, int appliedRotation, int sourceWidth, int sourceHeight)
     {
         if (lines.Count <= 1) return lines.ToList();
 
-        double medianHeight = Median(lines.Select(l => (double)l.BoundingBox.Height).Where(h => h > 0));
+        bool rotate = ((appliedRotation % 360) + 360) % 360 != 0 && sourceWidth > 0 && sourceHeight > 0;
+        var upright = new IReadOnlyList<OcrPoint>[lines.Count];
+        for (int i = 0; i < lines.Count; i++)
+        {
+            var corners = TextSkew.CornersOf(lines[i]);
+            upright[i] = rotate
+                ? Internal.Geometry.OrientationMapper.RotatePolygon(corners, appliedRotation, sourceWidth, sourceHeight)
+                : corners;
+        }
+
+        double skew = TextSkew.Estimate(upright);
+        bool deskew = TextSkew.IsSignificant(skew);
+
+        var keys = new OcrBoundingBox[lines.Count];
+        for (int i = 0; i < lines.Count; i++)
+        {
+            keys[i] = !rotate && !deskew
+                ? lines[i].BoundingBox
+                : OcrBoundingBox.FromPoints(deskew ? upright[i].Select(p => TextSkew.Deskew(p, skew)) : upright[i]);
+        }
+        return SortByReadingOrder(lines, keys);
+    }
+
+    /// <summary>
+    /// Core of <see cref="SortLinesByReadingOrder(IReadOnlyList{OcrLine}, int, int, int)"/>: columns, then
+    /// rows chained within each column, then left-to-right within each row, all on the given key boxes.
+    /// </summary>
+    private static List<OcrLine> SortByReadingOrder(IReadOnlyList<OcrLine> lines, IReadOnlyList<OcrBoundingBox> keys)
+    {
+        var keyed = lines.Select((l, i) => (Line: l, Box: keys[i])).ToList();
+        double medianHeight = Median(keyed.Select(k => k.Box.Height).Where(h => h > 0));
         double tol = Math.Max(4.0, 0.5 * medianHeight);
 
         var result = new List<OcrLine>(lines.Count);
-        foreach (var column in DetectColumns(lines, medianHeight))
+        foreach (var column in DetectColumns(keyed, medianHeight))
         {
-            result.AddRange(column
-                .OrderBy(l => Math.Round(l.BoundingBox.MinY / tol) * tol)
-                .ThenBy(l => l.BoundingBox.MinX));
+            foreach (var row in ChainRows(column, tol))
+            {
+                result.AddRange(row.OrderBy(k => k.Box.MinX).Select(k => k.Line));
+            }
         }
         return result;
+    }
+
+    /// <summary>
+    /// Greedy row chaining: walking the boxes by centre Y, each box joins the current row when it overlaps
+    /// the row's mean band by at least half the smaller height, or its centre lies within
+    /// <paramref name="tolerance"/> of the row's mean centre; otherwise it starts a new row. Unlike rounding
+    /// Y into fixed bands, two boxes on one row can never be separated by a band edge.
+    /// </summary>
+    private static List<List<(OcrLine Line, OcrBoundingBox Box)>> ChainRows(
+        IEnumerable<(OcrLine Line, OcrBoundingBox Box)> column, double tolerance)
+    {
+        var rows = new List<List<(OcrLine Line, OcrBoundingBox Box)>>();
+        List<(OcrLine Line, OcrBoundingBox Box)>? current = null;
+        double centerSum = 0, heightSum = 0;
+
+        foreach (var item in column.OrderBy(k => k.Box.CenterY).ThenBy(k => k.Box.MinX))
+        {
+            if (current is not null
+                && IsSameRow(centerSum / current.Count, heightSum / current.Count, item.Box, tolerance))
+            {
+                current.Add(item);
+                centerSum += item.Box.CenterY;
+                heightSum += item.Box.Height;
+                continue;
+            }
+
+            current = new List<(OcrLine Line, OcrBoundingBox Box)> { item };
+            rows.Add(current);
+            centerSum = item.Box.CenterY;
+            heightSum = item.Box.Height;
+        }
+        return rows;
+    }
+
+    /// <summary>
+    /// Row-membership test used by <see cref="ChainRows"/>.
+    /// </summary>
+    internal static bool IsSameRow(double rowCenterY, double rowHeight, OcrBoundingBox box, double tolerance)
+    {
+        double overlap = Math.Min(rowCenterY + (rowHeight / 2.0), box.MaxY) - Math.Max(rowCenterY - (rowHeight / 2.0), box.MinY);
+        double smaller = Math.Min(rowHeight, box.Height);
+        if (smaller > 0 && overlap >= 0.5 * smaller) return true;
+        return Math.Abs(box.CenterY - rowCenterY) <= tolerance;
     }
 
     /// <summary>
@@ -645,21 +865,22 @@ public sealed class PaddleOcrService : IPaddleOcrService
     /// the gutter, collapses everything back to a single column). Conservative — returns one column when no
     /// clean gutter exists.
     /// </summary>
-    private static List<List<OcrLine>> DetectColumns(IReadOnlyList<OcrLine> lines, double medianHeight)
+    private static List<List<(OcrLine Line, OcrBoundingBox Box)>> DetectColumns(
+        IReadOnlyList<(OcrLine Line, OcrBoundingBox Box)> lines, double medianHeight)
     {
-        var sorted = lines.OrderBy(l => l.BoundingBox.MinX).ToList();
+        var sorted = lines.OrderBy(l => l.Box.MinX).ToList();
         double gutter = Math.Max(20.0, 1.5 * medianHeight);
 
-        var columns = new List<List<OcrLine>>();
-        var current = new List<OcrLine> { sorted[0] };
-        double runningMaxX = sorted[0].BoundingBox.MaxX;
+        var columns = new List<List<(OcrLine Line, OcrBoundingBox Box)>>();
+        var current = new List<(OcrLine Line, OcrBoundingBox Box)> { sorted[0] };
+        double runningMaxX = sorted[0].Box.MaxX;
         for (int i = 1; i < sorted.Count; i++)
         {
-            var box = sorted[i].BoundingBox;
+            var box = sorted[i].Box;
             if (box.MinX - runningMaxX > gutter)
             {
                 columns.Add(current);
-                current = new List<OcrLine>();
+                current = new List<(OcrLine Line, OcrBoundingBox Box)>();
                 runningMaxX = box.MaxX;
             }
             else
@@ -708,56 +929,33 @@ public sealed class PaddleOcrService : IPaddleOcrService
 
     // ---- guarded image loading (decompression-bomb / pixel-flood DoS guard) ----
 
+    // Every encoded input is buffered once (the header check and the decode share it), only its first frame
+    // is decoded, and it is flattened / EXIF-oriented per the service options (see GuardedImageLoader).
+
     private async Task<Image<Rgb24>> LoadGuarded(string path, CancellationToken ct)
     {
-        if (_maxImagePixels > 0)
-        {
-            var info = await Image.IdentifyAsync(path, ct).ConfigureAwait(false);
-            GuardPixels(info.Width, info.Height);
-        }
-        return await Image.LoadAsync<Rgb24>(path, ct).ConfigureAwait(false);
+        var bytes = await GuardedImageLoader.ReadAllBytesAsync(path, ct).ConfigureAwait(false);
+        return GuardedImageLoader.LoadFirstFrame(bytes, _loadSettings);
     }
 
     private async Task<Image<Rgb24>> LoadGuarded(Stream stream, CancellationToken ct)
     {
-        if (_maxImagePixels <= 0)
-            return await Image.LoadAsync<Rgb24>(stream, ct).ConfigureAwait(false);
-
-        if (stream.CanSeek)
+        if (stream is MemoryStream ms && ms.TryGetBuffer(out var segment))
         {
-            long pos = stream.Position;
-            var info = await Image.IdentifyAsync(stream, ct).ConfigureAwait(false);
-            GuardPixels(info.Width, info.Height);
-            stream.Seek(pos, SeekOrigin.Begin);
-            return await Image.LoadAsync<Rgb24>(stream, ct).ConfigureAwait(false);
+            // Already in memory: decode from the buffer without copying, then consume the stream as a
+            // stream-based decode would have.
+            int offset = (int)ms.Position;
+            var image = GuardedImageLoader.LoadFirstFrame(segment.AsSpan(offset, (int)ms.Length - offset), _loadSettings);
+            ms.Position = ms.Length;
+            return image;
         }
 
-        // Non-seekable: buffer the (small) compressed bytes once so we can inspect the header before
-        // decoding into the full pixel buffer.
-        using var ms = new MemoryStream();
-        await stream.CopyToAsync(ms, ct).ConfigureAwait(false);
-        return LoadGuarded(ms.GetBuffer().AsSpan(0, (int)ms.Length));
+        var bytes = await GuardedImageLoader.ReadAllBytesAsync(stream, ct).ConfigureAwait(false);
+        return GuardedImageLoader.LoadFirstFrame(bytes, _loadSettings);
     }
 
     private Image<Rgb24> LoadGuarded(ReadOnlySpan<byte> bytes)
-    {
-        if (_maxImagePixels > 0)
-        {
-            var info = Image.Identify(bytes);
-            GuardPixels(info.Width, info.Height);
-        }
-        return Image.Load<Rgb24>(bytes);
-    }
-
-    private void GuardPixels(int width, int height)
-    {
-        long pixels = (long)width * height;
-        if (pixels > _maxImagePixels)
-            throw new ImageTooLargeException(
-                $"Image is {width}x{height} ({pixels:N0} px), exceeding the configured limit of " +
-                $"{_maxImagePixels:N0} px (PaddleOcrServiceOptions.MaxImagePixels). Raise the limit or downscale " +
-                "the image. This guard protects against decompression-bomb / pixel-flood denial of service.");
-    }
+        => GuardedImageLoader.LoadFirstFrame(bytes, _loadSettings);
 
     /// <summary>
     /// Releases the underlying ONNX sessions. Prefer <see cref="DisposeAsync"/>.

@@ -1,4 +1,5 @@
 using PaddleOcrNet.Internal;
+using PaddleOcrNet.Models;
 
 namespace PaddleOcrNet.Services;
 
@@ -24,6 +25,23 @@ public sealed class PaddleOcrServiceOptions
     public long MaxImagePixels { get; set; } = 100_000_000;
 
     /// <summary>
+    /// Rotate/flip images loaded from a file, stream, or byte buffer according to their EXIF
+    /// <c>Orientation</c> tag, so a portrait phone photo is OCR'd — and its boxes reported — the way image
+    /// viewers display it (Python's <c>cv2.imread</c> does the same). Default <c>true</c>. Already-decoded
+    /// <see cref="EasyImageSharp.Image{TPixel}"/> inputs are used as given.
+    /// </summary>
+    public bool ApplyExifOrientation { get; set; } = true;
+
+    /// <summary>
+    /// Composite images with an alpha channel (PNG, WebP, GIF, TIFF, …) onto an opaque background when they
+    /// are loaded from a file, stream, or byte buffer. Without it the alpha is simply dropped, and black
+    /// text on a transparent background turns into an all-black image. The background is white, or black
+    /// when the visible content is light (white text on transparency). Fully opaque images are unaffected.
+    /// Default <c>true</c>.
+    /// </summary>
+    public bool FlattenTransparency { get; set; } = true;
+
+    /// <summary>
     /// Convenience flag kept for ergonomics: when true (and <see cref="ExecutionProvider"/> has not been
     /// set to an explicit provider) the CUDA provider is forced. Prefer leaving
     /// <see cref="ExecutionProvider"/> at <see cref="OcrExecutionProvider.Auto"/>, which already enables a
@@ -39,6 +57,50 @@ public sealed class PaddleOcrServiceOptions
     public OcrExecutionProvider ExecutionProvider { get; set; } = OcrExecutionProvider.Auto;
 
     /// <summary>
+    /// Zero-based accelerator device index for the CUDA / DirectML execution providers — the equivalent of
+    /// Python's <c>device="gpu:1"</c>. Ignored on CPU. Default 0 (the first GPU).
+    /// </summary>
+    public int DeviceId { get; set; }
+
+    /// <summary>
+    /// Which PP-OCRv5 <b>detection</b> network to run. <see cref="OcrModelVariant.Server"/> selects
+    /// <c>PP-OCRv5_server_det</c>: noticeably better detection accuracy at the cost of a bigger download
+    /// and slower inference. Default <see cref="OcrModelVariant.Mobile"/>.
+    /// </summary>
+    public OcrModelVariant DetectionModel { get; set; } = OcrModelVariant.Mobile;
+
+    /// <summary>
+    /// Which PP-OCRv5 <b>recognition</b> network to run for the default Chinese/English/Japanese pack.
+    /// <see cref="OcrModelVariant.Server"/> selects <c>PP-OCRv5_server_rec</c>: better accuracy, bigger
+    /// download. The per-script language packs (latin, cyrillic, arabic, …) have no published server
+    /// variant and always stay on their mobile network (an informational log line notes this once).
+    /// Default <see cref="OcrModelVariant.Mobile"/>.
+    /// </summary>
+    public OcrModelVariant RecognitionModel { get; set; } = OcrModelVariant.Mobile;
+
+    /// <summary>
+    /// Path to a local detection ONNX file to load <b>instead of</b> the built-in registry models —
+    /// no download happens and no checksum is verified (the file is trusted as-is). Overrides
+    /// <see cref="DetectionModel"/>. Null (the default) uses the registry model.
+    /// </summary>
+    public string? DetectionModelPath { get; set; }
+
+    /// <summary>
+    /// Path to a local recognition ONNX file to load for the <b>default</b> (ch/en/ja) recognizer pack —
+    /// no download happens and no checksum is verified. Overrides <see cref="RecognitionModel"/> for that
+    /// pack; per-script packs are unaffected. Pair it with <see cref="RecognitionDictionaryPath"/> when the
+    /// model was trained on a custom character set. Null (the default) uses the registry model.
+    /// </summary>
+    public string? RecognitionModelPath { get; set; }
+
+    /// <summary>
+    /// Path to a local character dictionary (one token per line) matching
+    /// <see cref="RecognitionModelPath"/>. Null (the default) keeps the default pack's published
+    /// <c>ppocrv5_dict.txt</c>.
+    /// </summary>
+    public string? RecognitionDictionaryPath { get; set; }
+
+    /// <summary>
     /// ONNX Runtime intra-op thread count (parallelism inside a single model run). Null = runtime
     /// default. Set to a small number to cap CPU use in busy multi-tenant servers.
     /// </summary>
@@ -50,16 +112,42 @@ public sealed class PaddleOcrServiceOptions
     public int? InterOpNumThreads { get; set; }
 
     /// <summary>
+    /// Whether ONNX Runtime's intra-op worker threads busy-wait ("spin") between operators — the
+    /// <c>session.intra_op.allow_spinning</c> session setting. Spinning shaves latency off a single hot
+    /// model but burns CPU while idle, and because every model session owns its own pool, the idle pools
+    /// of the detector, classifier and recognizer compete with whichever one is running. Set false on busy
+    /// or shared hosts to reduce CPU use. Null (the default) keeps ONNX Runtime's behavior (spinning on).
+    /// </summary>
+    public bool? AllowIntraOpSpinning { get; set; }
+
+    /// <summary>
+    /// cuDNN convolution algorithm selection for the CUDA provider — ONNX Runtime's
+    /// <c>cudnn_conv_algo_search</c>. <see cref="CudnnConvolutionAlgorithmSearch.Heuristic"/> is usually
+    /// the better choice for OCR: recognizer batch widths vary with each batch's longest line and detector
+    /// inputs vary with page size, so the default exhaustive search re-benchmarks on nearly every new
+    /// shape. Ignored by other providers. Null (the default) keeps ONNX Runtime's default (exhaustive).
+    /// </summary>
+    public CudnnConvolutionAlgorithmSearch? CudnnConvAlgoSearch { get; set; }
+
+    /// <summary>
     /// How model files are downloaded and cached (retries, progress, offline, proxy, mirror).
     /// </summary>
     public ModelDownloadOptions Download { get; set; } = new();
 
     /// <summary>
     /// Run the text-line orientation classifier (180° flip detection) before recognition. PaddleOCR's
-    /// <c>use_textline_orientation</c>. Default false; the classifier model is then never loaded. Can also
-    /// be requested per call via <see cref="PaddleOcrNet.Models.RecognitionOptions.UseTextLineOrientation"/>.
+    /// <c>use_textline_orientation</c>. When left unset the classifier runs (the Python pipeline default).
+    /// Setting it — to <c>false</c> or <c>true</c> — makes that the default for every recognition call that
+    /// does not set <see cref="PaddleOcrNet.Models.RecognitionOptions.UseTextLineOrientation"/> explicitly;
+    /// a value set explicitly on a call's options always wins. Reads as false while unset.
     /// </summary>
-    public bool UseTextLineOrientation { get; set; }
+    public bool UseTextLineOrientation
+    {
+        get => _useTextLineOrientation ?? false;
+        set => _useTextLineOrientation = value;
+    }
+
+    private bool? _useTextLineOrientation;
 
     /// <summary>
     /// When <c>true</c>, a one-time startup <b>warning</b> is logged if a usable GPU is physically present
@@ -87,10 +175,18 @@ public sealed class PaddleOcrServiceOptions
         {
             ModelCachePath = string.IsNullOrWhiteSpace(ModelCachePath) ? null : Path.GetFullPath(ModelCachePath),
             ExecutionProvider = provider,
+            DeviceId = DeviceId,
+            DetectionModel = DetectionModel,
+            RecognitionModel = RecognitionModel,
+            DetectionModelPath = string.IsNullOrWhiteSpace(DetectionModelPath) ? null : Path.GetFullPath(DetectionModelPath),
+            RecognitionModelPath = string.IsNullOrWhiteSpace(RecognitionModelPath) ? null : Path.GetFullPath(RecognitionModelPath),
+            RecognitionDictionaryPath = string.IsNullOrWhiteSpace(RecognitionDictionaryPath) ? null : Path.GetFullPath(RecognitionDictionaryPath),
             IntraOpNumThreads = IntraOpNumThreads,
             InterOpNumThreads = InterOpNumThreads,
+            AllowIntraOpSpinning = AllowIntraOpSpinning,
+            CudnnConvAlgoSearch = CudnnConvAlgoSearch,
             Download = Download,
-            UseTextLineOrientation = UseTextLineOrientation,
+            UseTextLineOrientation = _useTextLineOrientation,
             LogGpuHint = LogGpuHint,
         };
     }

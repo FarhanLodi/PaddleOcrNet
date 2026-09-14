@@ -4,6 +4,423 @@ All notable changes to PaddleOcrNet are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-09-14
+
+A release for **applications**: new ways to get data out of a result, input handling that copes with
+real-world files (phone photos, transparent PNGs, multi-page TIFFs, faxes), batch processing for
+background workers, and up-to-date dependencies. OCR numerics on ordinary upright images are
+unchanged — every behaviour change below is listed with the switch that restores the old one.
+
+### Dependencies
+
+- **EasyImageSharp 1.1.0** (was 1.0.1): APNG, BigTIFF decoding, and a total-pixel budget across frames.
+- **ONNX Runtime 1.30.0** (was 1.27.0). The GPU build still links **CUDA 13 / cuDNN 9**, so the CUDA 12
+  guidance in the GPU package README is unchanged apart from the version numbers.
+- Microsoft.Extensions.* 10.0.12; test tooling Microsoft.NET.Test.Sdk 18.10.0, xunit.runner.visualstudio
+  4.0.0, Xunit.SkippableFact 1.5.85.
+
+### Added — extracting data from results (`PaddleOcrNet.Extraction`)
+
+- **Pattern extraction with page positions.** `OcrResult.FindMatches` finds values in a result and returns
+  the matched text, a normalized form, the line and an estimated box. Built-in `OcrPatterns` cover
+  e-mail, URL, phone, date, amount, IBAN (mod-97), payment card (Luhn) and percentage; validators tolerate
+  OCR look-alikes such as `O` for `0` but never alter the matched text.
+- **Quality helpers.** `GetQuality` reports mean, character-weighted and minimum confidence and
+  low-confidence counts; `GetLinesForReview` lists the lines a person should check.
+- **MRZ parsing.** `MrzParser` reads ICAO 9303 TD1/TD2/TD3 zones from passports and ID cards, corrects
+  common misreads by field position and verifies every check digit;
+  `MrzParser.RecommendedRecognitionOptions` restricts recognition to the MRZ alphabet.
+- **Layout-preserving text.** `ToLayoutText` renders a result like `pdftotext -layout` — columns stay
+  aligned, CJK characters take two columns, right-to-left lines stay right-aligned. Useful for receipts
+  and LLM prompts.
+- **Zone (template) OCR.** `RecognizeZonesAsync` reads named regions — in pixels or fractions of the page —
+  each detected normally or read as a single line with its own allowlist.
+- **Model pre-download.** `PaddleOcrModels.DownloadAsync` fills the model cache ahead of time for Docker
+  images and air-gapped deployments and returns a per-file cached/downloaded report
+  (`report.EnsureSuccess()` fails a build step).
+
+### Added — input and throughput
+
+- **Multi-page and animated images.** `ExtractTextFromImageFramesAsync` OCRs every page of a multi-page
+  TIFF and every frame of an animated GIF, WebP or APNG, yielding an `OcrFrameResult` per frame.
+- **Batch OCR.** `ExtractTextFromImagesAsync` processes many files with bounded concurrency
+  (`OcrBatchOptions`: `MaxConcurrency` — default 2, `ContinueOnError`, `Progress`, `PreserveOrder`) and
+  yields an `OcrBatchItem` per file. Keep `MaxConcurrency × IntraOpNumThreads` near your physical core
+  count.
+- **Fax pages.** `PreprocessingOptions.CorrectNonSquarePixels` (default **true**) resamples 204×98-DPI-style
+  pages to square pixels before OCR and maps boxes back to the original grid.
+- Tracing spans for `AnalyzeDocumentAsync`, frame runs and batch runs.
+
+### Added — PDF
+
+- **Embedded text layers.** `PdfOcrOptions.TextLayer` (`PdfTextLayerMode.Ignore` — default, `PreferEmbedded`,
+  `Auto`) reads born-digital pages from their text layer instead of OCR — milliseconds per page instead of
+  seconds, with exact text. A quality gate (≥ 20 characters, < 5 % replacement/control/private-use
+  characters, ≥ 60 % letters or digits) falls back to OCR for broken ToUnicode maps; `Auto` also OCRs
+  pages whose text lines cover under 1 % of the page (a scan with a stray header). Lines and words are
+  rebuilt from PDFium's character boxes in the same pixel space OCR reports. `PdfPageResult.Source` says
+  which path produced a page.
+- **Auto render DPI.** `PdfOcrOptions.Dpi = PdfOcrOptions.AutoDpi` (0) picks `clamp(4000 / longest side in
+  inches, 150, 400)` per page — Letter renders at 363 DPI, A4 at 342 — so small print is not starved and
+  nothing is rendered past the detector's 4000 px cap. `PdfPageResult.Dpi` reports it. The default stays
+  200.
+- **Word-accurate searchable PDFs.** The invisible text layer is placed word by word: each OCR word is its
+  own run scaled to its box, with spaces only where the recognized text has them (none between CJK
+  characters), falling back to one run per line when words are unavailable. Re-extracted with PDFium,
+  word alignment rose from a mean IoU of 0.51–0.67 to 0.98, with 100 % of characters inside their word's
+  box. `CreateSearchablePdfAsync` always requests word boxes — they don't change OCR results — so the
+  returned lines include `Words`.
+- **Streaming.** `ExtractTextFromPdfPagesAsync` yields pages as `IAsyncEnumerable<PdfPageResult>` as they
+  finish (breaking out stops rendering), and `ExtractTextFromPdfAsync` / `CreateSearchablePdfAsync` gained
+  `Stream` overloads — searchable PDFs can be written to non-seekable outputs.
+
+### Added — word-level boxes
+
+- **Real word boxes.** `RecognitionOptions.ReturnWordBoxes` fills the new `OcrLine.Words` (`OcrWord`: text,
+  mean character confidence, polygon, box), placed from the recognizer's CTC timesteps — Python PaddleOCR
+  3.x's `return_word_box`. Word boxes follow the line's slant, vertical text and 180° flips; Han/Kana
+  characters are one word each (widths as PaddleOCR's `cal_ocr_word_box`), Hangul splits at spaces, and
+  RTL words carry display-order text. Line text, confidence and boxes are identical with the option on or
+  off.
+- **hOCR, ALTO and TSV use the real word boxes and confidences** when present, falling back to the
+  proportional estimate otherwise.
+
+### Added — detection and runtime options
+
+All off by default — with them off, detection is exactly the 2.1.0 single pass. Measured on the bundled
+corpus plus half-scale, faded and 9600 px tall-receipt variants:
+
+- **`DetectionOptions.TileLargeImages`** detects very tall or wide pages in overlapping full-resolution
+  tiles instead of shrinking them to the 4000 px cap. On a 9600 px receipt it recovered 2 % more
+  characters; nothing else changed. Recommended for long receipts and large drawings.
+- **`DetectionOptions.MinTextHeight`** re-detects at a higher resolution when the typical line is shorter
+  than the given height (and retries an empty small page at 2×). At `16` it recovered a missed line on
+  half-resolution pages (confidence 0.849 → 0.883) and left full-resolution pages unchanged. Recommended
+  for screenshots, faxes and low-DPI photos.
+- **`DetectionOptions.EnhanceContrast`** runs detection on a background-normalized, contrast-stretched copy
+  while recognition still reads the original pixels. Faded scans improved (0.949 → 0.983) but some clean
+  pages lost slightly, so use it for faded or unevenly lit input only.
+- **`PaddleOcrServiceOptions.CudnnConvAlgoSearch`** (`Exhaustive` / `Heuristic` / `Default`) selects cuDNN's
+  convolution algorithm search on CUDA. `Heuristic` avoids re-benchmarking for every new recognizer batch
+  width.
+- **`PaddleOcrServiceOptions.AllowIntraOpSpinning`** controls ONNX Runtime's intra-op thread spinning —
+  turning it off can help busy servers that run other work between OCR calls.
+
+### Performance
+
+- **Recognition is ~43% faster on CPU with byte-identical output** (7-image golden set, warm: 34.5 s →
+  19.8 s). The CTC decode reads the model output in place instead of copying up to ~170 MB per batch
+  and uses a vectorized argmax; batch tensors are filled directly through a lookup table; the text-line
+  classifier runs six crops per model call instead of one; crops are rectified in parallel; and up to
+  two recognition batches — plus the 180° confirmation pass — run concurrently on the CPU provider
+  (DirectML and CUDA stay sequential; batch composition, and therefore numerics, is unchanged). The
+  LaTeX formula decoder no longer copies its logits on every step.
+- `RecognitionOptions.MaxDegreeOfParallelism` is now honoured — it was previously ignored. It caps the
+  recognition stage's threads (`1` = fully sequential) and never changes results.
+- **PDF pipeline.** Pages render one ahead on a single PDFium thread, convert straight from BGRA to RGB
+  (byte-identical to before), and are JPEG-encoded for searchable output concurrently with their OCR.
+  Searchable PDFs are streamed to the output page by page instead of holding every page image until the
+  end. OCR results are unchanged (identical output hash on an 8-page scan).
+- **Detection post-processing** fits each region from its per-row extreme pixels instead of every pixel,
+  scores boxes with a scanline instead of a point-in-polygon test per pixel, keeps connected-component
+  labels in flat arrays, binarizes with SIMD, and normalizes the detector input through lookup tables on
+  parallel rows. Results are bit-identical (verified against the old implementations on random masks and
+  on the golden set); dense high-resolution pages gain the most.
+- **Document analysis** recognizes formulas at the same time as the whole-page OCR pass instead of before
+  it (the OCR only needs the formula rectangles), which roughly halved a formula-heavy page, and
+  recognizes independent table and seal regions concurrently (bounded, sequential on DirectML). Layout,
+  table, seal and document-orientation models normalize their input through lookup tables. Output is
+  byte-identical.
+- **No idle page copies.** Document pre-processing no longer clones the full page when it is already
+  upright and unwarping is off, nor each upright table crop.
+- **`WarmUp` now runs each model once** (detector, classifier, recognizer) instead of only loading them, so
+  the first real request no longer pays kernel selection and memory-arena growth.
+
+### Fixed
+
+- **EXIF orientation is applied on load** (`PaddleOcrServiceOptions.ApplyExifOrientation`, default
+  **true**) — portrait phone photos were OCR'd sideways. This matches Python's `cv2.imread`.
+- **Transparent images no longer turn black.** PNG/WebP/GIF inputs with transparency are flattened onto
+  white, or onto black for light-on-transparent content (`FlattenTransparency`, default **true**).
+  Opaque images are byte-identical to before.
+- **Single-image calls decode only the first frame**, and `MaxImagePixels` now guards every frame.
+- **Reading order.** Boxes on one row are no longer split by band rounding, and pages skewed by 0.5° or
+  more read row by row. Unskewed pages keep Python's exact `sorted_boxes` order.
+- **`Preprocessing.Deskew`** now returns boxes on the original image instead of the rotated canvas, and
+  estimates skew with a Hough transform instead of 42 trial rotations.
+- `DetectRegionsAsync(string)` validates its argument, the file and disposal like the other entry points.
+- The health check reports the models the configured service actually loads (server/local detectors,
+  orientation classifiers) and can now report *Degraded* when the classifiers are not yet cached.
+- Diagnostics report the real library version instead of `1.0.0`.
+- Calling `AddPaddleOcrNet` twice no longer registers two services with separate options.
+- **Thread safety:** concurrent recognition calls with different `Allowlist` / `Blocklist` values could
+  decode with each other's filter on the shared recognizer. The filter is now passed per call.
+- `PaddleOcrServiceOptions.UseTextLineOrientation = false` had no effect, because the per-call option
+  (default `true`) was OR'd with it. The service value now applies to every call that doesn't set
+  `RecognitionOptions.UseTextLineOrientation` explicitly; an explicit per-call value still wins. (Record
+  equality now also reflects whether that option was set explicitly.)
+- **Searchable PDFs beyond Latin-1.** Every character above U+00FF became `?`, and Latin-1 bytes were
+  declared as WinAnsi (so €, curly quotes and dashes were wrong too). The invisible text layer now uses a
+  Type0/Identity-H glyphless font with a ToUnicode CMap and `Tz` width scaling — CJK, €, ₹ and emoji
+  copy and search correctly, and selections line up with the OCR boxes (verified by re-extracting the text
+  with PDFium).
+- **Searchable PDF text lost in PDFium/Chrome for one-character runs** (single-character lines, CJK
+  characters, one-letter words): the glyphless font's glyph had an empty bounding box, so those runs
+  measured zero wide and were dropped. The glyph now has a full-size box and still draws nothing;
+  extracted characters also report their real height.
+
+## [2.1.0] - 2026-09-03
+
+Two large pushes in one release: an **accuracy pass** that aligns the OCR pipeline with Python
+PaddleOCR 3.x stage by stage, and a **rebuild of the PP-StructureV3 document-analysis orchestration**
+around the same whole-page design the Python pipeline uses. Several defaults change as a result — every
+change is listed under *Changed defaults* below with the one-liner that restores the old behavior.
+
+### Accuracy — parity with Python PaddleOCR 3.x
+
+Each stage of the OCR pipeline was diffed against PaddleX / PaddleOCR 3.x and brought into line. The
+sum of these is a substantial accuracy improvement, most visibly on high-resolution scans, small text,
+vertical text, seals and non-Latin scripts:
+
+- **BGR tensor inputs.** The exported detection, recognition and UVDoc models consume **BGR** planes
+  (their `inference.yml` says `DecodeImage img_mode: BGR`); PaddleOcrNet was feeding RGB, so every model
+  saw its red and blue channels swapped. Detection, recognition, and UVDoc unwarp now build BGR tensors
+  (and flip UVDoc's BGR output back).
+- **Vertical text is rotated before recognition.** Tall crops (height/width ≥ 1.5) are rotated 90°
+  counter-clockwise so vertical lines reach the recognizer horizontally — PaddleOCR's
+  `get_rotate_crop_image` `np.rot90` rule, previously missing entirely.
+- **The text-line orientation classifier was preprocessing wrongly — and is now on by default, but
+  guarded.** Its input was resized with aspect preserved + zero padding and normalized to [−1, 1];
+  PaddleX stretch-resizes to exactly 160×80 (bilinear) and ImageNet-normalizes. Fixed, and
+  `RecognitionOptions.UseTextLineOrientation` now defaults to **true** (the Python pipeline default), so
+  upside-down lines are corrected out of the box.
+
+  Reaching preprocessing parity then exposed a problem in the upstream design, so PaddleOcrNet
+  deliberately goes further than PaddleX here. PaddleX 3.x acts on the classifier's plain `argmax` with
+  no confidence gate, and the classifier **misfires on upright text** — including confidently. Acting on
+  a wrong verdict feeds the recognizer an upside-down crop, replacing a clean line with transliterated
+  gibberish (`processing` comes back as `ussaooud`). Measured with the bundled corpus and the identical
+  ONNX weights driven by Python PaddleOCR, mean recognition confidence on an upright multi-column page
+  was **0.977 with the classifier off, 0.783 with it on** — 5 of 17 lines destroyed; a Devanagari page
+  fell from **0.970 to 0.827**, its body text reduced to noise. Two guards close this:
+  - `RecognitionOptions.TextLineOrientationThreshold` (default **0.9**, PaddleOCR 2.x's `cls_thresh`,
+    which 3.x dropped) ignores low-confidence verdicts.
+  - `RecognitionOptions.VerifyOrientationByRecognition` (default **true**) confirms each surviving
+    verdict by recognizing that crop in both orientations and keeping the more confident reading —
+    a genuinely inverted line reads far better rotated, a misfire reads far worse, so a wrong verdict
+    costs only the extra recognition of the flagged lines.
+
+  The same guard covers the page-level classifier: when `UseDocOrientation` uprights a page, every line
+  is confirmed the same way, because a wrong page verdict corrupts the whole document at once (observed:
+  an upright corpus page classified as 180°, mean confidence **0.461**; **0.945** with confirmation, against
+  Python's 0.941). Together these turn orientation handling from a coin-flip into a net win: on the two
+  pages above PaddleOcrNet now scores **0.978** and **0.968** — above the classifier-off baselines and
+  well above Python's classifier-on results. Set the threshold to 0 and the verification to false for
+  exact PaddleX 3.x behaviour.
+- **Detection runs at near-native resolution.** `DetectionOptions` defaults moved from
+  downscale-longest-side-to-960 to Python PaddleOCR 3.x's `OCR.yaml`: `limit_type=min` with
+  `LimitSideLen` 64 and a new `MaxSideLimit` cap of 4000 px. Large scans are no longer crushed to 960 px
+  before detection — the single biggest accuracy lever in this release for dense/high-res pages (and the
+  main throughput cost; see *Changed defaults*). Tiny inputs (w + h < 64) are zero-padded to ≥ 32×32 and
+  dimension rounding matches Python's `int()` truncation.
+- **Recognition batch width matches Python.** The batch tensor width is now
+  `imgW = int(H · max(320/H, widest crop's w/h))`, capped at 3200 px — i.e. a **320 px minimum width**
+  (PaddleOCR's `rec_image_shape` [3, 48, 320]) instead of padding to the batch's own widest crop. Narrow
+  crops no longer run through a much narrower tensor than the model was trained on.
+- **Resampler parity.** Rectification of rotated quads now uses OpenCV's `INTER_CUBIC` bicubic kernel
+  with `BORDER_REPLICATE` edge handling (was bilinear); the resizes that cv2 does with its default
+  `INTER_LINEAR` (detector input, classifier input, recognition crops) now use bilinear (some were
+  bicubic). Small tilts no longer take the axis-aligned fast path.
+- **8-connectivity in DB post-processing.** Connected-component labeling is now 8-connected, matching
+  `cv2.findContours` semantics — diagonally-touching strokes form one region instead of splitting.
+- **Post-detection NMS is off by default.** Python PaddleOCR has no NMS after DB post-processing
+  (nested/adjacent boxes may legitimately overlap); `DetectionOptions.NmsIouThreshold` now defaults to
+  disabled (was 0.6).
+- **`DropScore` defaults to 0.** Python's `drop_score` returns every reading; the previous 0.5 default
+  silently discarded low-confidence lines. Deliberate deviation kept: empty/whitespace-only readings are
+  still dropped.
+- **Seal detection and rectification rebuilt.** The seal detector now upscales the crop's short side to
+  736 px (`limit_type=min`, long side capped at 4000) as the PaddleX seal config does, post-processes in
+  **polygon mode** (a port of `polygons_from_bitmap` — curved lines keep their true N-point outline
+  instead of being flattened to a min-area quad), and rectifies each polygon with a port of
+  `get_poly_rect_crop`: near-rectangular outlines take the plain quad warp, genuinely curved arcs are
+  straightened piecewise into a strip. Together with the 2.0.4 plain-OCR fallback this makes seal text
+  recovery actually work on curved stamps.
+- **Document-orientation classifier preprocessing.** Now aspect-preserving resize (short side 256) +
+  center-crop 224, as PaddleX does — was a stretch straight to 224×224, which distorted non-square pages.
+- **UVDoc unwarp runs at page resolution.** The page is fed at its own resolution (stride-padded, then
+  cropped), as PaddleX does, instead of a fixed 488×712 round trip that blurred the dewarped page. The
+  working size is capped (memory) and only upscaled back when the cap applied.
+- **Arabic-script output is reordered for display.** Python applies `bidi.get_display` to the arabic
+  pack's output; PaddleOcrNet now applies an equivalent dependency-free reorder (RTL runs reversed,
+  Latin words and digit sequences kept intact, brackets mirrored), so Arabic/Persian/Urdu text is no
+  longer returned visually backwards.
+
+### PP-StructureV3 — document analysis rebuilt around whole-page OCR
+
+`AnalyzeDocumentAsync` now follows Python PP-StructureV3's `pipeline_v2.py` orchestration instead of
+cropping and OCR-ing each layout region independently ([#5](https://github.com/FarhanLodi/PaddleOcrNet/issues/5)
+reported structure text lagging plain OCR — this is the fix):
+
+- **One whole-page OCR pass + line-to-block matching.** The page is OCR'd once (det + cls + rec) and
+  each line is assigned to the layout block with the largest overlap ratio. Lines that straddle two or
+  more blocks with no dominant owner ("hurdle" lines) are cropped at the block borders and each fragment
+  **re-recognized**, so both blocks get their own share of the text. Text blocks that matched no lines
+  fall back to the old per-block crop OCR so faint regions still get a reading.
+- **Formulas are recognized first, masked out, and spliced back.** Formula regions are recognized before
+  the page OCR pass and their pixels whited out on a working copy (so the text recognizer never reads
+  half a formula); each inline formula is then spliced into its owning block — or table — as a
+  `$…$` span, matching Python's output shape.
+- **XY-Cut++ reading order by default.** A port of PP-StructureV3's `xycut_enhanced` orderer — recursive
+  XY-cuts plus label-aware rules (headers first, footers last, title/vision handling). Python never uses
+  the layout model's raw order column for final ordering, and `LayoutReadingOrder.Auto` now resolves to
+  `XyCutEnhanced` accordingly (`Model` and plain `XyCut` remain selectable).
+- **Per-class layout thresholds and merges, and NMS on by default.** New
+  `StructureOptions.LayoutClassThresholds` / `LayoutClassMergeModes` mirror PaddleX's dict-typed
+  `threshold` / `layout_merge_bboxes_mode`; left null, the PP-StructureV3.yaml per-class defaults apply
+  (`paragraph_title` 0.3, `text` 0.4, `formula` 0.3, `seal` 0.45; containment-merge `large` for
+  titles/images/formulas/charts). `LayoutNms` now defaults to **true** — the pipeline config ships
+  `layout_nms: True`. Label post-fixes (footnote relabel, lone-title promotion) run after filtering, as
+  in Python.
+- **Python-parity text assembly and Markdown.** Block text is assembled with PP-StructureV3's
+  line-joining rules (soft-hyphen collapse, CJK-aware joins), and `ToMarkdown` now takes a
+  `MarkdownRenderOptions`: page furniture (headers, footers, page numbers, footnotes, margin notes) is
+  **omitted by default** like Python's `markdown_ignore_labels`, consecutive text runs merge into
+  paragraphs via seg-start/seg-end geometry, numbered titles map to heading levels (`format_title`), and
+  `ConcatenateMarkdownPages` joins pages by paragraph-continuation flags (space, or nothing at a CJK
+  boundary) instead of a `---` horizontal rule.
+- **Table orientation classification.** `StructureOptions.UseTableOrientationClassification` (default
+  true, as in Python) detects sideways table crops with the doc-orientation classifier, uprights them,
+  and re-OCRs them locally so rotated tables recognize correctly.
+- **SLANeXt's wireless leg now runs SLANet_plus.** The v2 table router pairs `SLANeXt_wired` (512,
+  content-normalized) for bordered tables with `SLANet_plus` (488, canvas-normalized) for borderless
+  ones — the exact model pairing PP-StructureV3.yaml ships. This sidesteps the SLANeXt wireless
+  geometry problems recorded in 2.0.3/2.0.4 for borderless tables.
+- **`StructureBlock.CellBounds`** — recognized tables now expose their per-cell rectangles in page
+  coordinates, alongside the existing `TableHtml`.
+- **Empty-layout fallback**: when layout detection finds nothing, each OCR line becomes its own `text`
+  block instead of the document coming back empty.
+
+### Added
+
+- **Server detection and recognition models.** `PaddleOcrServiceOptions.DetectionModel` and
+  `RecognitionModel` take `OcrModelVariant.Mobile` (default, unchanged) or `Server`, selecting
+  `PP-OCRv5_server_det` / `PP-OCRv5_server_rec` — roughly 3–5× larger than the mobile networks and more
+  accurate. The two sides are independent, so the server detector can be used with mobile recognizers. The
+  server *recognizer* covers Chinese / English / Japanese only (it is built on `ppocrv5_dict.txt`); every
+  other language pack stays on its mobile recognizer regardless of the setting. Assets download, cache and
+  SHA-256 verify exactly like the mobile ones ([#6](https://github.com/FarhanLodi/PaddleOcrNet/issues/6)).
+- **Local model files.** `PaddleOcrServiceOptions.DetectionModelPath`, `RecognitionModelPath` and
+  `RecognitionDictionaryPath` load ONNX/dictionary files straight from disk **instead of** the registry —
+  no download is attempted and no checksum is verified (the file is trusted as-is). Pair with
+  `Download.Offline = true` to guarantee the process never touches the network
+  ([#4](https://github.com/FarhanLodi/PaddleOcrNet/issues/4)).
+- **`RecognitionOptions.CropPadding`.** A white border, in pixels, added around every rectified line crop
+  before recognition (default `0`, i.e. no change to existing behaviour). It helps when the detected box
+  hugs the glyphs and the recognizer clips the first or last character; 10–20 px is a sensible range. The
+  padding is applied before the text-line orientation classifier, so classification and recognition see the
+  same pixels, and reported coordinates still refer to the original image
+  ([#6](https://github.com/FarhanLodi/PaddleOcrNet/issues/6)).
+- **`PaddleOcrServiceOptions.DeviceId`** — zero-based accelerator index for the CUDA / DirectML
+  providers, the equivalent of Python's `device="gpu:1"`.
+- **~30 new languages.** Latin: Finnish, Basque, Galician, Luxembourgish, Romansh, Catalan, Quechua.
+  Cyrillic: Kazakh, Kyrgyz, Tajik, Macedonian, Tatar, Chuvash, Bashkir, Meadow Mari, Moldovan (Cyrillic),
+  Udmurt, Komi, Ossetian, Buryat, Kalmyk, Tuvan, Yakut, Karakalpak. Arabic script: Pashto, Sindhi,
+  Balochi. All are `OcrLanguage` enum members routed to their script's existing recognizer pack. Also:
+  a **dedicated English pack** (`en_PP-OCRv5_mobile_rec` on `ppocrv5_en_dict.txt`) now serves
+  `OcrLanguage.English`, matching Python's `lang="en"` routing, and plain `ru` / `uk` / `be` route to the
+  **East-Slavic** pack (see *Fixed*).
+- **`PaddleOcrService.GetRuntimeInfo()`** returns an `OcrRuntimeInfo` snapshot answering "why is my GPU
+  not used?" in one call: the loaded ONNX Runtime version, its available providers, the
+  requested → resolved → active provider journey, the host GPU probe, and an actionable hint.
+  `ToString()` renders it as a ready-to-log report. New `PaddleOcrService.ActiveExecutionProvider` and
+  `OcrResult.ExecutionProvider` report the provider inference is **actually** running on, and a provider
+  append failure is no longer invisible: when no `ILogger` is configured, the hint is written once per
+  process to stderr ([#6](https://github.com/FarhanLodi/PaddleOcrNet/issues/6)).
+- **`RecognitionOptions.BatchSize` is now honored per call** (previously the recognizer always used its
+  construction-time batch size); changing it never reloads the cached session. The phantom
+  per-box-parallel path that capped ONNX intra-op threads at 1 is gone, so recognition uses the runtime's
+  full intra-op parallelism.
+
+### Fixed
+
+- **`PaddleOcrNet.Gpu` never actually used the GPU.** Not on a misconfigured machine — on any machine.
+  `PaddleOcrNet` depends on `Microsoft.ML.OnnxRuntime` (CPU natives) and the GPU package adds
+  `Microsoft.ML.OnnxRuntime.Gpu`, so a consumer's graph contained both. The two ship the same native asset
+  path (`runtimes/win-x64/native/onnxruntime.dll`, `runtimes/linux-x64/native/libonnxruntime.so`) and NuGet
+  awards that one slot to a single package — the CPU one. The result was the 246 MB
+  `onnxruntime_providers_cuda.dll` deployed beside a core runtime with no CUDA support compiled in, which
+  will never load it. Measured on a plain console app referencing `PaddleOcrNet.Gpu` 2.0.4:
+  `OrtEnv.GetAvailableProviders()` returned `AzureExecutionProvider, CPUExecutionProvider` and the deployed
+  `onnxruntime.dll` was the CPU build (15,381,816 bytes, against the GPU build's 15,837,496). Because CUDA
+  was absent from the provider list, `Auto` resolved straight to CPU without ever *attempting* an append —
+  so there was no exception, no warning and no log line, which is exactly how it was reported
+  ([#6](https://github.com/FarhanLodi/PaddleOcrNet/issues/6)). The GPU package now ships a
+  `buildTransitive` targets file that copies the GPU build's core runtime over the CPU copy after build and
+  after publish, leaving `deps.json` and the NuGet item graph untouched. Verified across portable build,
+  incremental rebuild, portable publish and RID-specific publish: all four now report
+  `TensorrtExecutionProvider, CUDAExecutionProvider, CPUExecutionProvider`. A CPU-only consumer of plain
+  `PaddleOcrNet` is unaffected. Opt out with `<PaddleOcrNetGpuPreferGpuRuntime>false</PaddleOcrNetGpuPreferGpuRuntime>`
+  ([#6](https://github.com/FarhanLodi/PaddleOcrNet/issues/6)).
+- **`UseGpu` / `UsedGpu` reported the *requested* provider, not the one in use.** A CUDA attach failure
+  fell back to CPU while `PaddleOcrService.UseGpu` and `OcrResult.UsedGpu` kept saying `true`. Both now
+  reflect the **live** active provider at call time, `OcrResult.ExecutionProvider` records which provider
+  produced each result, and the OpenTelemetry activity tags carry the same truthful values
+  ([#6](https://github.com/FarhanLodi/PaddleOcrNet/issues/6)).
+- **Two GPU diagnostics pointed at the wrong culprit.** The CPU-fallback hint told anyone on an NVIDIA host
+  to "install the `PaddleOcrNet.Gpu` NuGet package" — including the people who already had, who were
+  precisely the ones hitting the conflict above. It now recognizes that state from the deployed files (the
+  CUDA provider library present while the loaded runtime denies having CUDA, a combination no missing
+  driver or CUDA-major mismatch can produce) and explains it instead. The check runs before, and
+  independently of, the hardware probe, so it also fires on Linux, where the probe is a no-op. Separately, a
+  provider that failed to *attach* also advised installing the package; when the loaded runtime does contain
+  the provider, the message now says so and points at the native dependencies (driver, CUDA runtime, cuDNN)
+  rather than the NuGet graph.
+- **The "Japanese" pack was not a PP-OCRv5 model.** The registered `japan_PP-OCRv5_mobile_rec.onnx` is
+  byte-identical to the **PP-OCRv3** japan model — upstream ships no Japanese PP-OCRv5 recognizer at all.
+  The mislabeled pack is dropped (the file stays hosted but unreferenced); `ja` / `japan` / `ja_full` now
+  route to the default PP-OCRv5 recognizer, whose `ppocrv5_dict.txt` covers Japanese — exactly where
+  Python sends `lang="japan"` (its server variant is the opt-in `RecognitionModel = Server`).
+- **`ru` / `uk` / `be` recognized with the wrong pack.** Python's `ESLAV_LANGS` take priority over the
+  generic Cyrillic group, so Russian, Ukrainian and Belarusian belong to the East-Slavic recognizer
+  (`ppocrv5_eslav_dict.txt`); PaddleOcrNet was routing them to the generic `cyrillic` pack. The plain
+  codes now resolve to the East-Slavic pack (the `*_eslav` aliases still work, and
+  `OcrLanguage.Cyrillic` still selects the generic pack explicitly). Part of why Russian text read
+  noticeably worse than it should have ([#5](https://github.com/FarhanLodi/PaddleOcrNet/issues/5)).
+- **The structure engine cached its pre-processor and seal recognizer against the wrong key.** The
+  document pre-processor was built once with whichever orientation/unwarp sessions the *first* call
+  needed, so a later call requesting a session the cached instance lacked silently ran without it; the
+  seal recognizer was similarly cached ignoring the language set. Both caches are now keyed on what the
+  cached instance actually holds and rebuild when a call needs more.
+- **`AnalyzeDocumentAsync` no longer builds a second OCR engine.** The structure engine now shares the
+  service's `PaddleOcrEngine` (and its det/cls/rec ONNX sessions) instead of constructing a duplicate —
+  half the sessions, half the memory, no double model load.
+- **`TextGrouping.Line` never merged anything.** The default grouping documented "adjacent boxes on the
+  same line are merged into one result" but every detected box came back as its own line. Boxes whose
+  vertical overlap is at least half the smaller box's height are now merged left-to-right with single
+  spaces, with the union box as geometry.
+
+### Changed defaults — how to restore 2.0.x behavior
+
+The parity work above changes several defaults. Each row shows the old behavior and the exact setting
+that restores it:
+
+| Changed default | Was → now | Restore the old behavior |
+| --- | --- | --- |
+| Detection resolution | downscale longest side to 960 → near-native (`limit_type=min`, 64, capped 4000). More accurate, but large images cost more time/memory. | `Detection = new DetectionOptions { LimitSideLen = 960, LimitTypeMax = true }` |
+| `RecognitionOptions.DropScore` | 0.5 → 0.0 (return everything, like Python) | `DropScore = 0.5` |
+| Text-line orientation | off → **on** per recognition call, gated at 0.9 confidence and confirmed by recognition | `UseTextLineOrientation = false` |
+| Orientation verdicts | acted on unconditionally → gated + confirmed (see above; PaddleX 3.x acts on raw argmax) | `TextLineOrientationThreshold = 0`, `VerifyOrientationByRecognition = false` |
+| Post-detection NMS | IoU 0.6 → disabled (like Python) | `Detection = new DetectionOptions { NmsIouThreshold = 0.6 }` |
+| `StructureOptions.LayoutNms` | false → **true** (`layout_nms: True` in PP-StructureV3.yaml) | `LayoutNms = false` |
+| Layout per-class thresholds/merges | none → PP-StructureV3.yaml defaults active | `LayoutClassThresholds = new Dictionary<string, float>()` and/or `LayoutClassMergeModes = new Dictionary<string, LayoutMergeMode>()` (empty = global threshold / no merging) |
+| `StructureOptions.ReadingOrder` `Auto` | model order, XY-cut fallback → XY-Cut++ | `ReadingOrder = LayoutReadingOrder.Model` |
+| Markdown block set | every block rendered → page furniture (headers/footers/page numbers/footnotes/margin notes) omitted | `doc.ToMarkdown(new MarkdownRenderOptions { IgnoredBlockTypes = Array.Empty<StructureBlockType>() })` |
+| Markdown page joins | `---` rule between pages → paragraph-continuation joins | `ConcatenateMarkdownPages(pages, new MarkdownRenderOptions { PageSeparator = StructureMarkdownExtensions.PageSeparator })` |
+| `en` recognizer | default ch/en/ja pack → dedicated English pack | pass `OcrLanguage.ChineseSimplified` (the `ch` pack still covers English) |
+| `ru`/`uk`/`be` recognizer | generic Cyrillic pack → East-Slavic pack | pass `OcrLanguage.Cyrillic` |
+| `UseGpu` semantics | "a GPU was selected" → "a GPU is actually in use right now" | none needed — the old value was simply wrong when attach failed |
+
 ## [2.0.4] - 2026-09-01
 
 ### Fixed

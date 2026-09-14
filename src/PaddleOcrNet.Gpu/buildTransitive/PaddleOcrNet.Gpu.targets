@@ -1,0 +1,69 @@
+<Project>
+
+  <!--
+    Makes the GPU build of ONNX Runtime the one that actually gets deployed.
+
+    PaddleOcrNet depends on Microsoft.ML.OnnxRuntime (the CPU native package) and this package adds
+    Microsoft.ML.OnnxRuntime.Gpu, so a consumer's graph contains both. Both ship the same asset path -
+    runtimes/win-x64/native/onnxruntime.dll (and runtimes/linux-x64/native/libonnxruntime.so) - and
+    NuGet awards that single slot to exactly one of them: the CPU package. The result is an output
+    folder holding the 246 MB onnxruntime_providers_cuda.dll next to a core runtime that has no CUDA
+    support compiled in and so never loads it. OrtEnv.GetAvailableProviders() then reports only
+    CPU/Azure, provider auto-detection resolves to CPU, and nothing throws or logs - the silent CPU
+    fallback reported in https://github.com/FarhanLodi/PaddleOcrNet/issues/6.
+
+    The GPU package's own core runtime is still on disk in the NuGet cache, right beside the CUDA
+    provider that did win a slot. After the build (and after publish) we copy it over the CPU copy at
+    the same path, so deps.json and the item graph stay exactly as NuGet computed them and only the
+    bytes at that path change. Set PaddleOcrNetGpuPreferGpuRuntime=false to opt out.
+  -->
+
+  <PropertyGroup>
+    <PaddleOcrNetGpuPreferGpuRuntime Condition="'$(PaddleOcrNetGpuPreferGpuRuntime)' == ''">true</PaddleOcrNetGpuPreferGpuRuntime>
+  </PropertyGroup>
+
+  <!--
+    Locates the GPU build's core runtime for every RID the GPU packages contributed to, by deriving it
+    from the CUDA provider asset that NuGet did resolve: onnxruntime_providers_cuda.dll sits next to
+    onnxruntime.dll, and libonnxruntime_providers_cuda.so next to libonnxruntime.so. DestinationSubDirectory
+    is carried across unchanged so the copy lands wherever that RID's natives land - runtimes/<rid>/native/
+    for a portable build, the output root for a RID-specific one.
+  -->
+  <Target Name="_PaddleOcrNetGpuCollectCoreRuntime">
+
+    <ItemGroup>
+      <_PaddleOcrNetGpuCudaProvider Include="@(RuntimeTargetsCopyLocalItems);@(NativeCopyLocalItems)"
+                                    Condition="$([System.String]::Copy('%(Filename)').EndsWith('_providers_cuda')) AND '%(Extension)' != '.lib'" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <_PaddleOcrNetGpuCoreRuntimeCandidate Include="%(_PaddleOcrNetGpuCudaProvider.RootDir)%(_PaddleOcrNetGpuCudaProvider.Directory)$([System.String]::Copy('%(_PaddleOcrNetGpuCudaProvider.Filename)').Replace('_providers_cuda', ''))%(_PaddleOcrNetGpuCudaProvider.Extension)">
+        <DestinationSubDirectory>%(_PaddleOcrNetGpuCudaProvider.DestinationSubDirectory)</DestinationSubDirectory>
+      </_PaddleOcrNetGpuCoreRuntimeCandidate>
+    </ItemGroup>
+
+    <ItemGroup>
+      <_PaddleOcrNetGpuCoreRuntime Include="@(_PaddleOcrNetGpuCoreRuntimeCandidate)" Condition="Exists('%(Identity)')" />
+    </ItemGroup>
+
+  </Target>
+
+  <Target Name="PaddleOcrNetGpuPreferGpuRuntimeInBuild"
+          AfterTargets="Build"
+          DependsOnTargets="_PaddleOcrNetGpuCollectCoreRuntime"
+          Condition="'$(PaddleOcrNetGpuPreferGpuRuntime)' == 'true'">
+    <Copy SourceFiles="@(_PaddleOcrNetGpuCoreRuntime)"
+          DestinationFiles="@(_PaddleOcrNetGpuCoreRuntime->'$(OutDir)%(DestinationSubDirectory)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="PaddleOcrNetGpuPreferGpuRuntimeInPublish"
+          AfterTargets="Publish"
+          DependsOnTargets="_PaddleOcrNetGpuCollectCoreRuntime"
+          Condition="'$(PaddleOcrNetGpuPreferGpuRuntime)' == 'true'">
+    <Copy SourceFiles="@(_PaddleOcrNetGpuCoreRuntime)"
+          DestinationFiles="@(_PaddleOcrNetGpuCoreRuntime->'$(PublishDir)%(DestinationSubDirectory)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>
