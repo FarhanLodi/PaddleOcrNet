@@ -4,7 +4,7 @@ All notable changes to PaddleOcrNet are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.2.0] - Unreleased
+## [2.2.0] - 2026-09-14
 
 A release for **applications**: new ways to get data out of a result, input handling that copes with
 real-world files (phone photos, transparent PNGs, multi-page TIFFs, faxes), batch processing for
