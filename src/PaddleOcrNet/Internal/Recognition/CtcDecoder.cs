@@ -68,6 +68,34 @@ internal static class CtcDecoder
     public static (string Text, float Confidence) GreedyDecode(
         ReadOnlySpan<float> logits, int timeSteps, int numClasses, IReadOnlyList<string> vocab,
         bool[]? selectable, List<CtcCharacter>? characters)
+        => GreedyDecode(logits, timeSteps, numClasses, vocab, selectable, characters, spaceClass: -1, spaceRecoveryThreshold: 0f);
+
+    /// <summary>
+    /// Greedily decodes a single sequence of logits, then — when <paramref name="spaceRecoveryThreshold"/> is
+    /// positive — inserts a space between two emitted characters whose separating blank timesteps gave the
+    /// space class at least that probability (see <see cref="Models.RecognitionOptions.SpaceRecoveryThreshold"/>).
+    /// <para>
+    /// Between two consecutive emitted characters every timestep's argmax is the blank, so a recovered space
+    /// only ever replaces a blank that narrowly beat the space: it is never inserted at either end of the
+    /// line, next to a space the model already emitted, inside a number (between two digits, or in
+    /// <c>3838.17</c>, <c>1,280</c>, <c>12:30</c>), inside or before a bracket where typography forbids one,
+    /// before trailing punctuation, around <c>@</c>, after an apostrophe or next to CJK/fullwidth
+    /// punctuation (see <see cref="MayInsertSpace"/>). The confidence is still the mean over the
+    /// argmax-emitted characters, so recovery changes the text and nothing else.
+    /// </para>
+    /// </summary>
+    /// <param name="logits">Row-major <c>[timeSteps, numClasses]</c> probabilities.</param>
+    /// <param name="timeSteps">Number of timesteps <c>T</c> in <paramref name="logits"/>.</param>
+    /// <param name="numClasses">Number of classes <c>C</c> per timestep.</param>
+    /// <param name="vocab">The ordered CTC label set (index 0 is the blank).</param>
+    /// <param name="selectable">Optional per-class allow mask; <c>null</c> disables filtering. A masked-out space class disables recovery.</param>
+    /// <param name="characters">Receives one <see cref="CtcCharacter"/> per emitted character (recovered spaces included), in emission order; <c>null</c> to skip.</param>
+    /// <param name="spaceClass">The vocab index of the space class (see <see cref="CharacterDictionary.FindSpaceClass"/>); negative disables recovery.</param>
+    /// <param name="spaceRecoveryThreshold">Minimum space probability in a gap to insert a space; ≤ 0 disables recovery.</param>
+    /// <returns>The decoded <c>Text</c> and its mean per-character <c>Confidence</c> (0–1).</returns>
+    public static (string Text, float Confidence) GreedyDecode(
+        ReadOnlySpan<float> logits, int timeSteps, int numClasses, IReadOnlyList<string> vocab,
+        bool[]? selectable, List<CtcCharacter>? characters, int spaceClass, float spaceRecoveryThreshold)
     {
         ArgumentNullException.ThrowIfNull(vocab);
 
@@ -77,6 +105,13 @@ internal static class CtcDecoder
             selectable = null;
         if (timeSteps <= 0 || numClasses <= 0)
             return (string.Empty, 0f);
+
+        bool recoverSpaces = spaceRecoveryThreshold > 0f
+            && spaceClass > 0 && spaceClass < numClasses && spaceClass < vocab.Count
+            && (selectable is null || selectable[spaceClass]);
+        // Recovery works on the emitted characters' timestep runs, so it needs them even when the caller doesn't.
+        List<CtcCharacter>? emitted = characters ?? (recoverSpaces ? new List<CtcCharacter>() : null);
+        int firstEmitted = emitted?.Count ?? 0;
 
         var sb = new StringBuilder(timeSteps);
         double confidenceSum = 0d;
@@ -109,8 +144,8 @@ internal static class CtcDecoder
             {
                 // CTC best-path collapse: a repeat of the previous class emits nothing, but it widens the
                 // character that run produced (when it produced one).
-                if (previousEmitted && characters is not null)
-                    characters[^1] = characters[^1] with { LastStep = t };
+                if (previousEmitted && emitted is not null)
+                    emitted[^1] = emitted[^1] with { LastStep = t };
             }
             else
             {
@@ -124,7 +159,7 @@ internal static class CtcDecoder
                     sb.Append(token);
                     confidenceSum += bestProb;
                     keptCount++;
-                    characters?.Add(new CtcCharacter(token, bestProb, t, t));
+                    emitted?.Add(new CtcCharacter(token, bestProb, t, t));
                     previousEmitted = true;
                 }
             }
@@ -134,7 +169,106 @@ internal static class CtcDecoder
 
         // An empty decode (all-blank sequence) has no characters to average; report confidence 0.
         float confidence = keptCount > 0 ? (float)(confidenceSum / keptCount) : 0f;
+
+        if (recoverSpaces && RecoverSpaces(logits, numClasses, emitted!, firstEmitted, spaceClass, vocab[spaceClass], spaceRecoveryThreshold))
+        {
+            sb.Clear();
+            for (int i = firstEmitted; i < emitted!.Count; i++) sb.Append(emitted[i].Token);
+        }
         return (sb.ToString(), confidence);
+    }
+
+    /// <summary>
+    /// Inserts a recovered space into <paramref name="emitted"/> (from <paramref name="first"/> on) wherever the
+    /// blank timesteps between two emitted characters reached <paramref name="threshold"/> on the space class,
+    /// subject to the guards listed on the public overload.
+    /// </summary>
+    /// <returns>True when at least one space was inserted.</returns>
+    private static bool RecoverSpaces(
+        ReadOnlySpan<float> logits, int numClasses, List<CtcCharacter> emitted, int first,
+        int spaceClass, string spaceToken, float threshold)
+    {
+        List<CtcCharacter>? result = null;
+        for (int i = first; i < emitted.Count; i++)
+        {
+            if (i > first)
+            {
+                CtcCharacter left = emitted[i - 1], right = emitted[i];
+                int gapStart = left.LastStep + 1, gapEnd = right.FirstStep; // gap is [gapStart, gapEnd)
+                if (gapEnd > gapStart && MayInsertSpace(emitted, first, i))
+                {
+                    int bestStep = gapStart;
+                    float best = logits[gapStart * numClasses + spaceClass];
+                    for (int t = gapStart + 1; t < gapEnd; t++)
+                    {
+                        float p = logits[t * numClasses + spaceClass];
+                        if (p > best)
+                        {
+                            best = p;
+                            bestStep = t;
+                        }
+                    }
+                    if (best >= threshold)
+                    {
+                        if (result is null)
+                        {
+                            result = new List<CtcCharacter>(emitted.Count - first + 4);
+                            for (int k = first; k < i; k++) result.Add(emitted[k]);
+                        }
+                        result.Add(new CtcCharacter(spaceToken, best, bestStep, bestStep));
+                    }
+                }
+            }
+            result?.Add(emitted[i]);
+        }
+
+        if (result is null) return false;
+        emitted.RemoveRange(first, emitted.Count - first);
+        emitted.AddRange(result);
+        return true;
+    }
+
+    /// <summary>
+    /// Whether a recovered space may go between <c>emitted[right − 1]</c> and <c>emitted[right]</c>. It may not
+    /// when either side is already whitespace; inside a number — between two digits (account numbers,
+    /// amounts and IDs in boxed or handwritten fields show wide digit gaps) or after a separator that follows
+    /// a digit (<c>3838.17</c>, <c>1,280</c>, <c>12:30</c> — a narrow separator leaves a space-like gap); just
+    /// inside a bracket, or between a CJK character and a bracket; before trailing punctuation
+    /// (<c>, . : ; ! ? %</c>), around <c>@</c> or after an apostrophe; or next to CJK/fullwidth punctuation,
+    /// which carries its own spacing.
+    /// </summary>
+    private static bool MayInsertSpace(List<CtcCharacter> emitted, int first, int right)
+    {
+        string before = emitted[right - 1].Token, after = emitted[right].Token;
+        if (string.IsNullOrWhiteSpace(before) || string.IsNullOrWhiteSpace(after)) return false;
+        if (IsCjkPunctuation(before) || IsCjkPunctuation(after)) return false;
+        if (before is "(" or "[" or "{" || after is ")" or "]" or "}") return false;
+        // No space before trailing punctuation, around '@' (e-mail addresses) or after an apostrophe
+        // ("it's", "d'un").
+        if (after is "," or "." or ":" or ";" or "!" or "?" or "%" or "@" || before is "@" or "'") return false;
+        // The model reads fullwidth brackets as ASCII ones, and their built-in spacing looks like a space:
+        // 中国（CHN） must not become 中国 (CHN).
+        if ((after is "(" or "[" or "{" && WordBoxBuilder.IsCjk(before))
+            || (before is ")" or "]" or "}" && WordBoxBuilder.IsCjk(after)))
+            return false;
+        if (IsDigit(after) && (IsDigit(before)
+                || (before is "." or "," or ":" && right - 2 >= first && IsDigit(emitted[right - 2].Token))))
+            return false;
+        return true;
+
+        static bool IsDigit(string token) => token.Length == 1 && char.IsAsciiDigit(token[0]);
+    }
+
+    /// <summary>
+    /// True for CJK symbols and punctuation (U+3000–U+303F) and the fullwidth/halfwidth punctuation and symbol
+    /// forms (U+FF01–U+FF65) — not fullwidth letters or digits.
+    /// </summary>
+    private static bool IsCjkPunctuation(string token)
+    {
+        if (token.Length != 1) return false;
+        char c = token[0];
+        return c is >= '　' and <= '〿'
+            || (c is >= '！' and <= '･' && !char.IsLetterOrDigit(c));
     }
 
     /// <summary>

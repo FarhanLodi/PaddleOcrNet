@@ -109,6 +109,78 @@ public class ServiceDeskewTests
     }
 
     [Fact]
+    public void Word_boxes_are_mapped_with_their_line()
+    {
+        // Issue #9: word boxes were left in canvas coordinates, offset right and down from the ink.
+        const float rotation = -1.2f;
+        const int sw = 2550, sh = 3300;
+        var (cw, ch) = (2620, 3354);
+        OcrPoint[] Quad(double x, double y, double w, double h) =>
+            new[] { new OcrPoint(x, y), new OcrPoint(x + w, y), new OcrPoint(x + w, y + h), new OcrPoint(x, y + h) };
+
+        var linePoly = Quad(400, 900, 600, 40);
+        var wordPoly = Quad(700, 900, 120, 40);
+        var line = new OcrLine
+        {
+            Text = "part 12345",
+            BoundingPolygon = linePoly,
+            BoundingBox = OcrBoundingBox.FromPoints(linePoly),
+            Words = new[] { new OcrWord { Text = "12345", BoundingPolygon = wordPoly, BoundingBox = OcrBoundingBox.FromPoints(wordPoly) } },
+        };
+
+        var mapped = ImagePreprocessor.MapFromRotatedCanvas(new[] { line }, rotation, cw, ch, sw, sh)[0];
+        var word = Assert.Single(mapped.Words);
+
+        for (int i = 0; i < 4; i++)
+        {
+            var expected = ImagePreprocessor.MapPointFromRotatedCanvas(wordPoly[i], rotation, cw, ch, sw, sh);
+            Assert.Equal(expected.X, word.BoundingPolygon[i].X, 6);
+            Assert.Equal(expected.Y, word.BoundingPolygon[i].Y, 6);
+        }
+        Assert.Equal(OcrBoundingBox.FromPoints(word.BoundingPolygon), word.BoundingBox);
+        Assert.InRange(word.BoundingBox.CenterX, mapped.BoundingBox.MinX, mapped.BoundingBox.MaxX);
+        Assert.InRange(word.BoundingBox.CenterY, mapped.BoundingBox.MinY, mapped.BoundingBox.MaxY);
+    }
+
+    [Theory]
+    [InlineData(2.5f)]
+    [InlineData(-0.4f)]
+    public void Point_mapping_to_and_from_the_canvas_round_trips(float rotation)
+    {
+        var p = new OcrPoint(123.4, 2890.1);
+        var there = ImagePreprocessor.MapPointToRotatedCanvas(p, rotation, 2700, 3400, 2550, 3300);
+        var back = ImagePreprocessor.MapPointFromRotatedCanvas(there, rotation, 2700, 3400, 2550, 3300);
+        Assert.Equal(p.X, back.X, 6);
+        Assert.Equal(p.Y, back.Y, 6);
+    }
+
+    [Fact]
+    public void Region_is_moved_onto_the_deskewed_canvas()
+    {
+        // The dark block sits inside the caller's region on the source image; on the canvas the mapped
+        // region must still contain it.
+        using var page = Page();
+        using var skewed = ImagePreprocessor.RotateWithWhiteBackground(page, 3f);
+        using var working = ImagePreprocessor.Apply(skewed, new PreprocessingOptions { Deskew = true }, out float rotation);
+        Assert.NotEqual(0f, rotation);
+
+        var region = OcrRegion.Pixels(0, 0, skewed.Width / 2.0, skewed.Height);
+        var onCanvas = ImagePreprocessor.MapRegionToRotatedCanvas(region, rotation, working.Width, working.Height, skewed.Width, skewed.Height);
+        var (x, y, w, h) = onCanvas.Resolve(working.Width, working.Height);
+        var ink = DarkCentroid(working);
+
+        Assert.False(onCanvas.Normalized);
+        Assert.InRange(ink.X, x, x + w);
+        Assert.InRange(ink.Y, y, y + h);
+        Assert.InRange(w, skewed.Width / 2, working.Width);
+
+        // Fractional regions resolve against the source, not the larger canvas.
+        var fraction = ImagePreprocessor.MapRegionToRotatedCanvas(
+            OcrRegion.Fraction(0, 0, 0.5, 1), rotation, working.Width, working.Height, skewed.Width, skewed.Height);
+        Assert.Equal(onCanvas, fraction);
+    }
+
+    [Fact]
     public void No_deskew_reports_no_rotation()
     {
         using var page = Page();

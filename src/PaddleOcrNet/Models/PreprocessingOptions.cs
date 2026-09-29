@@ -15,8 +15,8 @@ public sealed record PreprocessingOptions
 
     /// <summary>
     /// Estimate a small skew angle (Hough transform on background-normalized text baselines, within ±15°)
-    /// and straighten the page before detection. Boxes are mapped back onto the original, unrotated image.
-    /// Default false.
+    /// and straighten the page before detection. Line and word boxes are mapped back onto the original,
+    /// unrotated image; the rotation applied is reported as <see cref="OcrResult.DeskewAngle"/>. Default false.
     /// </summary>
     public bool Deskew { get; init; }
 

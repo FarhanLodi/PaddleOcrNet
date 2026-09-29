@@ -121,7 +121,7 @@ internal sealed class SvtrRecognizer : ITextRecognizer
     public IReadOnlyList<(string Text, float Confidence)> Recognize(IReadOnlyList<Image<Rgb24>> crops)
     {
         ArgumentNullException.ThrowIfNull(crops);
-        return ToTuples(RecognizeCore(crops, _batchSize, null, null, 1, 1, false));
+        return ToTuples(RecognizeCore(crops, _batchSize, null, null, 0, 1, 1, false));
     }
 
     /// <inheritdoc />
@@ -135,6 +135,7 @@ internal sealed class SvtrRecognizer : ITextRecognizer
             options.BatchSize > 0 ? options.BatchSize : _batchSize,
             options.Allowlist,
             options.Blocklist,
+            options.SpaceRecoveryThreshold,
             maxConcurrentBatches,
             BoundedParallel.ResolveDegree(options.MaxDegreeOfParallelism),
             includeCharacters);
@@ -145,6 +146,7 @@ internal sealed class SvtrRecognizer : ITextRecognizer
         int batchSize,
         IReadOnlyCollection<string>? allowlist,
         IReadOnlyCollection<string>? blocklist,
+        double spaceRecoveryThreshold,
         int maxConcurrentBatches,
         int maxDegreeOfParallelism,
         bool includeCharacters)
@@ -174,6 +176,8 @@ internal sealed class SvtrRecognizer : ITextRecognizer
         // The allow/block mask needs the vocab, which needs the model's class count from the first output.
         // The first batch therefore runs alone and fixes both for the rest of the call.
         bool[]? selectable = null;
+        int spaceClass = -1;
+        float spaceThreshold = spaceRecoveryThreshold > 0 ? (float)spaceRecoveryThreshold : 0f;
         RunBatch(0);
         if (batchCount > 1)
         {
@@ -223,6 +227,7 @@ internal sealed class SvtrRecognizer : ITextRecognizer
             if (batchIndex == 0)
             {
                 selectable = CharacterDictionary.BuildSelectableMask(vocab, allowlist, blocklist);
+                spaceClass = CharacterDictionary.FindSpaceClass(vocab);
             }
 
             // Decode straight from the output tensor's memory while the results are still alive (no copy).
@@ -235,14 +240,15 @@ internal sealed class SvtrRecognizer : ITextRecognizer
                 int source = order[start + b];
                 if (!includeCharacters)
                 {
-                    var (text, confidence) = CtcDecoder.GreedyDecode(rowLogits, timeSteps, numClasses, vocab, selectable);
+                    var (text, confidence) = CtcDecoder.GreedyDecode(
+                        rowLogits, timeSteps, numClasses, vocab, selectable, null, spaceClass, spaceThreshold);
                     results[source] = new RecognizedText(text, confidence);
                     continue;
                 }
 
                 var characters = new List<CtcCharacter>();
                 var (detailedText, detailedConfidence) = CtcDecoder.GreedyDecode(
-                    rowLogits, timeSteps, numClasses, vocab, selectable, characters);
+                    rowLogits, timeSteps, numClasses, vocab, selectable, characters, spaceClass, spaceThreshold);
                 results[source] = new RecognizedText(detailedText, detailedConfidence)
                 {
                     Characters = characters,
