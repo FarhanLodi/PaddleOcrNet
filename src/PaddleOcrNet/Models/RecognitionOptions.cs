@@ -130,6 +130,31 @@ public sealed record RecognitionOptions
     public bool ReturnWordBoxes { get; init; }
 
     /// <summary>
+    /// Recovers word spaces the recognizer only narrowly dropped. PP-OCRv5 often decides the space between
+    /// words — especially between Chinese and Latin/digits, as in <c>结算 Pay 21190</c> — by a few percent
+    /// against the CTC blank, so the space can come and go with tiny input changes (resampler, batch tensor
+    /// width). When greater than 0, a space is inserted between two recognized characters if the model gave
+    /// the space class at least this probability anywhere in the gap between them. Only spaces are ever
+    /// added, and line confidences are unchanged. A space is never added at either end of a line, next to an
+    /// existing space, inside a number (between digits, or in <c>3838.17</c>, <c>1,280</c>, <c>12:30</c>),
+    /// just inside a bracket or between a CJK character and a bracket, before <c>, . : ; ! ? %</c>, around
+    /// <c>@</c>, after an apostrophe, or next to CJK/fullwidth punctuation.
+    /// <para>
+    /// Default 0 (off): recognition matches Python PaddleOCR exactly. <see cref="RecommendedSpaceRecoveryThreshold"/>
+    /// (0.15) is the suggested value for mixed Chinese/Latin documents, tables and forms: on 1,100 labelled
+    /// synthetic lines it cut the spaces the model dropped from 208 to 34 (exact lines 902 → 1,042) and added
+    /// 2 spurious ones. On handwritten or badly degraded text it can also split misread words. Lower values
+    /// recover more spaces and add more spurious ones.
+    /// </para>
+    /// </summary>
+    public double SpaceRecoveryThreshold { get; init; }
+
+    /// <summary>
+    /// The suggested <see cref="SpaceRecoveryThreshold"/> for printed mixed Chinese/Latin text: 0.15.
+    /// </summary>
+    public const double RecommendedSpaceRecoveryThreshold = 0.15;
+
+    /// <summary>
     /// Second-chance recognition for weak lines. When greater than 0, every non-blank line whose confidence
     /// is below this threshold is re-read from two alternate crops — (a) its region grown along the line's own
     /// axes by 0.3× the line height past each end and 0.15× above and below, cut from the page, and (b) the

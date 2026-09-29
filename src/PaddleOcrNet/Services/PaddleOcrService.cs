@@ -499,7 +499,7 @@ public sealed class PaddleOcrService : IPaddleOcrService
                 }
             }
 
-            (IReadOnlyList<OcrLine> Lines, string[] Languages, IReadOnlyList<string> Detected, int Rotation) outcome;
+            (IReadOnlyList<OcrLine> Lines, string[] Languages, IReadOnlyList<string> Detected, int Rotation, float DeskewAngle) outcome;
 
             if (options.Preprocessing.DetectOrientation)
             {
@@ -514,7 +514,7 @@ public sealed class PaddleOcrService : IPaddleOcrService
                 ? outcome.Lines
                 : NonSquarePixels.MapToSource(outcome.Lines, (double)image.Width / squared.Width, (double)image.Height / squared.Height);
 
-            return BuildResult(lines, outcome.Languages, sw, activity, image.Width, image.Height, outcome.Detected, options.Grouping, outcome.Rotation);
+            return BuildResult(lines, outcome.Languages, sw, activity, image.Width, image.Height, outcome.Detected, options.Grouping, outcome.Rotation, outcome.DeskewAngle);
         }
         finally
         {
@@ -529,7 +529,7 @@ public sealed class PaddleOcrService : IPaddleOcrService
     /// sort keys off each line's forward-rotated (uprighted) box — otherwise a 180°-rotated page would
     /// come out with its text order reversed.
     /// </summary>
-    private OcrResult BuildResult(IReadOnlyList<OcrLine> lines, string[] languages, Stopwatch sw, Activity? activity, int sourceWidth = 0, int sourceHeight = 0, IReadOnlyList<string>? detectedLanguages = null, TextGrouping grouping = TextGrouping.Line, int appliedRotation = 0)
+    private OcrResult BuildResult(IReadOnlyList<OcrLine> lines, string[] languages, Stopwatch sw, Activity? activity, int sourceWidth = 0, int sourceHeight = 0, IReadOnlyList<string>? detectedLanguages = null, TextGrouping grouping = TextGrouping.Line, int appliedRotation = 0, float deskewAngle = 0f)
     {
         var ordered = SortLinesByReadingOrder(lines, appliedRotation, sourceWidth, sourceHeight);
         sw.Stop();
@@ -560,6 +560,7 @@ public sealed class PaddleOcrService : IPaddleOcrService
             // AppliedRotation is the corrective clockwise rotation; the page was DETECTED as rotated by
             // the inverse (e.g. correction 270 ⇒ the page sat 90° clockwise from upright).
             DetectedOrientation = (360 - (appliedRotation % 360 + 360) % 360) % 360,
+            DeskewAngle = deskewAngle,
             Duration = sw.Elapsed,
             UsedGpu = usedGpu,
             ExecutionProvider = activeProvider,
@@ -577,7 +578,7 @@ public sealed class PaddleOcrService : IPaddleOcrService
     /// Either way the returned quads are mapped back into the original image's orientation and the
     /// corrective rotation is reported so <see cref="OcrResult.DetectedOrientation"/> can be filled.
     /// </summary>
-    private async Task<(IReadOnlyList<OcrLine>, string[], IReadOnlyList<string>, int)> RecognizeBestOrientationAsync(
+    private async Task<(IReadOnlyList<OcrLine>, string[], IReadOnlyList<string>, int, float)> RecognizeBestOrientationAsync(
         Image<Rgb24> image, IEnumerable<string> languages, RecognitionOptions options, CancellationToken ct)
     {
         var langsList = languages.ToArray();
@@ -603,7 +604,7 @@ public sealed class PaddleOcrService : IPaddleOcrService
             UseDocUnwarp = false,
         };
 
-        (IReadOnlyList<OcrLine> Lines, string[] Langs, IReadOnlyList<string> Detected)? best = null;
+        (IReadOnlyList<OcrLine> Lines, string[] Langs, IReadOnlyList<string> Detected, float Deskew)? best = null;
         double bestScore = double.NegativeInfinity;
         int bestDegrees = 0;
 
@@ -613,13 +614,13 @@ public sealed class PaddleOcrService : IPaddleOcrService
             Image<Rgb24>? rotated = degrees == 0 ? null : ImagePreprocessor.RotateRightAngle(image, degrees);
             try
             {
-                var (lines, langs, detected, _) = await CoreAsync(rotated ?? image, langsList, noOrient, ct).ConfigureAwait(false);
+                var (lines, langs, detected, _, deskew) = await CoreAsync(rotated ?? image, langsList, noOrient, ct).ConfigureAwait(false);
                 double score = lines.Where(l => !string.IsNullOrWhiteSpace(l.Text)).Sum(l => l.Confidence * l.Text.Length);
                 _logger?.LogInformation("Orientation {Deg}° scored {Score:F1}", degrees, score);
                 if (score > bestScore)
                 {
                     bestScore = score;
-                    best = (lines, langs, detected);
+                    best = (lines, langs, detected, deskew);
                     bestDegrees = degrees;
                 }
             }
@@ -629,7 +630,7 @@ public sealed class PaddleOcrService : IPaddleOcrService
             }
         }
 
-        if (best is not { } winner) return (Array.Empty<OcrLine>(), langsList, Array.Empty<string>(), 0);
+        if (best is not { } winner) return (Array.Empty<OcrLine>(), langsList, Array.Empty<string>(), 0, 0f);
 
         // Map the winning rotation's quads back into the original image's frame (the winning pass ran on
         // the rotated copy, whose dimensions are swapped for 90/270).
@@ -640,14 +641,14 @@ public sealed class PaddleOcrService : IPaddleOcrService
             int rotatedHeight = bestDegrees is 90 or 270 ? image.Width : image.Height;
             mapped = Internal.Geometry.OrientationMapper.MapLinesToOriginalFrame(mapped, bestDegrees, rotatedWidth, rotatedHeight);
         }
-        return (mapped, winner.Langs, winner.Detected, bestDegrees);
+        return (mapped, winner.Langs, winner.Detected, bestDegrees, winner.Deskew);
     }
 
     /// <summary>
     /// Preprocess → resolve languages → region crop → recognize. The recognition itself is delegated to
     /// <see cref="PaddleOcrEngine.RecognizeAsync"/> (det → cls → rec), whose body the downstream agent fills.
     /// </summary>
-    private async Task<(IReadOnlyList<OcrLine> Lines, string[] Languages, IReadOnlyList<string> Detected, int Rotation)> CoreAsync(
+    private async Task<(IReadOnlyList<OcrLine> Lines, string[] Languages, IReadOnlyList<string> Detected, int Rotation, float DeskewAngle)> CoreAsync(
         Image<Rgb24> image, IEnumerable<string> languages, RecognitionOptions options, CancellationToken ct)
     {
         // Denoise / deskew / binarize into a working image (orientation handled by the caller).
@@ -656,6 +657,16 @@ public sealed class PaddleOcrService : IPaddleOcrService
         Image<Rgb24> working = needsPreprocess ? ImagePreprocessor.Apply(image, options.Preprocessing, out deskewRotation) : image;
         try
         {
+            // The caller's region is in the source image's frame; re-express it on the deskewed canvas.
+            if (deskewRotation != 0f && options.Region is { } region)
+            {
+                options = options with
+                {
+                    Region = ImagePreprocessor.MapRegionToRotatedCanvas(
+                        region, deskewRotation, working.Width, working.Height, image.Width, image.Height),
+                };
+            }
+
             // "auto" is a detection trigger, not a recognizer language; allow it to be the only code (it is
             // dropped by the engine's candidate resolution) so callers can pass languages: ["auto"].
             var langs = ResolveLanguages(languages, allowEmpty: IsAutoRequested(languages, options));
@@ -667,7 +678,7 @@ public sealed class PaddleOcrService : IPaddleOcrService
                 lines = ImagePreprocessor.MapFromRotatedCanvas(
                     lines, deskewRotation, working.Width, working.Height, image.Width, image.Height);
             }
-            return (lines, langs, detected, rotation);
+            return (lines, langs, detected, rotation, deskewRotation);
         }
         finally
         {

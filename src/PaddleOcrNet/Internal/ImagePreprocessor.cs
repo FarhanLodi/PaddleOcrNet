@@ -119,23 +119,59 @@ internal static class ImagePreprocessor
     }
 
     /// <summary>
-    /// Maps recognized lines from the deskewed canvas back onto the original (unrotated) source image.
+    /// The inverse of <see cref="MapPointFromRotatedCanvas"/>: maps a point of the source image onto the canvas
+    /// produced by <see cref="RotateWithWhiteBackground"/>, <c>p_canvas = R(−θ)·(p − c_src) + c_canvas</c>.
+    /// </summary>
+    internal static OcrPoint MapPointToRotatedCanvas(
+        OcrPoint p, float rotationDegrees, int canvasWidth, int canvasHeight, int sourceWidth, int sourceHeight)
+    {
+        double rad = rotationDegrees * Math.PI / 180.0;
+        double cos = Math.Cos(rad), sin = Math.Sin(rad);
+        double tx = p.X - (sourceWidth / 2.0);
+        double ty = p.Y - (sourceHeight / 2.0);
+        return new OcrPoint(
+            (cos * tx) - (sin * ty) + (canvasWidth / 2.0),
+            (sin * tx) + (cos * ty) + (canvasHeight / 2.0));
+    }
+
+    /// <summary>
+    /// Re-expresses a caller's <see cref="OcrRegion"/> (given against the source image) on the deskewed canvas:
+    /// the axis-aligned bounds of the region's rotated corners, in canvas pixels. The rotated rectangle is
+    /// slightly larger than the original, so text just outside a corner of the region can be read too.
+    /// </summary>
+    internal static OcrRegion MapRegionToRotatedCanvas(
+        OcrRegion region, float rotationDegrees, int canvasWidth, int canvasHeight, int sourceWidth, int sourceHeight)
+    {
+        if (rotationDegrees == 0f) return region;
+
+        var (x, y, w, h) = region.Resolve(sourceWidth, sourceHeight);
+        var box = OcrBoundingBox.FromPoints(new[]
+        {
+            new OcrPoint(x, y), new OcrPoint(x + w, y), new OcrPoint(x + w, y + h), new OcrPoint(x, y + h),
+        }.Select(p => MapPointToRotatedCanvas(p, rotationDegrees, canvasWidth, canvasHeight, sourceWidth, sourceHeight)));
+        return OcrRegion.Pixels(box.MinX, box.MinY, box.MaxX - box.MinX, box.MaxY - box.MinY);
+    }
+
+    /// <summary>
+    /// Maps recognized lines — and their word boxes — from the deskewed canvas back onto the original
+    /// (unrotated) source image.
     /// </summary>
     internal static IReadOnlyList<OcrLine> MapFromRotatedCanvas(
         IReadOnlyList<OcrLine> lines, float rotationDegrees, int canvasWidth, int canvasHeight, int sourceWidth, int sourceHeight)
     {
         if (rotationDegrees == 0f || lines.Count == 0) return lines;
 
+        OcrPoint Map(OcrPoint p) => MapPointFromRotatedCanvas(p, rotationDegrees, canvasWidth, canvasHeight, sourceWidth, sourceHeight);
+
         var mapped = new List<OcrLine>(lines.Count);
         foreach (var line in lines)
         {
-            var poly = TextSkew.CornersOf(line)
-                .Select(p => MapPointFromRotatedCanvas(p, rotationDegrees, canvasWidth, canvasHeight, sourceWidth, sourceHeight))
-                .ToArray();
+            var poly = TextSkew.CornersOf(line).Select(Map).ToArray();
             mapped.Add(line with
             {
                 BoundingPolygon = poly,
                 BoundingBox = OcrBoundingBox.FromPoints(poly),
+                Words = Recognition.WordBoxBuilder.Transform(line.Words, Map),
             });
         }
         return mapped;

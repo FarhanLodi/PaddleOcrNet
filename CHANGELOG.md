@@ -4,6 +4,40 @@ All notable changes to PaddleOcrNet are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.1] - 2026-09-29
+
+A patch release for `Preprocessing.Deskew`, plus an opt-in fix for word spaces PP-OCRv5 drops between
+Chinese and Latin text. With `SpaceRecoveryThreshold` left at its default (off), pages that deskew leaves
+unrotated and all calls without deskew are unchanged.
+
+### Fixed
+
+- **`Preprocessing.Deskew` word boxes** ([#9](https://github.com/FarhanLodi/PaddleOcrNet/issues/9)). On pages deskew
+  rotated, `OcrLine.Words` (from `ReturnWordBoxes`) was left in the coordinates of the enlarged rotation canvas.
+  Words came back right of and below their ink, about 15 px on a 1.5° skew of a 1000 px page and more on
+  larger scans. Searchable-PDF text placed from those boxes landed beside the words. Line boxes were already
+  correct; word boxes are now mapped back the same way.
+- **`Region` with `Preprocessing.Deskew`**: the region was applied to the rotated, enlarged canvas as if it
+  were the original image. It is now moved onto the canvas first.
+
+### Added
+
+- **`OcrResult.DeskewAngle`**: the clockwise rotation (degrees) deskew applied, 0 when it did not rotate the
+  page. Returned coordinates are still on the original image.
+- **`RecognitionOptions.SpaceRecoveryThreshold`** ([#8](https://github.com/FarhanLodi/PaddleOcrNet/issues/8)): puts
+  back word spaces the recognizer only narrowly dropped. PP-OCRv5 often decides the space between Chinese and
+  Latin text by a few percent against the CTC blank, so small preprocessing changes flip it. The 2.1.0
+  switch to Python's bilinear resize and 320 px minimum batch width turned `结算 Pay 21190` into
+  `结算Pay 21190`, the same text Python PaddleOCR 3.x returns for that crop. Restoring the 2.0.4
+  preprocessing is not a fix: on 1,100 labelled synthetic lines it dropped more spaces than the current
+  pipeline (150 vs 136 on the first 600). With the option set to `RecommendedSpaceRecoveryThreshold` (0.15),
+  a space is inserted where the model gave the space class at least that probability between two characters.
+  It is never inserted at line ends, inside numbers, inside brackets, before `, . : ; ! ? %`, around `@` or
+  next to CJK punctuation. On the same lines, dropped spaces fell from 208 to 34 (exact lines 902 → 1,042)
+  and 2 spurious spaces appeared. The crop from the issue now reads `结算 Pay 21190` at every batch width.
+  Line confidences are unchanged. The default is 0 (off), so output still matches Python exactly. On handwritten or
+  badly degraded pages it can also split misread words, so enable it for printed documents, tables and forms.
+
 ## [2.2.0] - 2026-09-14
 
 A release for **applications**: new ways to get data out of a result, input handling that copes with
