@@ -1034,7 +1034,7 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
         {
             if (_detector is not null) return _detector;
             var path = await ResolveDetectorModelPathAsync(cancellationToken).ConfigureAwait(false);
-            _detector = CreateSessionBacked(so => (IPaddleDetector)new DbTextDetector(new InferenceSession(path, so)));
+            _detector = CreateSessionBacked(so => (IPaddleDetector)new DbTextDetector(OpenOcrSession(TensorRtModel.Detector, path, so)));
             Diagnostics.PaddleOcrDiagnostics.ModelLoads.Add(1, new KeyValuePair<string, object?>("model", "det"));
             _logger?.LogInformation("DB detector loaded from {Path}", path);
             return _detector;
@@ -1055,7 +1055,7 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
             if (_classifier is not null) return _classifier;
             var path = await ModelDownloadManager.EnsureModelAsync(
                 PaddleModelRegistry.Classifier, _options.ModelCachePath, _options.Download, _logger, cancellationToken).ConfigureAwait(false);
-            _classifier = CreateSessionBacked(so => (IAngleClassifier)new TextLineClassifier(new InferenceSession(path, so)));
+            _classifier = CreateSessionBacked(so => (IAngleClassifier)new TextLineClassifier(OpenOcrSession(TensorRtModel.Classifier, path, so)));
             Diagnostics.PaddleOcrDiagnostics.ModelLoads.Add(1, new KeyValuePair<string, object?>("model", "cls"));
             _logger?.LogInformation("Text-line orientation classifier loaded from {Path}", path);
             return _classifier;
@@ -1291,7 +1291,7 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
         var dictLines = CharacterDictionary.LoadLines(dictPath);
         Diagnostics.PaddleOcrDiagnostics.ModelLoads.Add(1, new KeyValuePair<string, object?>("model", pack.Name));
         _logger?.LogInformation("Recognizer '{Name}' loaded from {Path} ({Count} dict lines)", pack.Name, modelPath, dictLines.Count);
-        return CreateSessionBacked(so => (ITextRecognizer)new SvtrRecognizer(new InferenceSession(modelPath, so), dictLines));
+        return CreateSessionBacked(so => (ITextRecognizer)new SvtrRecognizer(OpenOcrSession(TensorRtModel.Recognizer, modelPath, so), dictLines));
     }
 
     /// <summary>
@@ -1314,6 +1314,28 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
         catch (Exception ex)
         {
             return factory(DowngradeToCpu(ex));
+        }
+    }
+
+    /// <summary>
+    /// Opens one of the three OCR models. On <see cref="OcrExecutionProvider.TensorRt"/> it gets a TensorRT
+    /// engine of its own (see <see cref="TensorRtSessions"/>); a model whose engine cannot be built runs on
+    /// the shared CUDA options instead, with a warning, so one model TensorRT rejects does not take the
+    /// others off it, or the engine off the GPU.
+    /// </summary>
+    private InferenceSession OpenOcrSession(TensorRtModel model, string path, SessionOptions shared)
+    {
+        if (_activeProvider != OcrExecutionProvider.TensorRt)
+            return new InferenceSession(path, shared);
+
+        try
+        {
+            return TensorRtSessions.Open(model, path, _options, _logger);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "TensorRT could not build an engine for the {Model}; it runs on CUDA instead.", model);
+            return new InferenceSession(path, shared);
         }
     }
 
