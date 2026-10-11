@@ -125,6 +125,26 @@ public class TensorRtTests
     }
 
     [Fact]
+    public void All_three_models_are_selected_by_default()
+    {
+        var options = new TensorRtOptions();
+
+        Assert.True(TensorRtSessions.IsSelected(TensorRtModel.Detector, options));
+        Assert.True(TensorRtSessions.IsSelected(TensorRtModel.Classifier, options));
+        Assert.True(TensorRtSessions.IsSelected(TensorRtModel.Recognizer, options));
+    }
+
+    [Fact]
+    public void A_model_left_out_is_not_selected()
+    {
+        var options = new TensorRtOptions { Models = TensorRtModels.Classifier | TensorRtModels.Recognizer };
+
+        Assert.False(TensorRtSessions.IsSelected(TensorRtModel.Detector, options));
+        Assert.True(TensorRtSessions.IsSelected(TensorRtModel.Classifier, options));
+        Assert.True(TensorRtSessions.IsSelected(TensorRtModel.Recognizer, options));
+    }
+
+    [Fact]
     public void Auto_never_resolves_to_TensorRt()
     {
         // TensorRT reads a few low-confidence lines differently from CUDA, so it is opt-in only.

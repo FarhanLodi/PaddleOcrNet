@@ -1321,11 +1321,12 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
     /// Opens one of the three OCR models. On <see cref="OcrExecutionProvider.TensorRt"/> it gets a TensorRT
     /// engine of its own (see <see cref="TensorRtSessions"/>); a model whose engine cannot be built runs on
     /// the shared CUDA options instead, with a warning, so one model TensorRT rejects does not take the
-    /// others off it, or the engine off the GPU.
+    /// others off it, or the engine off the GPU. A model left out of <see cref="TensorRtOptions.Models"/>
+    /// runs on CUDA too.
     /// </summary>
     private InferenceSession OpenOcrSession(TensorRtModel model, string path, SessionOptions shared)
     {
-        if (_activeProvider != OcrExecutionProvider.TensorRt)
+        if (_activeProvider != OcrExecutionProvider.TensorRt || !TensorRtSessions.IsSelected(model, _options.TensorRt))
             return new InferenceSession(path, shared);
 
         try

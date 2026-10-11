@@ -40,4 +40,32 @@ public sealed class TensorRtOptions
     /// cap.
     /// </summary>
     public int MaxDetectionSide { get; set; } = 4000;
+
+    /// <summary>
+    /// Which of the three OCR models run on TensorRT; the rest run on CUDA. Default
+    /// <see cref="TensorRtModels.All"/>. Each model on TensorRT reads a little differently from CUDA, and
+    /// the detector most of all, since a slightly different box is a differently cropped line; leaving it
+    /// on CUDA keeps more of CUDA's output for less of the speed.
+    /// </summary>
+    public TensorRtModels Models { get; set; } = TensorRtModels.All;
+}
+
+/// <summary>The OCR models <see cref="OcrExecutionProvider.TensorRt"/> can build engines for.</summary>
+[Flags]
+public enum TensorRtModels
+{
+    /// <summary>None: everything runs on CUDA.</summary>
+    None = 0,
+
+    /// <summary>The text detector.</summary>
+    Detector = 1,
+
+    /// <summary>The text-line orientation classifier.</summary>
+    Classifier = 2,
+
+    /// <summary>The recognizer.</summary>
+    Recognizer = 4,
+
+    /// <summary>All three. The default.</summary>
+    All = Detector | Classifier | Recognizer,
 }

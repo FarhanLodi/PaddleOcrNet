@@ -22,7 +22,10 @@ selects it, and every other provider behaves as before.
   A model whose engine cannot be built runs on CUDA on its own, without taking the others off TensorRT.
 - **`PaddleOcrServiceOptions.TensorRt`** (`TensorRtOptions`): `EngineCachePath` (default a `tensorrt` folder in
   the model cache), `Fp16` (default off), and the shape limits the engines are built for,
-  `MaxRecognitionBatchSize` (default 16) and `MaxDetectionSide` (default 4000, the detector's own default cap).
+  `MaxRecognitionBatchSize` (default 16) and `MaxDetectionSide` (default 4000, the detector's own default cap),
+  and `Models` (`TensorRtModels`, default all three): which of the detector, classifier and recognizer use
+  TensorRT. The detector's output moves furthest from CUDA's, so leaving it on CUDA keeps more of CUDA's
+  readings for less of the speed.
 
 ## [2.2.1] - 2026-09-29
 

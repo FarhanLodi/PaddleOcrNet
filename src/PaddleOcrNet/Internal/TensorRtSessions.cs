@@ -93,6 +93,14 @@ internal static class TensorRtSessions
         }
     }
 
+    /// <summary>Whether <paramref name="model"/> is one of <see cref="TensorRtOptions.Models"/>.</summary>
+    internal static bool IsSelected(TensorRtModel model, TensorRtOptions options) => model switch
+    {
+        TensorRtModel.Detector => options.Models.HasFlag(TensorRtModels.Detector),
+        TensorRtModel.Classifier => options.Models.HasFlag(TensorRtModels.Classifier),
+        _ => options.Models.HasFlag(TensorRtModels.Recognizer),
+    };
+
     /// <summary>
     /// Where engines and the timing cache are kept: <see cref="TensorRtOptions.EngineCachePath"/>, or a
     /// <c>tensorrt</c> folder in the model cache.
