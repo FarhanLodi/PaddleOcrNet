@@ -135,6 +135,12 @@ public sealed class PaddleOcrServiceOptions
     public ModelDownloadOptions Download { get; set; } = new();
 
     /// <summary>
+    /// Engine cache, precision and shape ranges for <see cref="OcrExecutionProvider.TensorRt"/>. Ignored by
+    /// every other provider.
+    /// </summary>
+    public TensorRtOptions TensorRt { get; set; } = new();
+
+    /// <summary>
     /// Run the text-line orientation classifier (180° flip detection) before recognition. PaddleOCR's
     /// <c>use_textline_orientation</c>. When left unset the classifier runs (the Python pipeline default).
     /// Setting it — to <c>false</c> or <c>true</c> — makes that the default for every recognition call that
@@ -186,6 +192,7 @@ public sealed class PaddleOcrServiceOptions
             AllowIntraOpSpinning = AllowIntraOpSpinning,
             CudnnConvAlgoSearch = CudnnConvAlgoSearch,
             Download = Download,
+            TensorRt = TensorRt ?? new TensorRtOptions(),
             UseTextLineOrientation = _useTextLineOrientation,
             LogGpuHint = LogGpuHint,
         };

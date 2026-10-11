@@ -43,19 +43,24 @@ internal sealed class SvtrRecognizer : ITextRecognizer
     /// <summary>
     /// PaddleOCR's default recognition batch size (<c>rec_batch_num</c>).
     /// </summary>
-    private const int DefaultBatchSize = 6;
+    internal const int DefaultBatchSize = 6;
 
     /// <summary>
     /// Minimum batch tensor width in pixels. PaddleOCR's <c>rec_image_shape</c> is [3, 48, 320]:
     /// <c>max_wh_ratio</c> starts at 320/H, so every batch tensor is at least 320 px wide.
     /// </summary>
-    private const int MinTensorWidth = 320;
+    internal const int MinTensorWidth = 320;
 
     /// <summary>
     /// Maximum batch tensor width in pixels (PaddleOCR's <c>max_imgW</c>). Wider crops are
     /// aspect-squeezed down to this width rather than growing the tensor.
     /// </summary>
-    private const int MaxTensorWidth = 3200;
+    internal const int MaxTensorWidth = 3200;
+
+    /// <summary>
+    /// PaddleOCR's <c>rec_image_shape</c> height, which every recognizer pack is exported for.
+    /// </summary>
+    internal const int DefaultImageHeight = 48;
 
     /// <summary>
     /// <c>(x/255 − 0.5)/0.5</c> for every byte value, computed with exactly the per-pixel expression
@@ -85,11 +90,11 @@ internal sealed class SvtrRecognizer : ITextRecognizer
     /// </param>
     /// <param name="imageHeight">Fixed recognition input height in pixels (PaddleOCR's <c>rec_image_shape</c> H). Default 48.</param>
     /// <param name="batchSize">Crops per ONNX run (PaddleOCR's <c>rec_batch_num</c>). Default 6.</param>
-    public SvtrRecognizer(InferenceSession session, IReadOnlyList<string> dictLines, int imageHeight = 48, int batchSize = DefaultBatchSize)
+    public SvtrRecognizer(InferenceSession session, IReadOnlyList<string> dictLines, int imageHeight = DefaultImageHeight, int batchSize = DefaultBatchSize)
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
         _dictLines = dictLines ?? throw new ArgumentNullException(nameof(dictLines));
-        _imageHeight = imageHeight > 0 ? imageHeight : 48;
+        _imageHeight = imageHeight > 0 ? imageHeight : DefaultImageHeight;
         _batchSize = batchSize > 0 ? batchSize : DefaultBatchSize;
 
         // The recognition graph has a single input; resolve its name once.

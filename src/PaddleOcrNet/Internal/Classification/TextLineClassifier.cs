@@ -32,14 +32,14 @@ internal sealed class TextLineClassifier : IAngleClassifier
 {
     // The cls graph (PP-LCNet_x1_0_textline_ori) has a fixed spatial input of 80×160; only the batch
     // dimension is dynamic. Feeding any other H×W fails ONNX Runtime's shape check.
-    private const int TargetHeight = 80;
-    private const int TargetWidth = 160;
+    internal const int TargetHeight = 80;
+    internal const int TargetWidth = 160;
     private const int RotatedLabel = 1; // output index for the 180° class
 
     /// <summary>
     /// Crops per ONNX run when classifying many crops.
     /// </summary>
-    private const int BatchSize = 6;
+    internal const int BatchSize = 6;
 
     private const int ImageStride = 3 * TargetHeight * TargetWidth;
 
