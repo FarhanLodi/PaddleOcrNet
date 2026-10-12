@@ -4,6 +4,29 @@ All notable changes to PaddleOcrNet are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+An opt-in TensorRT execution provider for NVIDIA GPUs. Nothing changes unless it is asked for: `Auto` never
+selects it, and every other provider behaves as before.
+
+### Added
+
+- **`OcrExecutionProvider.TensorRt`** ([#11](https://github.com/FarhanLodi/PaddleOcrNet/issues/11)): runs the
+  text detector, line classifier and recognizer through ONNX Runtime's TensorRT provider, with CUDA behind it.
+  The CUDA provider plans its convolutions again for every new input shape, and OCR changes shape on nearly
+  every call (the recognizer's width with each batch, the detector's size with each page). TensorRT builds one
+  engine per model for a whole range of shapes instead; in the measurements behind #11 that doubled end-to-end
+  throughput on an RTX 5070 Ti. Engines are built once per GPU and cached. Readings are not bit-identical to
+  CUDA's: a few low-confidence words can come out differently, which is why it is opt-in. Needs TensorRT 10 for
+  the same CUDA major as ONNX Runtime on PATH; without it OCR runs on CUDA and `GpuAccelerationHint` says why.
+  A model whose engine cannot be built runs on CUDA on its own, without taking the others off TensorRT.
+- **`PaddleOcrServiceOptions.TensorRt`** (`TensorRtOptions`): `EngineCachePath` (default a `tensorrt` folder in
+  the model cache), `Fp16` (default off), and the shape limits the engines are built for,
+  `MaxRecognitionBatchSize` (default 16) and `MaxDetectionSide` (default 4000, the detector's own default cap),
+  and `Models` (`TensorRtModels`, default all three): which of the detector, classifier and recognizer use
+  TensorRT. The detector's output moves furthest from CUDA's, so leaving it on CUDA keeps more of CUDA's
+  readings for less of the speed.
+
 ## [2.2.1] - 2026-09-29
 
 A patch release for `Preprocessing.Deskew`, plus an opt-in fix for word spaces PP-OCRv5 drops between

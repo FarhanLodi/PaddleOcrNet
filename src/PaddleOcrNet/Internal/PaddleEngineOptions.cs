@@ -78,6 +78,11 @@ internal sealed record PaddleEngineOptions
     public ModelDownloadOptions Download { get; init; } = new();
 
     /// <summary>
+    /// Engine cache, precision and shape ranges for <see cref="OcrExecutionProvider.TensorRt"/>.
+    /// </summary>
+    public TensorRtOptions TensorRt { get; init; } = new();
+
+    /// <summary>
     /// Run the text-line orientation classifier (PaddleOCR's <c>use_textline_orientation</c>). When false,
     /// the classifier model is never loaded. Can also be requested per call via
     /// <see cref="RecognitionOptions.UseTextLineOrientation"/>.

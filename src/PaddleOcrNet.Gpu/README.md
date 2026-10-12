@@ -52,6 +52,42 @@ await using var ocr = new PaddleOcrService(new PaddleOcrServiceOptions
 `PaddleOcrServiceOptions.UseGpu = true` is kept as shorthand for forcing CUDA, but prefer leaving
 `ExecutionProvider` at `Auto` — it already enables a GPU when one is present.
 
+## TensorRT (opt-in)
+
+The CUDA provider plans its convolutions afresh for every new input shape, and OCR changes shape on nearly
+every call: the recognizer's batch width follows each batch's longest line, and the detector's input follows
+each page's size. `OcrExecutionProvider.TensorRt` runs the detector, line classifier and recognizer through
+ONNX Runtime's TensorRT provider instead, which builds one engine per model for the whole range of shapes it
+will be fed:
+
+```csharp
+await using var ocr = new PaddleOcrService(new PaddleOcrServiceOptions
+{
+    ExecutionProvider = OcrExecutionProvider.TensorRt,
+    TensorRt = new TensorRtOptions
+    {
+        MaxRecognitionBatchSize = 8,   // at least the largest RecognitionOptions.BatchSize you use
+    },
+});
+```
+
+- **Requirements:** everything CUDA needs, plus **TensorRT 10 built for the same CUDA major** as ONNX
+  Runtime (CUDA 13 for ONNX Runtime 1.27 and later), with its libraries (`nvinfer_10`, `nvonnxparser_10`)
+  on PATH. `Microsoft.ML.OnnxRuntime.Gpu` already ships ONNX Runtime's TensorRT provider library; TensorRT
+  itself is NVIDIA's download.
+- **First run:** each engine is built for the GPU it runs on, which takes from seconds to a minute or more
+  per model, then is cached in `TensorRtOptions.EngineCachePath` (by default a `tensorrt` folder in the
+  model cache). TensorRT rebuilds it when the GPU, the TensorRT version or the shape limits change.
+- **Shape limits:** engines accept recognizer batches up to `MaxRecognitionBatchSize` (default 16) and
+  detector inputs up to `MaxDetectionSide` pixels on the long side (default 4000, the detector's own
+  default cap). Raise them if you raise `RecognitionOptions.BatchSize` or `DetectionOptions.MaxSideLimit`.
+- **Output:** not bit-identical to CUDA. Different kernels round differently, so a few low-confidence
+  readings come out differently. That is why `Auto` never selects TensorRT. `Fp16` (off by default) is
+  faster still, and differs more.
+- **Fallback:** when TensorRT cannot be loaded, OCR runs on CUDA and `GpuAccelerationHint` (and the log)
+  says why. A model whose engine cannot be built runs on CUDA alone. Document orientation and unwarp, and
+  the structure engine's models, always run on CUDA.
+
 ## Requirements
 
 - An NVIDIA GPU with the proprietary driver installed, and the **CUDA 13.x** toolkit with **cuDNN 9**

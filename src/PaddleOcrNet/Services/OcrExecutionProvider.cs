@@ -37,4 +37,15 @@ public enum OcrExecutionProvider
     /// this always resolves to <see cref="Cpu"/>.
     /// </summary>
     Auto = 4,
+
+    /// <summary>
+    /// NVIDIA TensorRT, through ONNX Runtime's TensorRT provider, with CUDA behind it for anything TensorRT
+    /// does not take. Requires the <c>PaddleOcrNet.Gpu</c> package, its CUDA requirements, and TensorRT 10
+    /// built for the same CUDA major on PATH. The text detector, line classifier and recognizer each get an
+    /// engine built for this GPU (see <see cref="TensorRtOptions"/>); other models run on CUDA. When TensorRT
+    /// cannot be loaded, OCR runs on CUDA and the reason is reported, as for any provider that fails to
+    /// attach. Never chosen by <see cref="Auto"/>: TensorRT's arithmetic differs slightly from CUDA's, so a few
+    /// low-confidence readings can change, and that is the caller's decision to make.
+    /// </summary>
+    TensorRt = 5,
 }

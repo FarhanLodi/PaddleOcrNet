@@ -11,6 +11,9 @@ namespace PaddleOcrNet.Internal;
 /// success, or <see cref="OcrExecutionProvider.Cpu"/> when an accelerator failed to attach — in which
 /// case <see cref="ProviderFailureHint"/> holds a human-readable explanation of the failure and how to
 /// fix it (wrong CUDA major, package pins, DirectML alternative). Null hint means nothing went wrong.
+/// <see cref="OcrExecutionProvider.TensorRt"/> is the one provider that degrades to another accelerator:
+/// when TensorRT cannot be loaded but CUDA can, the provider is <see cref="OcrExecutionProvider.Cuda"/>
+/// and the hint says why TensorRT is not in use.
 /// </summary>
 internal readonly record struct SessionBuildResult(
     SessionOptions Options,
@@ -36,6 +39,7 @@ internal static partial class ExecutionProviderResolver
     private const string CudaName = "CUDAExecutionProvider";
     private const string DmlName = "DmlExecutionProvider";
     private const string CoreMlName = "CoreMLExecutionProvider";
+    private const string TensorRtName = "TensorrtExecutionProvider";
 
     /// <summary>
     /// Resolves the provider PaddleOcrNet will attempt to use. An explicit (non-Auto) request is
@@ -91,6 +95,7 @@ internal static partial class ExecutionProviderResolver
         OcrExecutionProvider.Cuda => CudaName,
         OcrExecutionProvider.DirectMl => DmlName,
         OcrExecutionProvider.CoreMl => CoreMlName,
+        OcrExecutionProvider.TensorRt => TensorRtName,
         _ => "CPUExecutionProvider",
     };
 
@@ -113,21 +118,7 @@ internal static partial class ExecutionProviderResolver
     /// <param name="logger">Optional logger for provider-attach diagnostics.</param>
     public static SessionBuildResult BuildSessionOptionsWithStatus(OcrExecutionProvider provider, PaddleEngineOptions options, ILogger? logger)
     {
-        var opts = new SessionOptions
-        {
-            GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL,
-        };
-
-        if (options.IntraOpNumThreads is { } intra and > 0) opts.IntraOpNumThreads = intra;
-        if (options.InterOpNumThreads is { } inter and > 0) opts.InterOpNumThreads = inter;
-
-        // Intra-op spinning keeps worker threads busy-waiting between ops. It helps a single hot session
-        // but, with several sessions run back to back (det -> cls -> rec) each owning a pool, idle pools
-        // spin against the active one. Only set when the caller chose; null keeps ONNX Runtime's default.
-        if (options.AllowIntraOpSpinning is { } spin)
-        {
-            opts.AddSessionConfigEntry("session.intra_op.allow_spinning", spin ? "1" : "0");
-        }
+        var opts = CreateBaseOptions(options);
 
         string? failureHint = null;
         switch (provider)
@@ -144,6 +135,26 @@ internal static partial class ExecutionProviderResolver
             case OcrExecutionProvider.CoreMl:
                 failureHint = TryAppendProvider(logger, provider, "CoreML", "a CoreML-enabled ONNX Runtime build", () => opts.AppendExecutionProvider("CoreML"));
                 break;
+            case OcrExecutionProvider.TensorRt:
+            {
+                // These options carry CUDA only: they serve every model that does not get a TensorRT engine
+                // of its own (document orientation, unwarp), and are what the detector, classifier and
+                // recognizer fall back to if their engine cannot be built. Those three get options with
+                // TensorRT in front, per model (TensorRtSessions). Without CUDA there is no TensorRT either.
+                failureHint = TryAppendProvider(logger, OcrExecutionProvider.Cuda, "CUDA", "PaddleOcrNet.Gpu", () => AppendCuda(opts, options));
+                if (failureHint is not null) break;
+
+                var tensorRtHint = TensorRtSessions.AvailabilityHint(options);
+                if (tensorRtHint is null)
+                {
+                    logger?.LogInformation("ONNX Runtime: TensorRT execution provider enabled (engines in {Cache}).", TensorRtSessions.EngineCachePathFor(options));
+                    return new SessionBuildResult(opts, OcrExecutionProvider.TensorRt, null);
+                }
+
+                if (logger is not null) logger.LogWarning("{Hint}", tensorRtHint);
+                else WarnStderrOnce(tensorRtHint);
+                return new SessionBuildResult(opts, OcrExecutionProvider.Cuda, tensorRtHint);
+            }
             case OcrExecutionProvider.Cpu:
             case OcrExecutionProvider.Auto:
             default:
@@ -153,6 +164,31 @@ internal static partial class ExecutionProviderResolver
         return failureHint is null
             ? new SessionBuildResult(opts, provider, null)
             : new SessionBuildResult(opts, OcrExecutionProvider.Cpu, failureHint);
+    }
+
+    /// <summary>
+    /// Session options before any provider is attached: full graph optimization, and the caller's thread
+    /// settings. Shared by every provider, and by the per-model TensorRT options.
+    /// </summary>
+    internal static SessionOptions CreateBaseOptions(PaddleEngineOptions options)
+    {
+        var opts = new SessionOptions
+        {
+            GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL,
+        };
+
+        if (options.IntraOpNumThreads is { } intra and > 0) opts.IntraOpNumThreads = intra;
+        if (options.InterOpNumThreads is { } inter and > 0) opts.InterOpNumThreads = inter;
+
+        // Intra-op spinning keeps worker threads busy-waiting between ops. It helps a single hot session
+        // but, with several sessions run back to back (det -> cls -> rec) each owning a pool, idle pools
+        // spin against the active one. Only set when the caller chose; null keeps ONNX Runtime's default.
+        if (options.AllowIntraOpSpinning is { } spin)
+        {
+            opts.AddSessionConfigEntry("session.intra_op.allow_spinning", spin ? "1" : "0");
+        }
+
+        return opts;
     }
 
     /// <summary>
