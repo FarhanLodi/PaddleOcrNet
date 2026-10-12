@@ -1,5 +1,6 @@
 using PaddleOcrNet.Internal;
 using PaddleOcrNet.Internal.Classification;
+using PaddleOcrNet.Internal.Detection;
 using PaddleOcrNet.Internal.Recognition;
 using PaddleOcrNet.Services;
 using Xunit;
@@ -106,22 +107,121 @@ public class TensorRtTests
             TensorRt = new TensorRtOptions { EngineCachePath = "engines", Fp16 = true },
         };
 
-        var settings = TensorRtSessions.SettingsFor(TensorRtModel.Classifier, "x", options);
+        var settings = TensorRtSessions.SettingsFor(TensorRtModel.Classifier, "x", ModelHash, options);
+        var profile = TensorRtSessions.ProfileFor(TensorRtModel.Classifier, "x", options.TensorRt);
 
         Assert.Equal("1", settings["device_id"]);
         Assert.Equal("1", settings["trt_fp16_enable"]);
         Assert.Equal("1", settings["trt_engine_cache_enable"]);
         Assert.Equal(Path.GetFullPath("engines"), settings["trt_engine_cache_path"]);
-        Assert.Equal("cls", settings["trt_engine_cache_prefix"]);
+        Assert.Equal(TensorRtSessions.CachePrefix(TensorRtModel.Classifier, ModelHash, profile, fp16: true), settings["trt_engine_cache_prefix"]);
         Assert.Equal(TensorRtSessions.ProfileFor(TensorRtModel.Classifier, "x", options.TensorRt).Max, settings["trt_profile_max_shapes"]);
     }
 
     [Fact]
     public void Fp16_is_off_unless_asked_for()
     {
-        var settings = TensorRtSessions.SettingsFor(TensorRtModel.Recognizer, "x", new PaddleEngineOptions());
+        var settings = TensorRtSessions.SettingsFor(TensorRtModel.Recognizer, "x", ModelHash, new PaddleEngineOptions());
 
         Assert.Equal("0", settings["trt_fp16_enable"]);
+    }
+
+    private const string ModelHash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    [Fact]
+    public void Cache_prefix_names_the_model_and_is_stable()
+    {
+        var profile = TensorRtSessions.ProfileFor(TensorRtModel.Recognizer, "x", new TensorRtOptions());
+
+        var prefix = TensorRtSessions.CachePrefix(TensorRtModel.Recognizer, ModelHash, profile, fp16: false);
+
+        Assert.Matches("^rec_[0-9a-f]{16}$", prefix);
+        Assert.Equal(prefix, TensorRtSessions.CachePrefix(TensorRtModel.Recognizer, ModelHash, profile, fp16: false));
+    }
+
+    [Fact]
+    public void Cache_prefix_changes_with_the_model_contents_profile_and_precision()
+    {
+        // ONNX Runtime's own engine name ignores the weights, so two exports with one file name and graph would
+        // otherwise share an engine; a changed profile or precision must not reuse an engine built for another.
+        var options = new TensorRtOptions();
+        var profile = TensorRtSessions.ProfileFor(TensorRtModel.Recognizer, "x", options);
+        var wider = TensorRtSessions.ProfileFor(TensorRtModel.Recognizer, "x", new TensorRtOptions { MaxRecognitionBatchSize = 32 });
+        var otherModel = new string('f', 64);
+
+        var prefixes = new[]
+        {
+            TensorRtSessions.CachePrefix(TensorRtModel.Recognizer, ModelHash, profile, fp16: false),
+            TensorRtSessions.CachePrefix(TensorRtModel.Recognizer, otherModel, profile, fp16: false),
+            TensorRtSessions.CachePrefix(TensorRtModel.Recognizer, ModelHash, wider, fp16: false),
+            TensorRtSessions.CachePrefix(TensorRtModel.Recognizer, ModelHash, profile, fp16: true),
+        };
+
+        Assert.Equal(prefixes.Length, prefixes.Distinct().Count());
+    }
+
+    [Fact]
+    public void Model_file_hash_follows_the_contents_not_the_name()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "paddleocrnet-trt-hash-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var a = Path.Combine(dir, "a.onnx");
+            var b = Path.Combine(dir, "b.onnx");
+            var c = Path.Combine(dir, "c.onnx");
+            File.WriteAllBytes(a, [1, 2, 3]);
+            File.WriteAllBytes(b, [1, 2, 3]);
+            File.WriteAllBytes(c, [1, 2, 4]);
+
+            Assert.Equal(TensorRtSessions.HashModelFile(a), TensorRtSessions.HashModelFile(b));
+            Assert.NotEqual(TensorRtSessions.HashModelFile(a), TensorRtSessions.HashModelFile(c));
+            Assert.Matches("^[0-9a-f]{64}$", TensorRtSessions.HashModelFile(a));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(16, 16)]
+    [InlineData(4, 4)]
+    [InlineData(0, 1)]   // never below one crop
+    public void Recognizer_batch_limit_is_the_profiles_batch_maximum(int option, int expected)
+    {
+        var limits = new TensorRtOptions { MaxRecognitionBatchSize = option };
+
+        Assert.Equal(expected, TensorRtSessions.RecognizerBatchLimit(limits));
+        Assert.Equal($"x:{expected}x3x48x3200", TensorRtSessions.ProfileFor(TensorRtModel.Recognizer, "x", limits).Max);
+    }
+
+    [Theory]
+    [InlineData(4000)]
+    [InlineData(4001)]
+    [InlineData(4010)]
+    [InlineData(4020)]
+    [InlineData(2048)]
+    [InlineData(1000)]
+    [InlineData(10)]
+    public void Every_detector_input_under_the_side_cap_fits_the_profile(int maxDetectionSide)
+    {
+        // The detector lowers MaxSideLimit to DetectorSideLimit and then rounds each side to the nearest stride;
+        // whatever the page and the per-call options, the resulting tensor must lie inside the engine's range.
+        var limits = new TensorRtOptions { MaxDetectionSide = maxDetectionSide };
+        int cap = TensorRtSessions.DetectorSideLimit(limits);
+        var max = TensorRtSessions.ProfileFor(TensorRtModel.Detector, "x", limits).Max;
+        int profileMax = int.Parse(max[(max.LastIndexOf('x') + 1)..], System.Globalization.CultureInfo.InvariantCulture);
+
+        int[] sides = [1, 31, 33, 500, 2550, 3300, 3999, 4000, 4001, 4015, 4016, 4050, 6000, 12000];
+        foreach (int w in sides)
+        foreach (int h in sides)
+        foreach (var (limitSideLen, limitTypeMax) in new[] { (64, false), (960, true), (5000, false), (736, false) })
+        {
+            var (rw, rh) = DbTextDetector.ComputeResize(w, h, limitSideLen, limitTypeMax, cap);
+            Assert.InRange(rw, 32, profileMax);
+            Assert.InRange(rh, 32, profileMax);
+        }
     }
 
     [Fact]

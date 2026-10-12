@@ -1034,7 +1034,14 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
         {
             if (_detector is not null) return _detector;
             var path = await ResolveDetectorModelPathAsync(cancellationToken).ConfigureAwait(false);
-            _detector = CreateSessionBacked(so => (IPaddleDetector)new DbTextDetector(OpenOcrSession(TensorRtModel.Detector, path, so)));
+            _detector = CreateSessionBacked(so =>
+            {
+                var session = OpenOcrSession(TensorRtModel.Detector, path, so, out bool onTensorRt);
+                return (IPaddleDetector)new DbTextDetector(
+                    session,
+                    sideLimitCap: onTensorRt ? TensorRtSessions.DetectorSideLimit(_options.TensorRt) : null,
+                    logger: _logger);
+            });
             Diagnostics.PaddleOcrDiagnostics.ModelLoads.Add(1, new KeyValuePair<string, object?>("model", "det"));
             _logger?.LogInformation("DB detector loaded from {Path}", path);
             return _detector;
@@ -1055,7 +1062,7 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
             if (_classifier is not null) return _classifier;
             var path = await ModelDownloadManager.EnsureModelAsync(
                 PaddleModelRegistry.Classifier, _options.ModelCachePath, _options.Download, _logger, cancellationToken).ConfigureAwait(false);
-            _classifier = CreateSessionBacked(so => (IAngleClassifier)new TextLineClassifier(OpenOcrSession(TensorRtModel.Classifier, path, so)));
+            _classifier = CreateSessionBacked(so => (IAngleClassifier)new TextLineClassifier(OpenOcrSession(TensorRtModel.Classifier, path, so, out _)));
             Diagnostics.PaddleOcrDiagnostics.ModelLoads.Add(1, new KeyValuePair<string, object?>("model", "cls"));
             _logger?.LogInformation("Text-line orientation classifier loaded from {Path}", path);
             return _classifier;
@@ -1291,7 +1298,14 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
         var dictLines = CharacterDictionary.LoadLines(dictPath);
         Diagnostics.PaddleOcrDiagnostics.ModelLoads.Add(1, new KeyValuePair<string, object?>("model", pack.Name));
         _logger?.LogInformation("Recognizer '{Name}' loaded from {Path} ({Count} dict lines)", pack.Name, modelPath, dictLines.Count);
-        return CreateSessionBacked(so => (ITextRecognizer)new SvtrRecognizer(OpenOcrSession(TensorRtModel.Recognizer, modelPath, so), dictLines));
+        return CreateSessionBacked(so =>
+        {
+            var session = OpenOcrSession(TensorRtModel.Recognizer, modelPath, so, out bool onTensorRt);
+            return (ITextRecognizer)new SvtrRecognizer(
+                session,
+                dictLines,
+                maxBatchSize: onTensorRt ? TensorRtSessions.RecognizerBatchLimit(_options.TensorRt) : null);
+        });
     }
 
     /// <summary>
@@ -1322,16 +1336,20 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
     /// engine of its own (see <see cref="TensorRtSessions"/>); a model whose engine cannot be built runs on
     /// the shared CUDA options instead, with a warning, so one model TensorRT rejects does not take the
     /// others off it, or the engine off the GPU. A model left out of <see cref="TensorRtOptions.Models"/>
-    /// runs on CUDA too.
+    /// runs on CUDA too. <paramref name="onTensorRt"/> says which it got: a TensorRT session only accepts
+    /// shapes inside its profile, so its caller must hold its inputs to the profile's limits.
     /// </summary>
-    private InferenceSession OpenOcrSession(TensorRtModel model, string path, SessionOptions shared)
+    private InferenceSession OpenOcrSession(TensorRtModel model, string path, SessionOptions shared, out bool onTensorRt)
     {
+        onTensorRt = false;
         if (_activeProvider != OcrExecutionProvider.TensorRt || !TensorRtSessions.IsSelected(model, _options.TensorRt))
             return new InferenceSession(path, shared);
 
         try
         {
-            return TensorRtSessions.Open(model, path, _options, _logger);
+            var session = TensorRtSessions.Open(model, path, _options, _logger);
+            onTensorRt = true;
+            return session;
         }
         catch (Exception ex)
         {

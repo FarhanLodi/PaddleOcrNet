@@ -29,15 +29,16 @@ public sealed class TensorRtOptions
 
     /// <summary>
     /// The largest recognizer batch the engine accepts — the upper end of the batch range in its
-    /// optimization profile. Must be at least the largest <see cref="Models.RecognitionOptions.BatchSize"/>
-    /// you use. Default 16 (PaddleOCR's own default batch is 6).
+    /// optimization profile. A larger <see cref="Models.RecognitionOptions.BatchSize"/> is split into runs of
+    /// this size on TensorRT, so set it to the largest batch size you use. Default 16 (PaddleOCR's own default
+    /// batch is 6).
     /// </summary>
     public int MaxRecognitionBatchSize { get; set; } = 16;
 
     /// <summary>
-    /// The longest side, in pixels, the detector engine accepts. Must be at least the largest
-    /// <see cref="Models.DetectionOptions.MaxSideLimit"/> you use. Default 4000, the detector's own default
-    /// cap.
+    /// The longest side, in pixels, the detector engine accepts. On TensorRT a larger
+    /// <see cref="Models.DetectionOptions.MaxSideLimit"/> is lowered to this, with a warning in the log, so set
+    /// it to the largest side limit you use. Default 4000, the detector's own default cap.
     /// </summary>
     public int MaxDetectionSide { get; set; } = 4000;
 

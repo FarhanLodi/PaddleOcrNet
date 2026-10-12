@@ -77,6 +77,7 @@ internal sealed class SvtrRecognizer : ITextRecognizer
     private readonly int _imageHeight;
     private readonly string _inputName;
     private readonly int _batchSize;
+    private readonly int _maxBatchSize;
 
     /// <summary>
     /// Creates the recognizer over an already-built ONNX <see cref="InferenceSession"/> and a loaded
@@ -90,12 +91,17 @@ internal sealed class SvtrRecognizer : ITextRecognizer
     /// </param>
     /// <param name="imageHeight">Fixed recognition input height in pixels (PaddleOCR's <c>rec_image_shape</c> H). Default 48.</param>
     /// <param name="batchSize">Crops per ONNX run (PaddleOCR's <c>rec_batch_num</c>). Default 6.</param>
-    public SvtrRecognizer(InferenceSession session, IReadOnlyList<string> dictLines, int imageHeight = DefaultImageHeight, int batchSize = DefaultBatchSize)
+    /// <param name="maxBatchSize">
+    /// Optional ceiling on crops per ONNX run, for a session whose input shapes are bounded (a TensorRT
+    /// engine's profile). A larger <see cref="RecognitionOptions.BatchSize"/> is split into runs of this size.
+    /// </param>
+    public SvtrRecognizer(InferenceSession session, IReadOnlyList<string> dictLines, int imageHeight = DefaultImageHeight, int batchSize = DefaultBatchSize, int? maxBatchSize = null)
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
         _dictLines = dictLines ?? throw new ArgumentNullException(nameof(dictLines));
         _imageHeight = imageHeight > 0 ? imageHeight : DefaultImageHeight;
-        _batchSize = batchSize > 0 ? batchSize : DefaultBatchSize;
+        _maxBatchSize = maxBatchSize is > 0 ? maxBatchSize.Value : int.MaxValue;
+        _batchSize = Math.Min(batchSize > 0 ? batchSize : DefaultBatchSize, _maxBatchSize);
 
         // The recognition graph has a single input; resolve its name once.
         _inputName = _session.InputMetadata.Keys.First();
@@ -137,7 +143,7 @@ internal sealed class SvtrRecognizer : ITextRecognizer
         ArgumentNullException.ThrowIfNull(options);
         return RecognizeCore(
             crops,
-            options.BatchSize > 0 ? options.BatchSize : _batchSize,
+            options.BatchSize > 0 ? Math.Min(options.BatchSize, _maxBatchSize) : _batchSize,
             options.Allowlist,
             options.Blocklist,
             options.SpaceRecoveryThreshold,

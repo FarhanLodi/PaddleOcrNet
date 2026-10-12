@@ -4,7 +4,7 @@ All notable changes to PaddleOcrNet are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.3.0] - 2026-10-12
 
 An opt-in TensorRT execution provider for NVIDIA GPUs. Nothing changes unless it is asked for: `Auto` never
 selects it, and every other provider behaves as before.
@@ -26,6 +26,14 @@ selects it, and every other provider behaves as before.
   and `Models` (`TensorRtModels`, default all three): which of the detector, classifier and recognizer use
   TensorRT. The detector's output moves furthest from CUDA's, so leaving it on CUDA keeps more of CUDA's
   readings for less of the speed.
+- **Inputs held to the engine's shape limits.** On TensorRT, a `RecognitionOptions.BatchSize` above
+  `MaxRecognitionBatchSize` is split into runs the engine accepts, and a `DetectionOptions.MaxSideLimit` above
+  `MaxDetectionSide` is lowered to it (with a one-time warning), so no per-call option can feed an engine a
+  shape outside its profile. Models on CUDA are unaffected.
+- **Engine cache keyed by model contents.** ONNX Runtime names a cached engine from the model's file name and
+  graph, not its weights. The cache prefix now adds a hash of the model file, the shape profile and the
+  precision, so two custom models with the same file name never share an engine, and changing
+  `MaxRecognitionBatchSize`, `MaxDetectionSide` or `Fp16` builds a new one instead of reusing a stale one.
 
 ## [2.2.1] - 2026-09-29
 

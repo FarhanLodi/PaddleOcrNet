@@ -1,4 +1,5 @@
 using PaddleOcrNet.Models;
+using Microsoft.Extensions.Logging;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using EasyImageSharp;
@@ -34,6 +35,9 @@ internal sealed class DbTextDetector : IPaddleDetector
     private readonly InferenceSession _session;
     private readonly string _inputName;
     private readonly string _outputName;
+    private readonly int? _sideLimitCap;
+    private readonly ILogger? _logger;
+    private int _capWarned;
 
     /// <summary>
     /// Creates the detector over an already-built ONNX <see cref="InferenceSession"/>.
@@ -41,11 +45,18 @@ internal sealed class DbTextDetector : IPaddleDetector
     /// <param name="session">The loaded DB detection model session (this instance takes ownership and disposes it).</param>
     /// <param name="inputName">Optional override for the model input tensor name; null = first input.</param>
     /// <param name="outputName">Optional override for the model output tensor name; null = first output.</param>
-    public DbTextDetector(InferenceSession session, string? inputName = null, string? outputName = null)
+    /// <param name="sideLimitCap">
+    /// Optional ceiling on <see cref="DetectionOptions.MaxSideLimit"/>, for a session whose input shapes are
+    /// bounded (a TensorRT engine's profile). A larger per-call limit is lowered to it, with a warning.
+    /// </param>
+    /// <param name="logger">Optional logger for the cap warning.</param>
+    public DbTextDetector(InferenceSession session, string? inputName = null, string? outputName = null, int? sideLimitCap = null, ILogger? logger = null)
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
         _inputName = inputName ?? _session.InputMetadata.Keys.First();
         _outputName = outputName ?? _session.OutputMetadata.Keys.First();
+        _sideLimitCap = sideLimitCap;
+        _logger = logger;
     }
 
     /// <inheritdoc />
@@ -58,6 +69,10 @@ internal sealed class DbTextDetector : IPaddleDetector
         {
             return Array.Empty<TextQuad>();
         }
+
+        // Capped here, before any pass is planned, so tiling and the small-text upscale see the same limit
+        // the single pass does.
+        options = ApplySideLimitCap(options);
 
         if (!options.EnhanceContrast && !options.TileLargeImages && options.MinTextHeight <= 0)
         {
@@ -101,6 +116,27 @@ internal sealed class DbTextDetector : IPaddleDetector
             LimitSideLen = Math.Max(options.LimitTypeMax ? 64 : options.LimitSideLen, (int)(shortSide * factor)),
         });
         return upscaled;
+    }
+
+    /// <summary>
+    /// Lowers <see cref="DetectionOptions.MaxSideLimit"/> to the session's cap, if it has one and the limit
+    /// is above it (a non-positive limit means the 4000-pixel default).
+    /// </summary>
+    private DetectionOptions ApplySideLimitCap(DetectionOptions options)
+    {
+        if (_sideLimitCap is not { } cap) return options;
+        int requested = options.MaxSideLimit > 0 ? options.MaxSideLimit : 4000;
+        if (requested <= cap) return options;
+
+        if (Interlocked.Exchange(ref _capWarned, 1) == 0)
+        {
+            _logger?.LogWarning(
+                "DetectionOptions.MaxSideLimit {Requested} is above the TensorRT detector engine's limit; using {Cap}. " +
+                "Raise TensorRtOptions.MaxDetectionSide to detect at the larger size.",
+                requested, cap);
+        }
+
+        return options with { MaxSideLimit = cap };
     }
 
     /// <summary>

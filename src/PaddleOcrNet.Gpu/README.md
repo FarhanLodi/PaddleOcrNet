@@ -77,10 +77,14 @@ await using var ocr = new PaddleOcrService(new PaddleOcrServiceOptions
   itself is NVIDIA's download.
 - **First run:** each engine is built for the GPU it runs on, which takes from seconds to a minute or more
   per model, then is cached in `TensorRtOptions.EngineCachePath` (by default a `tensorrt` folder in the
-  model cache). TensorRT rebuilds it when the GPU, the TensorRT version or the shape limits change.
+  model cache). Each engine is keyed by the model file's contents, its shape limits and its precision, so
+  changing any of them, or the GPU or TensorRT version, builds a new one; a custom model never reuses an
+  engine built for another model of the same name.
 - **Shape limits:** engines accept recognizer batches up to `MaxRecognitionBatchSize` (default 16) and
   detector inputs up to `MaxDetectionSide` pixels on the long side (default 4000, the detector's own
-  default cap). Raise them if you raise `RecognitionOptions.BatchSize` or `DetectionOptions.MaxSideLimit`.
+  default cap). Inputs are held to these limits: a larger `RecognitionOptions.BatchSize` is split into
+  smaller runs, and a larger `DetectionOptions.MaxSideLimit` is lowered to `MaxDetectionSide` with a
+  warning in the log. Raise them if you raise either option.
 - **Output:** not bit-identical to CUDA. Different kernels round differently, so a few low-confidence
   readings come out differently. That is why `Auto` never selects TensorRT. `Fp16` (off by default) is
   faster still, and differs more.

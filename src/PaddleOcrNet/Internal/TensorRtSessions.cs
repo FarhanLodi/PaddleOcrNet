@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
@@ -63,7 +65,7 @@ internal static class TensorRtSessions
             {
                 // DbTextDetector feeds one image at a time, each side rounded to the stride and the long
                 // side capped at DetectionOptions.MaxSideLimit; tiny images are padded up to one stride.
-                int max = RoundUp(Math.Max(DetectorStride, limits.MaxDetectionSide), DetectorStride);
+                int max = RoundUp(DetectorSideLimit(limits), DetectorStride);
                 int optH = Math.Min(OptimalDetectorHeight, max), optW = Math.Min(OptimalDetectorWidth, max);
                 return new(
                     Shape(input, 1, 3, DetectorStride, DetectorStride),
@@ -82,7 +84,7 @@ internal static class TensorRtSessions
             {
                 // SvtrRecognizer: height 48, width from 320 to 3200 depending on the batch's widest line,
                 // batch up to RecognitionOptions.BatchSize (the last batch of a page is smaller).
-                int maxBatch = Math.Max(1, limits.MaxRecognitionBatchSize);
+                int maxBatch = RecognizerBatchLimit(limits);
                 int optBatch = Math.Min(SvtrRecognizer.DefaultBatchSize, maxBatch);
                 const int h = SvtrRecognizer.DefaultImageHeight;
                 return new(
@@ -92,6 +94,20 @@ internal static class TensorRtSessions
             }
         }
     }
+
+    /// <summary>
+    /// The <see cref="Models.DetectionOptions.MaxSideLimit"/> a detector on TensorRT is held to, so no
+    /// per-call option can feed its engine a page larger than its profile. The detector caps the long side
+    /// at this and then rounds to the nearest stride, which never exceeds the profile's maximum (this value
+    /// rounded up).
+    /// </summary>
+    internal static int DetectorSideLimit(TensorRtOptions limits) => Math.Max(DetectorStride, limits.MaxDetectionSide);
+
+    /// <summary>
+    /// The largest batch a recognizer on TensorRT runs, so no <see cref="Models.RecognitionOptions.BatchSize"/>
+    /// can exceed its profile. Larger batch sizes are split into runs of this size.
+    /// </summary>
+    internal static int RecognizerBatchLimit(TensorRtOptions limits) => Math.Max(1, limits.MaxRecognitionBatchSize);
 
     /// <summary>Whether <paramref name="model"/> is one of <see cref="TensorRtOptions.Models"/>.</summary>
     internal static bool IsSelected(TensorRtModel model, TensorRtOptions options) => model switch
@@ -110,8 +126,11 @@ internal static class TensorRtSessions
             ? Path.Combine(ModelDownloadManager.ResolveCacheRoot(options.ModelCachePath), "tensorrt")
             : Path.GetFullPath(options.TensorRt.EngineCachePath);
 
-    /// <summary>The provider settings for one model, as ONNX Runtime's TensorRT provider takes them.</summary>
-    internal static Dictionary<string, string> SettingsFor(TensorRtModel model, string input, PaddleEngineOptions options)
+    /// <summary>
+    /// The provider settings for one model, as ONNX Runtime's TensorRT provider takes them.
+    /// <paramref name="modelHash"/> is the model file's content hash (see <see cref="HashModelFile"/>).
+    /// </summary>
+    internal static Dictionary<string, string> SettingsFor(TensorRtModel model, string input, string modelHash, PaddleEngineOptions options)
     {
         var profile = ProfileFor(model, input, options.TensorRt);
         var cache = EngineCachePathFor(options);
@@ -121,9 +140,11 @@ internal static class TensorRtSessions
             ["trt_fp16_enable"] = options.TensorRt.Fp16 ? "1" : "0",
             ["trt_engine_cache_enable"] = "1",
             ["trt_engine_cache_path"] = cache,
-            // Engines are named from a hash of the model, so packs never collide; the prefix only makes
-            // the cache folder readable.
-            ["trt_engine_cache_prefix"] = PrefixOf(model),
+            // ONNX Runtime names a cached engine from the model's file name and graph structure, not its
+            // weights, so two models with the same name and architecture (two fine-tuned exports, say) would
+            // share one engine. The prefix carries the model's contents, the profile and the precision, so
+            // each combination gets an engine of its own.
+            ["trt_engine_cache_prefix"] = CachePrefix(model, modelHash, profile, options.TensorRt.Fp16),
             ["trt_timing_cache_enable"] = "1",
             ["trt_timing_cache_path"] = cache,
             ["trt_profile_min_shapes"] = profile.Min,
@@ -141,12 +162,13 @@ internal static class TensorRtSessions
     internal static InferenceSession Open(TensorRtModel model, string modelPath, PaddleEngineOptions options, ILogger? logger)
     {
         var input = InputNameOf(modelPath);
+        var modelHash = HashModelFile(modelPath);
         Directory.CreateDirectory(EngineCachePathFor(options));
 
         using var so = ExecutionProviderResolver.CreateBaseOptions(options);
         using (var trt = new OrtTensorRTProviderOptions())
         {
-            trt.UpdateOptions(SettingsFor(model, input, options));
+            trt.UpdateOptions(SettingsFor(model, input, modelHash, options));
             so.AppendExecutionProvider_Tensorrt(trt);
         }
         so.AppendExecutionProvider_CUDA(options.DeviceId);
@@ -200,6 +222,24 @@ internal static class TensorRtSessions
         using var so = new SessionOptions { GraphOptimizationLevel = GraphOptimizationLevel.ORT_DISABLE_ALL };
         using var session = new InferenceSession(modelPath, so);
         return session.InputMetadata.Keys.First();
+    }
+
+    /// <summary>The SHA-256 of the model file, as lower-case hex.</summary>
+    internal static string HashModelFile(string modelPath)
+    {
+        using var stream = File.OpenRead(modelPath);
+        return Convert.ToHexStringLower(SHA256.HashData(stream));
+    }
+
+    /// <summary>
+    /// <c>det</c>, <c>cls</c> or <c>rec</c> (so the cache folder stays readable), then 16 hex digits of a hash
+    /// over everything the engine is specific to that ONNX Runtime's own engine name leaves out.
+    /// </summary>
+    internal static string CachePrefix(TensorRtModel model, string modelHash, TensorRtProfile profile, bool fp16)
+    {
+        var key = $"{modelHash}|{profile.Min}|{profile.Opt}|{profile.Max}|fp16={(fp16 ? 1 : 0)}";
+        var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(key)));
+        return $"{PrefixOf(model)}_{hash[..16]}";
     }
 
     private static string PrefixOf(TensorRtModel model) => model switch
