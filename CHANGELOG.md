@@ -4,6 +4,22 @@ All notable changes to PaddleOcrNet are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.1] - Unreleased
+
+### Added
+
+- **`RecognitionOptions.UseLegacyResize`** ([#13](https://github.com/FarhanLodi/PaddleOcrNet/issues/13)):
+  opt-in bicubic recognition resizing with ceiling-rounded batch width for applications affected by
+  punctuation changes after 2.0.4. Both reported synthetic Chinese date crops still misread the first
+  hyphen as an en dash in 2.3.0; this option restores their hyphens with space recovery off or on.
+  The default remains the Python-compatible triangle/floor policy. BGR channel order and the 320–3200
+  tensor-width bounds are retained, so this is a resize compatibility option, not full 2.0.4 emulation.
+  Other readings and spaces can change; validate on representative application images before enabling.
+- Hash-checked recognition regression fixtures from #13 cover both dates, numeric punctuation, #8
+  spacing alone and with a wider companion, and the detailed character-output path. The true-en-dash
+  control remains a separately reported model limitation under both policies; this is not a general
+  punctuation-accuracy fix and no punctuation substitutions are applied.
+
 ## [2.3.0] - 2026-10-12
 
 An opt-in TensorRT execution provider for NVIDIA GPUs. Nothing changes unless it is asked for: `Auto` never

@@ -11,6 +11,17 @@ namespace PaddleOcrNet.Tests;
 /// </summary>
 public class RecognitionBatchWidthTests
 {
+    [Fact]
+    public void Compatibility_resize_rounds_up_without_changing_default_or_shape_limits()
+    {
+        Assert.False(PaddleOcrNet.Models.RecognitionOptions.Default.UseLegacyResize);
+        Assert.Equal(466, SvtrRecognizer.ComputeBatchTensorWidth(48, 437.0 / 45));
+        Assert.Equal(467, SvtrRecognizer.ComputeBatchTensorWidth(48, 437.0 / 45, true));
+        Assert.Equal(522, SvtrRecognizer.ComputeBatchTensorWidth(48, 435.0 / 40, true));
+        Assert.Equal(320, SvtrRecognizer.ComputeBatchTensorWidth(48, 1, true));
+        Assert.Equal(3200, SvtrRecognizer.ComputeBatchTensorWidth(48, 100, true));
+    }
+
     [Theory]
     [InlineData(1.0)]   // near-square crop
     [InlineData(0.2)]   // tall/narrow crop

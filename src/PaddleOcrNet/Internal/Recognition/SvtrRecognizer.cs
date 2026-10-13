@@ -13,7 +13,7 @@ namespace PaddleOcrNet.Internal.Recognition;
 /// ONNX network to per-timestep logits, then CTC-greedy-decoded against the character dictionary via
 /// <see cref="CtcDecoder"/>.
 /// <para>
-/// Preprocessing matches PaddleOCR's <c>resize_norm_img</c> (PaddleX
+/// Default preprocessing follows PaddleOCR's <c>resize_norm_img</c> (PaddleX
 /// <c>text_recognition/processors.py</c>): per batch the tensor width is
 /// <c>imgW = int(H · max_wh_ratio)</c> where <c>max_wh_ratio = max(320/H, widest crop's w/h)</c>,
 /// capped at 3200 px (crops beyond the cap are aspect-squeezed). Each crop is scaled to height
@@ -24,6 +24,8 @@ namespace PaddleOcrNet.Internal.Recognition;
 /// The batch overload sorts crops by aspect ratio (width/height) so similarly-shaped lines share a
 /// tensor with minimal padding, runs them in chunks of <c>rec_batch_num</c> (default 6), and reorders
 /// the results back to the caller's input order.
+/// <see cref="RecognitionOptions.UseLegacyResize"/> opts into bicubic resizing and ceiling-rounded
+/// batch width while retaining BGR and the tensor-width bounds.
 /// </para>
 /// <para>
 /// The network output is <c>[N, T, C]</c> (N rows, T timesteps, C = vocab classes). Each row is handed to
@@ -149,7 +151,8 @@ internal sealed class SvtrRecognizer : ITextRecognizer
             options.SpaceRecoveryThreshold,
             maxConcurrentBatches,
             BoundedParallel.ResolveDegree(options.MaxDegreeOfParallelism),
-            includeCharacters);
+            includeCharacters,
+            options.UseLegacyResize);
     }
 
     private RecognizedText[] RecognizeCore(
@@ -160,7 +163,8 @@ internal sealed class SvtrRecognizer : ITextRecognizer
         double spaceRecoveryThreshold,
         int maxConcurrentBatches,
         int maxDegreeOfParallelism,
-        bool includeCharacters)
+        bool includeCharacters,
+        bool useLegacyResize = false)
     {
         int count = crops.Count;
         var results = new RecognizedText[count];
@@ -203,11 +207,12 @@ internal sealed class SvtrRecognizer : ITextRecognizer
             int batchCountInTensor = end - start;
 
             // ratios is sorted ascending, so the batch maximum is its last element.
-            int imgW = ComputeBatchTensorWidth(_imageHeight, ratios[end - 1]);
+            int imgW = ComputeBatchTensorWidth(_imageHeight, ratios[end - 1], useLegacyResize);
 
             // Build the [N, 3, H, imgW] CHW tensor in place: each crop is resized to
-            // min(ceil(H * w/h), imgW) — the widest crop lands on the *floored* imgW, matching Python's int()
-            // truncation — and its normalized pixels are written straight into its row of the batch buffer.
+            // min(ceil(H * w/h), imgW). By default the widest crop lands on the floored imgW,
+            // matching Python's int(); compatibility mode rounds imgW up instead.
+            // Normalized pixels are written straight into each row of the batch buffer.
             // The remaining (imgW - w) columns stay zero — DenseTensor is zero-initialized.
             var tensor = new DenseTensor<float>(new[] { batchCountInTensor, 3, _imageHeight, imgW });
             Memory<float> buffer = tensor.Buffer;
@@ -217,7 +222,7 @@ internal sealed class SvtrRecognizer : ITextRecognizer
             {
                 int w = Math.Max(1, Math.Min((int)Math.Ceiling(_imageHeight * ratios[start + b]), imgW));
                 widths[b] = w;
-                WriteNormalized(crops[order[start + b]], w, imgW, buffer, b * imageStride);
+                WriteNormalized(crops[order[start + b]], w, imgW, buffer, b * imageStride, useLegacyResize);
             });
 
             // Run inference and decode each output row, scattering back to the caller's order.
@@ -282,11 +287,13 @@ internal sealed class SvtrRecognizer : ITextRecognizer
     /// </summary>
     /// <param name="imageHeight">Recognition input height (<c>rec_image_shape</c> H, typically 48).</param>
     /// <param name="widestRatio">The widest crop's width/height ratio in the batch.</param>
+    /// <param name="useLegacyResize">Round up instead of truncating for the opt-in resize compatibility policy.</param>
     /// <returns>The batch tensor width in pixels, in [320, 3200].</returns>
-    internal static int ComputeBatchTensorWidth(int imageHeight, double widestRatio)
+    internal static int ComputeBatchTensorWidth(int imageHeight, double widestRatio, bool useLegacyResize = false)
     {
         double maxWhRatio = Math.Max(MinTensorWidth / (double)imageHeight, widestRatio);
-        return Math.Min((int)(imageHeight * maxWhRatio), MaxTensorWidth);
+        double width = Math.Min(imageHeight * maxWhRatio, MaxTensorWidth);
+        return useLegacyResize ? (int)Math.Ceiling(width) : (int)width;
     }
 
     /// <summary>
@@ -295,7 +302,7 @@ internal sealed class SvtrRecognizer : ITextRecognizer
     /// <c>(x/255 − 0.5) / 0.5</c> (i.e. [−1,1]) as planar CHW <b>BGR</b> into
     /// <paramref name="buffer"/> at <paramref name="imageOffset"/>, each plane <paramref name="tensorWidth"/> wide.
     /// </summary>
-    private void WriteNormalized(Image<Rgb24> crop, int targetWidth, int tensorWidth, Memory<float> buffer, int imageOffset)
+    private void WriteNormalized(Image<Rgb24> crop, int targetWidth, int tensorWidth, Memory<float> buffer, int imageOffset, bool useLegacyResize)
     {
         int h = _imageHeight;
         int w = targetWidth;
@@ -305,7 +312,7 @@ internal sealed class SvtrRecognizer : ITextRecognizer
             Size = new Size(w, h),
             Mode = ResizeMode.Stretch,
             // Python uses cv2.resize's default INTER_LINEAR.
-            Sampler = KnownResamplers.Triangle,
+            Sampler = useLegacyResize ? KnownResamplers.Bicubic : KnownResamplers.Triangle,
         }));
 
         int planeStride = h * tensorWidth;

@@ -30,6 +30,16 @@ public sealed record RecognitionOptions
     public int BatchSize { get; init; } = 6;
 
     /// <summary>
+    /// Use bicubic recognition resizing and ceiling-rounded batch width, as in the older recognizer,
+    /// for applications affected by resize-sensitive punctuation changes after 2.0.4. Default false
+    /// retains the Python-compatible triangle/floor policy. The current BGR channel order and
+    /// 320–3200 tensor-width bounds remain in effect; this is not full 2.0.4 pipeline emulation.
+    /// Applies per call, including word boxes and space recovery. It can change other readings and
+    /// is not guaranteed to improve accuracy; validate against representative application images.
+    /// </summary>
+    public bool UseLegacyResize { get; init; }
+
+    /// <summary>
     /// Drop recognized lines whose confidence is below this threshold (0–1). PaddleOCR's
     /// <c>drop_score</c> / PaddleX's <c>text_rec_score_thresh</c>. Default 0.0 — everything is returned,
     /// matching the Python OCR pipeline. Deliberate deviation: lines whose text is empty or
