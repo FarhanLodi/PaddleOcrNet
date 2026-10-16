@@ -301,6 +301,7 @@ internal static class PdfRasterizer
     private static (RenderedPage Page, byte[]? Buffer) RenderPage(
         IDocReader reader, int pageNumber, int total, int dpi, PdfOcrOptions options, bool imagesRequired, byte[]? buffer)
     {
+        using var stage = PaddleOcrNet.Diagnostics.PaddleOcrDiagnostics.MeasureStage("pdf_render");
         // Any failure here is a document/PDFium problem, kept apart from the consumer's OCR so genuine OCR errors
         // are never mislabeled as a PDF-rendering error.
         try
@@ -328,7 +329,7 @@ internal static class PdfRasterizer
             }
 
             Image<Rgb24>? image = null;
-            if (embeddedLines is null || imagesRequired)
+            if (embeddedLines is null || imagesRequired || options.TextLayer == PdfTextLayerMode.Hybrid)
             {
                 // PDFium renders BGRA (stride = 4 x width) with a transparent background; reuse one buffer across
                 // pages and flatten onto white during the Rgb24 conversion.

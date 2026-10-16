@@ -14,6 +14,11 @@ namespace PaddleOcrNet.Structure;
 /// </summary>
 public sealed partial class StructureResult
 {
+    /// <summary>Actual preprocessing history and coordinate frame; null for externally constructed legacy results.</summary>
+    public StructureCoordinateProvenance? Coordinates { get; init; }
+    /// <summary>Original OCR lines without a reliable single layout owner, including originals split across
+    /// blocks. Retained as evidence in the same coordinate frame as blocks; not silently inserted into exports.</summary>
+    public IReadOnlyList<OcrLine> OrphanLines { get; init; } = Array.Empty<OcrLine>();
     /// <summary>
     /// The analyzed blocks, ordered by their reading-order <see cref="StructureBlock.Order"/>.
     /// </summary>
@@ -420,6 +425,8 @@ public sealed partial class StructureResult
     /// </summary>
     private StructureResultDto ToDto() => new()
     {
+        Coordinates = Coordinates,
+        OrphanLines = OrphanLines,
         SourceWidth = SourceWidth,
         SourceHeight = SourceHeight,
         Blocks = OrderedBlocks().Select(StructureBlockDto.From).ToArray(),

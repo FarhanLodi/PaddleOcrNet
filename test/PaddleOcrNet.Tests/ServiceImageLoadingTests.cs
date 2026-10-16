@@ -14,6 +14,31 @@ namespace PaddleOcrNet.Tests;
 /// </summary>
 public class ServiceImageLoadingTests
 {
+    [Theory]
+    [InlineData(true, 100_000_000)]
+    [InlineData(false, 100_000_000)]
+    [InlineData(true, 0)]
+    [InlineData(false, 0)]
+    public void Canceled_decode_preserves_cancellation_for_single_and_multi_frame_inputs(bool flatten, long maxPixels)
+    {
+        using var source = new Image<Rgb24>(8, 8);
+        byte[] png = Encode(source, (image, stream) => image.SaveAsPng(stream));
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var settings = Settings(flatten: flatten, maxPixels: maxPixels);
+
+        var single = Assert.ThrowsAny<OperationCanceledException>(() =>
+            GuardedImageLoader.LoadFirstFrame(png, settings, cancellation.Token));
+        var multiple = Assert.ThrowsAny<OperationCanceledException>(() =>
+            GuardedImageLoader.LoadAllFrames(png, settings, cancellation.Token));
+        Assert.Equal(cancellation.Token, single.CancellationToken);
+        Assert.Equal(cancellation.Token, multiple.CancellationToken);
+
+        // Cancellation is request-local: an independent decode remains usable.
+        using var decoded = GuardedImageLoader.LoadFirstFrame(png, settings);
+        Assert.Equal(8, decoded.Width);
+    }
+
     private static ImageLoadSettings Settings(bool exif = true, bool flatten = true, long maxPixels = 100_000_000)
         => new(maxPixels, exif, flatten);
 

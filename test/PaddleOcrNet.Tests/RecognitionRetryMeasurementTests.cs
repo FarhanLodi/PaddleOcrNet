@@ -1,6 +1,8 @@
 using System.Text;
+using System.Text.Json;
 using PaddleOcrNet.Models;
 using PaddleOcrNet.Services;
+using PaddleOcrNet.Tests.Evaluation;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -35,6 +37,54 @@ public sealed class RecognitionRetryMeasurementTests
     private readonly ITestOutputHelper _out;
 
     public RecognitionRetryMeasurementTests(ITestOutputHelper output) => _out = output;
+
+    /// <summary>
+    /// Set PADDLEOCRNET_RETRY_MANIFEST to a JSON file with datasetRevision and pages:
+    /// each page has id, imagePath (relative to the manifest), reference and criticalTokens.
+    /// References are full page transcriptions; counts below classify pages, not OCR lines.
+    /// Explicit requests fail for missing labels/images or a disabled integration gate.
+    /// </summary>
+    [SkippableFact]
+    public async Task Labeled_retry_reports_corrections_damage_and_critical_token_regressions()
+    {
+        string? manifestPath = Environment.GetEnvironmentVariable("PADDLEOCRNET_RETRY_MANIFEST");
+        Skip.If(manifestPath is null, "Set PADDLEOCRNET_RETRY_MANIFEST for labeled retry evaluation.");
+        Assert.False(string.IsNullOrWhiteSpace(manifestPath), "Retry manifest path cannot be empty.");
+        var manifest = RetryEvaluation.Load(manifestPath!);
+        Assert.True(IntegrationEnabled, $"Labeled retry evaluation requested; set {Gate}=1 to run models.");
+
+        using var service = new PaddleOcrService();
+        var baseline = RecognitionOptions.Default with { Grouping = TextGrouping.Word };
+        var retry = baseline with { RetryBelowConfidence = Threshold };
+        var scores = new List<RetryPageScore>();
+        foreach (var page in manifest.Pages)
+        {
+            var before = await service.ExtractTextFromImage(page.ImagePath, new[] { OcrLanguage.English }, baseline);
+            var after = await service.ExtractTextFromImage(page.ImagePath, new[] { OcrLanguage.English }, retry);
+            scores.Add(RetryEvaluation.Score(page.Id, page.Reference, before.FullText, after.FullText, page.CriticalTokens));
+        }
+        var summary = RetryEvaluation.Summarize(scores);
+        string report = JsonSerializer.Serialize(new
+        {
+            manifest.DatasetRevision,
+            RetryThreshold = Threshold,
+            Unit = "page",
+            CorrectedDefinition = "fewer raw Unicode scalar edits; not necessarily exact",
+            CriticalTokenDefinition = "exact bounded occurrences, capped to reference count",
+            TranscriptionScorer.Normalization,
+            Summary = summary,
+            Pages = scores,
+        }, new JsonSerializerOptions { WriteIndented = true });
+        _out.WriteLine(report);
+        string? dir = Environment.GetEnvironmentVariable("PADDLEOCRNET_GOLDEN_DIR");
+        if (dir is not null)
+        {
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(Path.Combine(dir, "retry-labeled-measurement.json"), report);
+        }
+        Assert.True(summary.Damaged == 0 && summary.CriticalTokensLost == 0,
+            $"Retry damage gate failed: {summary.Damaged} damaged pages; {summary.CriticalTokensLost} critical tokens lost.");
+    }
 
     [SkippableFact]
     public async Task Retry_only_polishes_weak_lines_and_never_loses_an_anchor()

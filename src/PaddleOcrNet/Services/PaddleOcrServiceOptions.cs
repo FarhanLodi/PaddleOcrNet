@@ -16,6 +16,14 @@ public sealed class PaddleOcrServiceOptions
     public string? ModelCachePath { get; set; }
 
     /// <summary>
+    /// Maximum recognizer sessions resident in this service, including loading and in-use sessions.
+    /// Zero retains all loaded packs. Positive limits evict least-recently-used idle packs; requests
+    /// wait cancellably when every slot is busy. This is a count, not a byte/process-memory limit,
+    /// and excludes other model types. Small limits can repeatedly reload multilingual Auto packs.
+    /// </summary>
+    public int MaxResidentRecognizers { get; set; }
+
+    /// <summary>
     /// Reject an image whose decoded pixel count (width × height) exceeds this value, checked from the
     /// image header <b>before</b> the pixels are decoded into memory when loading from a file, stream, or
     /// byte buffer. Guards against decompression-bomb / pixel-flood denial of service when OCR-ing
@@ -169,6 +177,7 @@ public sealed class PaddleOcrServiceOptions
     /// </summary>
     internal PaddleEngineOptions ToEngineOptions()
     {
+        ArgumentOutOfRangeException.ThrowIfNegative(MaxResidentRecognizers);
         var provider = ExecutionProvider;
         // UseGpu is shorthand for "force CUDA". Honor it unless the caller picked an explicit provider;
         // Auto (the default) and the legacy Cpu value both defer to it.
@@ -180,6 +189,7 @@ public sealed class PaddleOcrServiceOptions
         return new PaddleEngineOptions
         {
             ModelCachePath = string.IsNullOrWhiteSpace(ModelCachePath) ? null : Path.GetFullPath(ModelCachePath),
+            MaxResidentRecognizers = MaxResidentRecognizers,
             ExecutionProvider = provider,
             DeviceId = DeviceId,
             DetectionModel = DetectionModel,

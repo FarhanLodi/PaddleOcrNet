@@ -54,6 +54,8 @@ internal static class EmbeddedTextLayer
     /// </summary>
     public static List<OcrLine>? SelectLines(IReadOnlyList<PdfTextChar> chars, PdfTextLayerMode mode, int pageWidth, int pageHeight)
     {
+        if (mode == PdfTextLayerMode.Hybrid)
+            return BuildLines(chars).Where(l => HybridTextLayer.IsReliable(l, pageWidth, pageHeight)).ToList();
         if (mode == PdfTextLayerMode.Ignore || !PassesQualityGate(chars)) return null;
         var lines = BuildLines(chars);
         if (mode == PdfTextLayerMode.Auto && CoverageRatio(lines, pageWidth, pageHeight) < MinAutoCoverage) return null;

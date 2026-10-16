@@ -157,12 +157,17 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
         // entirely and analyze the original image in place.
         Image<Rgb24> page = image;
         Image<Rgb24>? owned = null;
+        int appliedRotation = 0;
+        bool appliedUnwarp = false;
+        var orphanLines = new List<OcrLine>();
         try
         {
             if (options.UseDocOrientation || options.UseUnwarp)
             {
                 var preprocessor = await GetOrLoadPreprocessorAsync(options.UseDocOrientation, options.UseUnwarp, ct).ConfigureAwait(false);
                 var preprocessed = preprocessor.Apply(image, options.UseDocOrientation, options.UseUnwarp);
+                appliedRotation = preprocessed.RotationApplied;
+                appliedUnwarp = preprocessed.UnwarpApplied;
                 page = preprocessed.Image;
                 if (preprocessed.OwnsImage) owned = preprocessed.Image;
                 _logger?.LogInformation("Document pre-processing applied (rotation={Rotation} deg).", preprocessed.RotationApplied);
@@ -173,7 +178,9 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
             // Detect at the LOWEST floor any class may keep (per-class floors can sit below the global
             // threshold, e.g. paragraph_title 0.3); LayoutPostProcessor.Apply then re-thresholds each
             // candidate at its exact class floor.
-            var detected = layoutDetector.Detect(page, LayoutPostProcessor.DetectionScoreFloor(options));
+            IReadOnlyList<LayoutRegion> detected;
+            using (PaddleOcrNet.Diagnostics.PaddleOcrDiagnostics.MeasureStage("layout"))
+                detected = layoutDetector.Detect(page, LayoutPostProcessor.DetectionScoreFloor(options));
 
             // The detectors emit a fixed top-k of candidates with no NMS, so the same area of the page is
             // routinely proposed several times under different labels. Clean that up (and apply the optional
@@ -244,7 +251,7 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
                 // ---- layout found nothing: synthesize one text block per OCR line --------------------
                 if (n == 0)
                 {
-                    return BuildResultFromOcrOnly(pageLines, options, page.Width, page.Height);
+                    return WithCoordinates(BuildResultFromOcrOnly(pageLines, options, page.Width, page.Height));
                 }
 
                 // ---- (5) OCR-line → block matching (incl. hurdle re-recognition) ---------------------
@@ -261,7 +268,11 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
                 {
                     ct.ThrowIfCancellationRequested();
                     double lineArea = line.BoundingBox.Width * line.BoundingBox.Height;
-                    if (lineArea <= 0) continue;
+                    if (!double.IsFinite(lineArea) || lineArea <= 0)
+                    {
+                        orphanLines.Add(line);
+                        continue;
+                    }
 
                     int best = -1;
                     double bestRatio = 0;
@@ -289,6 +300,9 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
                     }
                     else if (overlapping is { Count: >= 2 })
                     {
+                        // Keep the source reading even when fragments succeed: no single block owns the
+                        // complete original and failed/partial fragment recovery must not erase evidence.
+                        orphanLines.Add(line);
                         // "Hurdle" line straddling several blocks: crop the line's intersection with each
                         // block and re-recognize each fragment so every block gets its own share of the text.
                         foreach (int i in overlapping)
@@ -304,7 +318,10 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
                     {
                         (matchedLines[best] ??= new List<OcrLine>()).Add(line);
                     }
-                    // else: unowned line (inside a vision region or on empty ground) — dropped, matching Python.
+                    else
+                    {
+                        orphanLines.Add(line);
+                    }
                 }
 
                 // ---- formula splicing: inline formulas become spans of their owning block ------------
@@ -403,7 +420,7 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
                 }
 
                 // ---- (7) reading order + result ------------------------------------------------------
-                return AssembleResult(entries, options, page.Width, page.Height);
+                return WithCoordinates(AssembleResult(entries, options, page.Width, page.Height));
             }
             finally
             {
@@ -414,6 +431,17 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
         {
             owned?.Dispose();
         }
+
+        StructureResult WithCoordinates(StructureResult result) => new()
+        {
+            Blocks = result.Blocks, SourceWidth = result.SourceWidth, SourceHeight = result.SourceHeight,
+            OrphanLines = orphanLines.ToArray(),
+            Coordinates = new StructureCoordinateProvenance
+            {
+                OriginalWidth = image.Width, OriginalHeight = image.Height,
+                RotationApplied = appliedRotation, NonlinearDewarpApplied = appliedUnwarp,
+            },
+        };
     }
 
     /// <summary>
@@ -570,6 +598,7 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
         Image<Rgb24> page, LayoutRegion region, IReadOnlyList<OcrLine> matchedLines,
         StructureOptions options, CancellationToken ct)
     {
+        using var stage = PaddleOcrNet.Diagnostics.PaddleOcrDiagnostics.MeasureStage("table");
         var rect = ClampToImage(region.Bounds, page.Width, page.Height);
         if (rect.Width < MinRegionPx || rect.Height < MinRegionPx)
         {
@@ -682,7 +711,7 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
             {
                 using var crop = page.Clone(ctx => ctx.Crop(rect));
                 var recognizer = await GetOrLoadSealRecognizerAsync(options, ct).ConfigureAwait(false);
-                var sealLines = recognizer.Recognize(crop);
+                var sealLines = recognizer.Recognize(crop, ct);
 
                 // The curved-text path can come back empty on a seal it cannot rectify.
                 // Falling back to the shared text recognizer is a reasonable compromise: it will at least recover the text in a straight line, even if the bounding polygon is not curved.
@@ -777,6 +806,7 @@ internal sealed class PaddleStructureEngine : IAsyncDisposable
         Image<Rgb24> page, IReadOnlyList<LayoutRegion> regions, List<int> formulaIndices,
         string?[] formulaLatex, CancellationToken ct)
     {
+        using var stage = PaddleOcrNet.Diagnostics.PaddleOcrDiagnostics.MeasureStage("formula");
         var formulaRecognizer = await GetOrLoadFormulaRecognizerAsync(ct).ConfigureAwait(false);
         foreach (int i in formulaIndices)
         {

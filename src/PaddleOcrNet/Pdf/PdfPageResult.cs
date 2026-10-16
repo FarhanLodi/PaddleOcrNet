@@ -37,4 +37,23 @@ public sealed record PdfPageResult
     /// Whether the text came from OCR or from the PDF's embedded text layer. Default <see cref="PdfPageSource.Ocr"/>.
     /// </summary>
     public PdfPageSource Source { get; init; } = PdfPageSource.Ocr;
+
+    /// <summary>Hybrid selection evidence, in the same order as <see cref="Ocr"/> lines.</summary>
+    public IReadOnlyList<PdfLineEvidence> LineEvidence { get; init; } = Array.Empty<PdfLineEvidence>();
+
+    /// <summary>Canonical coordinates: rendered page pixels, origin at top left, X right and Y down.
+    /// Plain OCR with an unavailable nonlinear source mapping instead declares dewarped-page-pixels.
+    /// PDFium applies PDF page rotation and crop geometry before extraction; multiply source pixels by 72/Dpi
+    /// to obtain points on that rendered page, not the original PDF user-space coordinates.</summary>
+    public string CoordinateFrame => Ocr.Coordinates is { SourceMappingAvailable: false }
+        ? "dewarped-page-pixels" : "rendered-page-pixels";
+
+    /// <summary>Union area of valid native line rectangles divided by rendered page area; populated in Hybrid mode.</summary>
+    public double NativeCoverageRatio { get; init; }
+
+    /// <summary>
+    /// True when uncovered-only Hybrid scheduling selected native text without a full-page visual recognition
+    /// pass. Native text may be wrong despite valid Unicode and geometry. False is not an accuracy guarantee.
+    /// </summary>
+    public bool NativeTextVisualVerificationSkipped { get; init; }
 }

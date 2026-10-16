@@ -70,4 +70,37 @@ public static class PaddleOcrDiagnostics
 
     internal static readonly Counter<long> ModelDownloadBytes =
         Meter.CreateCounter<long>("paddleocr.model.download_bytes", unit: "By", description: "Bytes downloaded for model assets.");
+
+    internal static readonly Histogram<double> StageDuration =
+        Meter.CreateHistogram<double>("paddleocr.stage.duration", unit: "ms", description: "Stage wall-clock duration, including failed stages.");
+
+    internal static readonly Histogram<long> RecognitionTensorBytes =
+        Meter.CreateHistogram<long>("paddleocr.recognition.tensor_bytes", unit: "By", description: "Input tensor bytes per recognition batch; excludes output and native allocations.");
+
+    internal static readonly Histogram<double> RecognitionPadding =
+        Meter.CreateHistogram<double>("paddleocr.recognition.padding_fraction", description: "Fraction of recognition input pixels used for right padding.");
+
+    // Stage names are library constants, never document content or paths.
+    internal static StageScope MeasureStage(string stage) => new(stage);
+
+    internal readonly struct StageScope : IDisposable
+    {
+        private readonly string _stage;
+        private readonly long _started;
+        private readonly Activity? _activity;
+        internal StageScope(string stage)
+        {
+            _stage = stage;
+            _started = StageDuration.Enabled ? Stopwatch.GetTimestamp() : 0;
+            _activity = ActivitySource.HasListeners() ? ActivitySource.StartActivity("paddleocr.stage." + stage) : null;
+        }
+
+        public void Dispose()
+        {
+            if (_started != 0)
+                StageDuration.Record(Stopwatch.GetElapsedTime(_started).TotalMilliseconds,
+                    new KeyValuePair<string, object?>("stage", _stage));
+            _activity?.Dispose();
+        }
+    }
 }

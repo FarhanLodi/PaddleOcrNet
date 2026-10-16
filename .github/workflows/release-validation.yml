@@ -1,0 +1,64 @@
+name: Release validation (explicit model downloads)
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_cuda:
+        description: 'Run CPU/CUDA parity on a provisioned self-hosted CUDA runner'
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  model-integration:
+    runs-on: windows-2022
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Run reproducible bounded groups
+        shell: pwsh
+        run: ./tools/validation/Run-IntegrationGroups.ps1 -ClassesPerGroup 4 -TimeoutSeconds 1200
+      - name: Upload logs, group manifest and TRX
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-model-integration
+          path: artifacts/integration-groups
+          if-no-files-found: error
+
+  cuda-parity:
+    if: ${{ inputs.run_cuda }}
+    # The runner owner supplies NVIDIA driver and the CUDA/cuDNN dependencies required by pinned ORT.
+    # Merely installing the NuGet GPU package is not a CUDA validation environment.
+    runs-on: [self-hosted, linux, x64, cuda]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Record actual accelerator
+        shell: bash
+        run: |
+          mkdir -p artifacts/gpu-parity
+          nvidia-smi > artifacts/gpu-parity/nvidia-smi.txt
+      - name: Require actual CUDA execution and compare CPU output
+        shell: bash
+        run: |
+          dotnet run --project test/PaddleOcrNet.GpuParity/PaddleOcrNet.GpuParity.csproj -c Release -- benchmarks/gpu-parity/manifest.json artifacts/gpu-parity 2>&1 | tee artifacts/gpu-parity/console.log
+      - name: Upload parity evidence (including failures)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-cuda-parity
+          path: |
+            artifacts/gpu-parity/*.json
+            artifacts/gpu-parity/*.log
+            artifacts/gpu-parity/*.txt
+          if-no-files-found: error

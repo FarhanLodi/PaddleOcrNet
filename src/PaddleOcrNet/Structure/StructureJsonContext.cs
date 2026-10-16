@@ -12,6 +12,9 @@ namespace PaddleOcrNet.Structure;
 [JsonSerializable(typeof(StructureResultDto))]
 [JsonSerializable(typeof(StructureBlockDto))]
 [JsonSerializable(typeof(IReadOnlyList<StructureBlockDto>))]
+[JsonSerializable(typeof(DocumentStructure))]
+[JsonSerializable(typeof(DocumentTableView))]
+[JsonSerializable(typeof(DocumentVerificationReport))]
 internal partial class StructureJsonContext : JsonSerializerContext
 {
     /// <summary>

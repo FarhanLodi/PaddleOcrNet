@@ -23,4 +23,10 @@ public enum PdfTextLayerMode
     /// page area. That catches scanned pages carrying only a small digital stamp, header or footer line.
     /// </summary>
     Auto = 2,
+
+    /// <summary>
+    /// Reconcile valid native lines with visual OCR in page pixel coordinates. Preserves conflicting readings
+    /// in per-line evidence. Currently renders and OCRs the full page to detect missing or incorrect native text.
+    /// </summary>
+    Hybrid = 3,
 }

@@ -1,5 +1,6 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using PaddleOcrNet.Internal.Classification;
+using PaddleOcrNet.Diagnostics;
 using PaddleOcrNet.Internal.Detection;
 using PaddleOcrNet.Internal.Geometry;
 using PaddleOcrNet.Internal.Recognition;
@@ -64,12 +65,12 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
     private volatile bool _docPreprocessorUnavailable;
     private readonly SemaphoreSlim _docPreprocessorLock = new(1, 1);
 
-    private readonly ConcurrentDictionary<string, Lazy<Task<ITextRecognizer>>> _recognizers =
-        new(StringComparer.OrdinalIgnoreCase);
+    private readonly LeasedResourceCache<ITextRecognizer> _recognizers;
 
     public PaddleOcrEngine(PaddleEngineOptions options, ILogger? logger)
     {
         _options = options;
+        _recognizers = new LeasedResourceCache<ITextRecognizer>(options.MaxResidentRecognizers);
         _logger = logger;
         ResolvedProvider = ExecutionProviderResolver.Resolve(options.ExecutionProvider, logger);
         // BuildSessionOptionsWithStatus reports whether the accelerator actually attached: when the
@@ -133,7 +134,7 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
     /// <c>AppliedRotation</c> is the clockwise rotation that was applied to upright the page (0 when none).
     /// </para>
     /// </summary>
-    public async Task<(IReadOnlyList<OcrLine> Lines, IReadOnlyList<string> DetectedLanguages, int AppliedRotation)> RecognizeWithDetectedLanguagesAsync(
+    public async Task<(IReadOnlyList<OcrLine> Lines, IReadOnlyList<string> DetectedLanguages, int AppliedRotation, bool UnwarpApplied)> RecognizeWithDetectedLanguagesAsync(
         Image<Rgb24> image,
         IReadOnlyList<string> languages,
         RecognitionOptions options,
@@ -142,10 +143,12 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
         Image<Rgb24> page = image;
         Image<Rgb24>? owned = null;
         int appliedRotation = 0;
+        bool unwarpApplied = false;
         try
         {
             if (options.UseDocOrientation || options.UseDocUnwarp)
             {
+                using var preprocessingStage = PaddleOcrDiagnostics.MeasureStage("document_preprocess");
                 var preprocessor = await GetOrLoadDocPreprocessorAsync(
                     options.UseDocOrientation, options.UseDocUnwarp, cancellationToken).ConfigureAwait(false);
                 if (preprocessor is not null)
@@ -156,6 +159,7 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
                     page = preprocessed.Image;
                     if (preprocessed.OwnsImage) owned = preprocessed.Image;
                     appliedRotation = preprocessed.RotationApplied;
+                    unwarpApplied = preprocessed.UnwarpApplied;
                     if (appliedRotation != 0)
                     {
                         _logger?.LogInformation("Document orientation: page rotated {Deg}° clockwise to upright.", appliedRotation);
@@ -164,9 +168,11 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
             }
 
             var detector = await GetOrLoadDetectorAsync(cancellationToken).ConfigureAwait(false);
-            var quads = detector.Detect(page, options.Detection);
+            IReadOnlyList<TextQuad> quads;
+            using (PaddleOcrDiagnostics.MeasureStage("detection"))
+                quads = detector.Detect(page, options.Detection);
             _logger?.LogInformation("DB detector located {Count} text regions", quads.Count);
-            if (quads.Count == 0) return (Array.Empty<OcrLine>(), Array.Empty<string>(), appliedRotation);
+            if (quads.Count == 0) return (Array.Empty<OcrLine>(), Array.Empty<string>(), appliedRotation, unwarpApplied);
 
             // Optional de-duplication of overlapping detections. Off by default (NmsIouThreshold 0 makes
             // Reduce a no-op) — Python performs no post-detection NMS, and axis-aligned IoU can delete
@@ -184,7 +190,7 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
             {
                 lines = OrientationMapper.MapLinesToOriginalFrame(lines, appliedRotation, page.Width, page.Height);
             }
-            return (lines, detected, appliedRotation);
+            return (lines, detected, appliedRotation, unwarpApplied);
         }
         finally
         {
@@ -215,7 +221,9 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         var detector = await GetOrLoadDetectorAsync(cancellationToken).ConfigureAwait(false);
-        var quads = detector.Detect(image, detection);
+        IReadOnlyList<TextQuad> quads;
+        using (PaddleOcrDiagnostics.MeasureStage("detection"))
+            quads = detector.Detect(image, detection);
         if (quads.Count == 0) return Array.Empty<DetectedRegion>();
 
         var polygons = BoxNms.Reduce(quads.Select(q => q.ToOcrPoints()).ToArray(), detection.NmsIouThreshold);
@@ -517,8 +525,8 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
             return await RecognizeAutoAsync(crops, options, detectedLanguagesSink, concurrency, withWords, cancellationToken).ConfigureAwait(false);
         }
 
-        var recognizer = await GetOrLoadRecognizerAsync(fixedPack!, cancellationToken).ConfigureAwait(false);
-        return ApplyPackPostProcessing(fixedPack!, recognizer.RecognizeDetailed(crops, options, concurrency, withWords));
+        using var recognizer = await GetOrLoadRecognizerAsync(fixedPack!, cancellationToken).ConfigureAwait(false);
+        return ApplyPackPostProcessing(fixedPack!, recognizer.Value.RecognizeDetailed(crops, options, concurrency, withWords, cancellationToken));
     }
 
     /// <summary>
@@ -807,16 +815,43 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
             ? options.AutoDetectCandidates
             : DefaultAutoDetectCandidates;
         var candidatePacks = ResolveOrderedPacks(candidateCodes);
+        var routingOptions = options.AutoRouting;
+        if (routingOptions is not null)
+            candidatePacks = AutoRoutingPolicy.ResolveActualCandidates(candidatePacks, _options.RecognitionModel);
+        if (routingOptions is { MaxCandidatePacks: < 0 })
+            throw new ArgumentOutOfRangeException(nameof(options.AutoRouting), "Candidate budget must be nonnegative.");
+        int availableCandidates = candidatePacks.Count;
+        if (routingOptions is { MaxCandidatePacks: > 0 })
+            candidatePacks = candidatePacks.Take(routingOptions.MaxCandidatePacks).ToArray();
+        var calibration = routingOptions?.Calibration;
+        bool calibrated = calibration is { Count: > 0 };
+        if (calibrated)
+        {
+            AutoRoutingPolicy.ValidateCalibration(candidatePacks, calibration!,
+                !string.IsNullOrEmpty(_options.RecognitionModelPath));
+        }
+        using var routing = PaddleOcrDiagnostics.ActivitySource.StartActivity("paddleocr.auto_routing");
+        routing?.SetTag("ocr.candidate_count", candidatePacks.Count);
+        routing?.SetTag("ocr.crop_count", crops.Count);
+        routing?.SetTag("ocr.confidence_calibrated", calibrated);
+        if (routingOptions is not null)
+        {
+            routing?.SetTag("ocr.available_candidate_count", availableCandidates);
+            routing?.SetTag("ocr.candidate_budget_exhausted", candidatePacks.Count < availableCandidates);
+        }
         if (candidatePacks.Count == 0)
         {
+            routing?.SetTag("ocr.selection_reason", "no_candidates_default_fallback");
+            routing?.SetTag("ocr.evaluated_count", 1);
             // No candidate resolved: fall back to the default recognizer so we still return readings.
-            var fallback = await GetOrLoadRecognizerAsync(PaddleModelRegistry.MobileRecognizer, cancellationToken).ConfigureAwait(false);
-            return fallback.RecognizeDetailed(crops, options, concurrency, withWords);
+            using var fallback = await GetOrLoadRecognizerAsync(PaddleModelRegistry.MobileRecognizer, cancellationToken).ConfigureAwait(false);
+            return fallback.Value.RecognizeDetailed(crops, options, concurrency, withWords, cancellationToken);
         }
 
         int n = crops.Count;
         var best = new RecognizedText[n];
         var bestPack = new RecognizerPack?[n];
+        var bestScores = new double[n];
         // Per-pack tally of crops won, weighted by the winning confidence — the detection vote.
         var packScore = new Dictionary<string, double>(StringComparer.Ordinal);
 
@@ -824,19 +859,24 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
             var pack = candidatePacks[p];
-            var recognizer = await GetOrLoadRecognizerAsync(pack, cancellationToken).ConfigureAwait(false);
-            var readings = ApplyPackPostProcessing(pack, recognizer.RecognizeDetailed(crops, options, concurrency, withWords));
+            routing?.SetTag("ocr.evaluated_count", p + 1);
+            using var recognizer = await GetOrLoadRecognizerAsync(pack, cancellationToken).ConfigureAwait(false);
+            var readings = ApplyPackPostProcessing(pack, recognizer.Value.RecognizeDetailed(crops, options, concurrency, withWords, cancellationToken));
 
             double confSum = 0;
             for (int i = 0; i < n && i < readings.Count; i++)
             {
                 var reading = readings[i];
                 confSum += reading.Confidence;
+                double score = calibrated ? calibration![pack.Name].Map(reading.Confidence) : reading.Confidence;
+                // A recognizer's empty output is missing evidence, regardless of its reported score.
+                if (routingOptions is not null && string.IsNullOrWhiteSpace(reading.Text)) score = -1;
                 // Keep this pack's reading for crop i if it beats the best so far (or is the first reading).
-                if (bestPack[i] is null || reading.Confidence > best[i].Confidence)
+                if (bestPack[i] is null || score > bestScores[i])
                 {
                     best[i] = reading;
                     bestPack[i] = pack;
+                    bestScores[i] = score;
                 }
             }
 
@@ -844,7 +884,8 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
             // and the page is dominantly Latin/CJK — avoids downloading the remaining candidate models.
             // IsDefaultRecognizerPack (not a mobile-name check) so the server-variant substitution
             // (RecognitionModel == Server) keeps the fast path alive.
-            if (p == 0 && IsDefaultRecognizerPack(pack) && n > 0)
+            if (p == 0 && IsDefaultRecognizerPack(pack) && n > 0
+                && routingOptions?.EvaluateAllCandidates != true && !calibrated)
             {
                 double meanConf = confSum / n;
                 string combined = string.Concat(readings.Take(n).Select(r => r.Text));
@@ -853,6 +894,8 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
                     or DetectedScript.Kana or DetectedScript.Hangul;
                 if (meanConf >= AutoFastPathConfidence && latinOrCjk)
                 {
+                    routing?.SetTag("ocr.selection_reason", "default_confidence_script_fast_path");
+                    routing?.SetTag("ocr.selected_pack", pack.Name);
                     // Report the script the default pack actually read (latin/ch/japan/korean), which is more
                     // informative than the pack's first registered code.
                     if (detectedLanguagesSink is not null)
@@ -874,7 +917,7 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
         {
             var pack = bestPack[i];
             if (pack is null) continue;
-            packScore[pack.Name] = packScore.GetValueOrDefault(pack.Name) + best[i].Confidence;
+            packScore[pack.Name] = packScore.GetValueOrDefault(pack.Name) + Math.Max(0, bestScores[i]);
         }
 
         // Report the winning language(s): packs that actually won crops, ordered by weighted score (most
@@ -885,6 +928,8 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
             .Select(pk => (pk, packScore[pk.Name]))
             .ToArray();
         AppendDetectedLanguages(detectedLanguagesSink, ranked);
+        routing?.SetTag("ocr.selection_reason", calibrated ? "calibrated_per_crop_sweep" : "raw_confidence_per_crop_sweep");
+        routing?.SetTag("ocr.winning_pack_count", ranked.Length);
 
         if (ranked.Length > 0)
         {
@@ -940,7 +985,6 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
     {
         var warmDetector = await GetOrLoadDetectorAsync(cancellationToken).ConfigureAwait(false);
         IAngleClassifier? warmClassifier = null;
-        var warmRecognizers = new List<ITextRecognizer>();
         // RecognitionOptions.UseTextLineOrientation defaults to true (the Python pipeline default), so the
         // classifier participates in a default recognition call unless the service-level option turned it
         // off — pre-load it whenever a default call would bring it in.
@@ -954,14 +998,15 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
         {
             await GetOrLoadDocPreprocessorAsync(needOrientation: true, needUnwarp: false, cancellationToken).ConfigureAwait(false);
         }
+        Detection.ModelWarmUp.Run(warmDetector, warmClassifier, Array.Empty<ITextRecognizer>(), _logger);
         foreach (var pack in ResolvePacks(languages))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            warmRecognizers.Add(await GetOrLoadRecognizerAsync(pack, cancellationToken).ConfigureAwait(false));
+            using var recognizer = await GetOrLoadRecognizerAsync(pack, cancellationToken).ConfigureAwait(false);
+            Detection.ModelWarmUp.Run(null, null, new[] { recognizer.Value }, _logger);
         }
         // Loading a session does not run it: one dummy inference per model moves kernel selection and
         // arena growth out of the first real request.
-        Detection.ModelWarmUp.Run(warmDetector, warmClassifier, warmRecognizers, _logger);
     }
 
     /// <summary>
@@ -970,10 +1015,11 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
     /// the structure subsystem (e.g. the seal recognizer) so it reuses the one cached recognizer session
     /// rather than loading its own. The returned recognizer is owned by this engine and disposed by it.
     /// </summary>
-    public Task<ITextRecognizer> GetSharedRecognizerAsync(IReadOnlyList<string> languages, CancellationToken cancellationToken)
+    public async Task<ITextRecognizer> GetSharedRecognizerAsync(IReadOnlyList<string> languages, CancellationToken cancellationToken)
     {
         var pack = ResolvePacks(languages).FirstOrDefault() ?? PaddleModelRegistry.MobileRecognizer;
-        return GetOrLoadRecognizerAsync(pack, cancellationToken);
+        using var warmLease = await GetOrLoadRecognizerAsync(pack, cancellationToken).ConfigureAwait(false);
+        return new LeasedTextRecognizer(ct => GetOrLoadRecognizerAsync(pack, ct));
     }
 
     /// <summary>
@@ -1226,39 +1272,13 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
         return pack;
     }
 
-    private async Task<ITextRecognizer> GetOrLoadRecognizerAsync(RecognizerPack pack, CancellationToken cancellationToken)
+    private Task<LeasedResourceCache<ITextRecognizer>.Lease> GetOrLoadRecognizerAsync(RecognizerPack pack, CancellationToken cancellationToken)
     {
-        // Honor the server-variant substitution before touching the cache so the substituted pack is
-        // both what gets loaded and what keys the cache entry.
         pack = ApplyRecognitionVariant(pack);
-
-        // The load Task is shared across all callers, so it must NOT capture any single caller's
-        // CancellationToken — otherwise the first caller cancelling would poison the cached Task and
-        // every later caller (with a live token) would observe that cancellation. Load with None and
-        // let each caller observe only its own token via WaitAsync.
-        var lazy = _recognizers.GetOrAdd(pack.Name, _ => new Lazy<Task<ITextRecognizer>>(
-            () => LoadRecognizerAsync(pack, CancellationToken.None),
-            LazyThreadSafetyMode.ExecutionAndPublication));
-
-        var loadTask = lazy.Value;
-        try
-        {
-            return await loadTask.WaitAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch
-        {
-            // If the shared load itself failed (download/IO/corrupt model), evict the poisoned entry so a
-            // later call retries instead of being served the cached faulted Task forever. A per-caller
-            // cancellation leaves a still-running/successful task in place, so only the genuine fault path
-            // evicts. TryRemove(pair) is a CAS: it removes only when the value is still this exact Lazy.
-            if (loadTask.IsFaulted)
-            {
-                _recognizers.TryRemove(new KeyValuePair<string, Lazy<Task<ITextRecognizer>>>(pack.Name, lazy));
-            }
-            throw;
-        }
+        // Shared loads are independent of any caller's token. Leases cover awaiting the load as well
+        // as inference, so neither eviction nor shutdown can dispose an in-use native session.
+        return _recognizers.AcquireAsync(pack.Name, () => LoadRecognizerAsync(pack, CancellationToken.None), cancellationToken);
     }
-
     private async Task<ITextRecognizer> LoadRecognizerAsync(RecognizerPack pack, CancellationToken cancellationToken)
     {
         string modelPath;
@@ -1426,15 +1446,7 @@ internal sealed class PaddleOcrEngine : IAsyncDisposable
         _docPreprocessor?.Dispose();
         _docPreprocessor = null;
 
-        foreach (var entry in _recognizers.Values)
-        {
-            if (entry.IsValueCreated)
-            {
-                try { (await entry.Value.ConfigureAwait(false)).Dispose(); }
-                catch { /* dispose best-effort */ }
-            }
-        }
-        _recognizers.Clear();
+        await _recognizers.DisposeAsync().ConfigureAwait(false);
         _sessionOptions.Dispose();
         _cpuFallbackSessionOptions?.Dispose();
     }

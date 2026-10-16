@@ -4,10 +4,48 @@ All notable changes to PaddleOcrNet are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.3.1] - Unreleased
+## [2.4.0] - 2026-10-16
+
+This minor release adds opt-in OCR routing, recovery and document-processing APIs, upgrades
+EasyImageSharp to 1.2.0, and bounds streaming results. Both `PaddleOcrNet` and `PaddleOcrNet.Gpu`
+use version 2.4.0. Existing recognition and PDF defaults remain compatible; new quality metadata
+does not turn raw model confidence into a correctness probability.
 
 ### Added
 
+- Native [DOCX/XLSX/PPTX inputs](docs/office-input.md) in the existing package, with bounded ZIP/XML
+  parsing, source-part sections, native paragraphs/tables/cells and optional guarded embedded-image OCR.
+  Workbook values remain raw cached values; formulas are not evaluated, external links are not fetched,
+  and image OCR coordinates stay local to the image rather than claiming rendered Office geometry.
+- Opt-in [advanced OCR APIs](docs/advanced-ocr-usage.md): bounded candidate routing with model-bound
+  calibration, long-line segmentation, recognition tensor budgets and coordinate provenance.
+- Bounded document recovery with image diagnostics, missing-region rescans, review reasons and
+  preserved alternatives; explicit normalized text/HTML views retain the original text and change log.
+- Hybrid PDF native/OCR fusion with conflict evidence, searchable output and an explicit
+  uncovered-region recognition mode that declares skipped native-text verification.
+- Multi-page structure assembly and caller-confirmed table views retaining source rows, merged
+  cells and repeated-header omission evidence.
+- [Document relationship verification](docs/relationship-verification.md) with caller-bound exact-text
+  and decimal-total rules, bounded review/reread requests, raw readings and source-generated report JSON.
+  Contradictions never rewrite values; explicit decimal culture, overflow and precision checks prevent
+  silent rounding or guesses about labels, currencies and grouping separators.
+- Opt-in [recognizer residency limits](docs/recognizer-residency.md) through
+  `PaddleOcrServiceOptions.MaxResidentRecognizers`: count loading and active sessions, evict idle LRU
+  recognizers and wait cancellably when all slots are leased. Zero retains the unlimited cache.
+  This limits recognizer counts, not total native memory or detector/layout/specialist residency.
+- Opt-in `RecognitionOptions.ReuseTensorBuffers` reuses bounded call-local float workspaces across
+  recognition batches. Active tensor storage, including padding, is cleared before reuse; workspaces
+  are released after concurrent batches finish. No storage persists across requests, and the default
+  allocation policy remains unchanged. See [recognition bounds](docs/recognition-advancements.md).
+- [Grouped validation runner](tools/validation/Run-IntegrationGroups.ps1) and
+  [release-validation workflow](.github/workflows/release-validation.yml), with
+  [Native AOT smoke](test/PaddleOcrNet.AotSmoke) and [CUDA parity](test/PaddleOcrNet.GpuParity)
+  commands, prerequisite checks and report artifacts. The [validation matrix](docs/support-validation-matrix.md)
+  distinguishes completed checks from unavailable toolchains/providers; tooling availability alone
+  does not establish a successful Native AOT link or hardware parity result.
+- Stage diagnostics, transcription/retry scoring, calibration fitting, paired document evaluation,
+  controlled baseline commands and a trimming/Native AOT smoke project. Research accuracy and
+  performance targets still require independent labeled data and hardware measurements.
 - **`RecognitionOptions.UseLegacyResize`** ([#13](https://github.com/FarhanLodi/PaddleOcrNet/issues/13)):
   opt-in bicubic recognition resizing with ceiling-rounded batch width for applications affected by
   punctuation changes after 2.0.4. Both reported synthetic Chinese date crops still misread the first
@@ -19,6 +57,27 @@ All notable changes to PaddleOcrNet are documented here. The format is based on
   spacing alone and with a wider companion, and the detailed character-output path. The true-en-dash
   control remains a separately reported model limitation under both policies; this is not a general
   punctuation-accuracy fix and no punctuation substitutions are applied.
+
+### Changed
+
+- Upgrade EasyImageSharp to 1.2.0 and propagate request-local cancellation into decoding.
+  [Direct source review](docs/easyimagesharp-1.2.0-review.md) covers core and optional packages.
+- Bound batch completion buffering and ordered admission with configurable item limits.
+  Recognition also observes cancellation between batches/windows and native inference calls.
+
+### Fixed
+
+- Preserve structure OCR lines without a reliable single layout owner, including original readings
+  split across blocks. Compact/full JSON retain `OrphanLines`; document assembly inherits them and
+  deduplicates equivalent caller evidence without discarding conflicting readings.
+- Preserve conflicting native PDF layers as source-labeled alternatives instead of overlapping
+  selectable text; reject malformed UTF-16 native readings and unsupported Hybrid paragraph grouping.
+- Declare actual OCR/structure coordinate history. Reject unmapped PDF fusion/searchable overlays,
+  and report the dewarped frame for plain PDF OCR with unavailable source mapping.
+- Reject ambiguous confirmed table joins, malformed row hierarchy, invalid/overlapping spans,
+  spans crossing row-group boundaries and oversized markup rather than flattening or repairing it.
+- Recognizer leases cover loading and inference, isolate cancellation of shared model loads and drain
+  active leases during shutdown. Warm-up, Auto routing and seal borrowing respect recognizer admission.
 
 ## [2.3.0] - 2026-10-12
 

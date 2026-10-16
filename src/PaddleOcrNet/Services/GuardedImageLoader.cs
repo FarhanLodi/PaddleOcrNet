@@ -4,6 +4,7 @@ using EasyImageSharp.Metadata.Exif;
 using EasyImageSharp.PixelFormats;
 using EasyImageSharp.Processing;
 using PaddleOcrNet.Internal;
+using PaddleOcrNet.Diagnostics;
 
 namespace PaddleOcrNet.Services;
 
@@ -18,10 +19,11 @@ internal static class GuardedImageLoader
     /// <summary>
     /// Decodes only the first frame of <paramref name="bytes"/> into an opaque, upright RGB image.
     /// </summary>
-    internal static Image<Rgb24> LoadFirstFrame(ReadOnlySpan<byte> bytes, ImageLoadSettings settings)
+    internal static Image<Rgb24> LoadFirstFrame(ReadOnlySpan<byte> bytes, ImageLoadSettings settings, CancellationToken cancellationToken = default)
     {
-        var format = Inspect(bytes, settings);
-        var decoder = CreateDecoderOptions(settings, maxFrames: 1);
+        using var stage = PaddleOcrDiagnostics.MeasureStage("image_decode");
+        var decoder = CreateDecoderOptions(settings, maxFrames: 1, cancellationToken);
+        var format = Inspect(bytes, settings, decoder);
         try
         {
             Image<Rgb24> image;
@@ -47,10 +49,11 @@ internal static class GuardedImageLoader
     /// frames must still be flattened (see <see cref="TransparencyFlattener"/>), otherwise an
     /// <see cref="Image{Rgb24}"/>. Each frame is checked against the pixel limit before it is allocated.
     /// </summary>
-    internal static Image LoadAllFrames(ReadOnlySpan<byte> bytes, ImageLoadSettings settings)
+    internal static Image LoadAllFrames(ReadOnlySpan<byte> bytes, ImageLoadSettings settings, CancellationToken cancellationToken = default)
     {
-        var format = Inspect(bytes, settings);
-        var decoder = CreateDecoderOptions(settings, maxFrames: int.MaxValue);
+        using var stage = PaddleOcrDiagnostics.MeasureStage("image_decode_frames");
+        var decoder = CreateDecoderOptions(settings, maxFrames: int.MaxValue, cancellationToken);
+        var format = Inspect(bytes, settings, decoder);
         try
         {
             return settings.FlattenTransparency && MayHaveAlpha(format)
@@ -111,21 +114,25 @@ internal static class GuardedImageLoader
     internal static bool MayHaveAlpha(ImageFormat? format)
         => format != ImageFormat.Jpeg && format != ImageFormat.Pbm;
 
-    private static ImageFormat? Inspect(ReadOnlySpan<byte> bytes, ImageLoadSettings settings)
+    private static ImageFormat? Inspect(ReadOnlySpan<byte> bytes, ImageLoadSettings settings, DecoderOptions decoder)
     {
+        decoder.ExecutionOptions!.CancellationToken.ThrowIfCancellationRequested();
         if (settings.MaxImagePixels > 0)
         {
-            var info = Image.Identify(bytes);
+            var info = Image.Identify(bytes, decoder);
             GuardPixels(info.Width, info.Height, settings.MaxImagePixels);
             return info.Format;
         }
         return settings.FlattenTransparency ? Image.DetectFormat(bytes) : null;
     }
 
-    private static DecoderOptions CreateDecoderOptions(ImageLoadSettings settings, int maxFrames)
-        => settings.MaxImagePixels > 0
-            ? new DecoderOptions { MaxFrames = maxFrames, MaxPixels = settings.MaxImagePixels }
-            : new DecoderOptions { MaxFrames = maxFrames };
+    private static DecoderOptions CreateDecoderOptions(ImageLoadSettings settings, int maxFrames, CancellationToken cancellationToken)
+        => new()
+        {
+            MaxFrames = maxFrames,
+            MaxPixels = settings.MaxImagePixels > 0 ? settings.MaxImagePixels : DecoderOptions.DefaultMaxPixels,
+            ExecutionOptions = new ImageExecutionOptions { CancellationToken = cancellationToken }
+        };
 
     private static ImageTooLargeException TooLarge(ImageSizeLimitExceededException ex)
         => new(ex.Message + " (PaddleOcrServiceOptions.MaxImagePixels guards against decompression-bomb / pixel-flood denial of service.)");

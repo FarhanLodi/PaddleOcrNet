@@ -1,0 +1,23 @@
+{
+  "Manifest": {
+    "DatasetRevision": "ocr-test1-manual-transcription-2026-10-14",
+    "License": "Existing repository fixture; local smoke evaluation only, redistribution rights not adjudicated",
+    "Pages": [
+      {
+        "Id": "ocr-test1",
+        "DocumentId": "ocr-test1",
+        "OriginGroup": "repository-ocr-test1",
+        "SourceKind": "synthetic",
+        "Split": "heldout",
+        "Category": "multilingual-punctuation-smoke",
+        "Reference": "The (quick) [brown] {fox} jumps!\nOver the $43,456.78 <lazy> #90 dog\n& duck/goose, as 12.5% of E-mail\nfrom aspammer@website.com is spam.\nDer „schnelle” braune Fuchs springt\nüber den faulen Hund. Le renard brun\n«rapide» saute par-dessus le chien\nparesseux. La volpe marrone rapida\nsalta sopra il cane pigro. El zorro\nmarrón rápido salta sobre el perro\nperezoso. A raposa marrom rápida\nsalta sobre o cão preguiçoso.",
+        "SensitiveTokens": {}
+      }
+    ]
+  },
+  "Images": { "ocr-test1": "../../test/Assets/ocr_test1.png" },
+  "RepositoryRevision": "WORKTREE: replace with git revision plus diff hash for a controlled comparison",
+  "Languages": ["English"],
+  "WarmRuns": 3,
+  "Threads": 1
+}

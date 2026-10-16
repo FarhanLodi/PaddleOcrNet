@@ -86,6 +86,7 @@ internal sealed class DocPreprocessor : IDocPreprocessor
         Image<Rgb24> current = input;
         bool owns = false;
         int rotationApplied = 0;
+        bool unwarpApplied = false;
 
         try
         {
@@ -114,13 +115,14 @@ internal sealed class DocPreprocessor : IDocPreprocessor
                 Image<Rgb24> dewarped = Unwarp(current);
                 if (!ReferenceEquals(dewarped, current))
                 {
+                    unwarpApplied = true;
                     if (owns) current.Dispose();
                     current = dewarped;
                     owns = true;
                 }
             }
 
-            return new DocPreprocessResult(current, rotationApplied, owns);
+            return new DocPreprocessResult(current, rotationApplied, owns, unwarpApplied);
         }
         catch
         {

@@ -104,7 +104,7 @@ internal static class WordBoxBuilder
             if (cjk)
             {
                 var ch = characters[i];
-                double center = (ch.FirstStep + 0.5) * stepWidth;
+                double center = ch.PixelGeometry?.Center ?? (ch.FirstStep + 0.5) * stepWidth;
                 words.Add((ch.Token, ch.Probability,
                     Math.Clamp(center - cjkWidth / 2, 0, contentWidth),
                     Math.Clamp(center + cjkWidth / 2, 0, contentWidth)));
@@ -178,8 +178,14 @@ internal static class WordBoxBuilder
             }
             if (runStart >= 0 && i - runStart > 1)
             {
-                int span = characters[i - 1].FirstStep - characters[runStart].FirstStep + 1;
-                sum += span * stepWidth / (i - runStart - 1);
+                var first = characters[runStart];
+                var last = characters[i - 1];
+                double span = first.PixelGeometry is null && last.PixelGeometry is null
+                    ? (last.FirstStep - first.FirstStep + 1) * stepWidth
+                    : (last.PixelGeometry?.Start ?? last.FirstStep * stepWidth)
+                        - (first.PixelGeometry?.Start ?? first.FirstStep * stepWidth)
+                        + (last.PixelGeometry?.StepWidth ?? stepWidth);
+                sum += span / (i - runStart - 1);
                 runs++;
             }
             runStart = -1;
@@ -200,8 +206,8 @@ internal static class WordBoxBuilder
             text.Append(characters[i].Token);
             probabilitySum += characters[i].Probability;
         }
-        double start = Math.Clamp(characters[first].FirstStep * stepWidth, 0, contentWidth);
-        double end = Math.Clamp((characters[last].LastStep + 1) * stepWidth, start, contentWidth);
+        double start = Math.Clamp(characters[first].PixelGeometry?.Start ?? characters[first].FirstStep * stepWidth, 0, contentWidth);
+        double end = Math.Clamp(characters[last].PixelGeometry?.End ?? (characters[last].LastStep + 1) * stepWidth, start, contentWidth);
         return (text.ToString(), probabilitySum / (last - first + 1), start, end);
     }
 }

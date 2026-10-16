@@ -193,4 +193,126 @@ public class ServiceBatchTests
 
         Assert.True(observedCancel.Task.IsCompleted, "in-flight work is cancelled and drained before the enumeration returns");
     }
+
+    [Fact]
+    public async Task Stalled_first_item_bounds_ordered_admission_and_lazy_input()
+    {
+        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var windowStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int started = 0, enumerated = 0;
+        IEnumerable<string> LazyPaths()
+        {
+            foreach (var path in Paths(100))
+            {
+                Interlocked.Increment(ref enumerated);
+                yield return path;
+            }
+        }
+        var service = new ServiceFakeOcrService
+        {
+            OnPath = async (path, ct) =>
+            {
+                if (Interlocked.Increment(ref started) == 4) windowStarted.TrySetResult();
+                if (IndexOf(path) == 0) await releaseFirst.Task.WaitAsync(ct);
+                return ServiceFakeOcrService.Result(path);
+            },
+        };
+        var collection = Collect(service.ExtractTextFromImagesAsync(LazyPaths(), OcrLanguage.English,
+            batchOptions: new OcrBatchOptions
+            {
+                MaxConcurrency = 3, CompletedResultCapacity = 1, OrderedAdmissionLimit = 4,
+            }));
+        try
+        {
+            await windowStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await Task.Delay(100);
+            Assert.Equal(4, Volatile.Read(ref started));
+            Assert.Equal(4, Volatile.Read(ref enumerated));
+            Assert.False(collection.IsCompleted);
+        }
+        finally
+        {
+            releaseFirst.TrySetResult();
+        }
+        var items = await collection.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(Enumerable.Range(0, 100), items.Select(item => item.Index));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Slow_consumer_bounds_work_and_disposal_unblocks_full_buffer(bool ordered)
+    {
+        int started = 0;
+        var service = new ServiceFakeOcrService
+        {
+            OnPath = (path, _) =>
+            {
+                Interlocked.Increment(ref started);
+                return Task.FromResult(ServiceFakeOcrService.Result(path));
+            },
+        };
+        var enumerator = service.ExtractTextFromImagesAsync(Paths(100), OcrLanguage.English,
+            batchOptions: new OcrBatchOptions
+            {
+                MaxConcurrency = 2, CompletedResultCapacity = 1,
+                OrderedAdmissionLimit = 3, PreserveOrder = ordered,
+            }).GetAsyncEnumerator();
+        try
+        {
+            Assert.True(await enumerator.MoveNextAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5)));
+            await Task.Delay(100);
+            // One yielded result, one buffered result and at most two publishing workers.
+            Assert.InRange(Volatile.Read(ref started), 1, 4);
+        }
+        finally
+        {
+            await enumerator.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [Fact]
+    public async Task Cancellation_unblocks_ordered_admission_behind_stalled_first_item()
+    {
+        using var cts = new CancellationTokenSource();
+        var windowStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int started = 0;
+        var service = new ServiceFakeOcrService
+        {
+            OnPath = async (path, ct) =>
+            {
+                if (Interlocked.Increment(ref started) == 3) windowStarted.TrySetResult();
+                if (IndexOf(path) == 0) await Task.Delay(Timeout.Infinite, ct);
+                return ServiceFakeOcrService.Result(path);
+            },
+        };
+        var collection = Collect(service.ExtractTextFromImagesAsync(Paths(100), OcrLanguage.English,
+            batchOptions: new OcrBatchOptions
+            {
+                MaxConcurrency = 2, CompletedResultCapacity = 1, OrderedAdmissionLimit = 3,
+            }, cancellationToken: cts.Token));
+        await windowStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        cts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => collection.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(3, started);
+    }
+
+    [Fact]
+    public void Buffer_limits_must_be_positive()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new OcrBatchOptions { CompletedResultCapacity = 0 });
+        Assert.Throws<ArgumentOutOfRangeException>(() => new OcrBatchOptions { OrderedAdmissionLimit = 0 });
+    }
+
+    [Fact]
+    public async Task Single_item_window_completes_with_more_workers_than_slots()
+    {
+        var service = new ServiceFakeOcrService();
+        var items = await Collect(service.ExtractTextFromImagesAsync(Paths(10), OcrLanguage.English,
+            batchOptions: new OcrBatchOptions
+            {
+                MaxConcurrency = 8, CompletedResultCapacity = 1, OrderedAdmissionLimit = 1,
+            })).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(Enumerable.Range(0, 10), items.Select(item => item.Index));
+    }
 }

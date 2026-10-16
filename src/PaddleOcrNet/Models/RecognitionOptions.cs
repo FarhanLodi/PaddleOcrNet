@@ -6,6 +6,9 @@
 /// </summary>
 public sealed record RecognitionOptions
 {
+    /// <summary>Opt-in bounded routing and externally fitted calibration. Null preserves existing routing.</summary>
+    public AutoRoutingOptions? AutoRouting { get; init; }
+
     /// <summary>
     /// How detected regions are grouped. Defaults to <see cref="TextGrouping.Line"/>.
     /// </summary>
@@ -28,6 +31,36 @@ public sealed record RecognitionOptions
     /// changing it never reloads the cached recognizer session.
     /// </summary>
     public int BatchSize { get; init; } = 6;
+
+    /// <summary>
+    /// Optional maximum N × H × W pixels in each recognition input tensor (three float channels,
+    /// or 12 bytes per pixel). Zero keeps count-only batching. A single crop exceeding this budget
+    /// throws rather than silently squeezing it. Concurrent batches each have their own budget.
+    /// Changing batch shape can affect model output; validate on application documents.
+    /// </summary>
+    public long MaxBatchPixels { get; init; }
+
+    /// <summary>
+    /// Opt in to call-local reusable tensor storage. At most one buffer per concurrent batch is
+    /// retained, each sized for the largest planned batch. Buffers are zeroed before reuse and
+    /// released after the call; concurrent calls own separate storage. This can increase retained
+    /// input memory for mixed batch sizes. Default false preserves per-batch allocation.
+    /// </summary>
+    public bool ReuseTensorBuffers { get; init; }
+
+    /// <summary>
+    /// Recognize crops wider than the model's 3200 normalized-pixel limit in overlapping windows.
+    /// Default false preserves aspect squeezing. Stitching uses grapheme positions in the overlap,
+    /// preserving repeated text instead of matching text suffixes. Experimental: seam errors remain
+    /// possible, and held-out accuracy evaluation is required before enabling broadly.
+    /// </summary>
+    public bool SegmentLongLines { get; init; }
+
+    /// <summary>Fraction of each long-line window shared with its neighbor, in (0, 0.5). Default 0.2.</summary>
+    public double LongLineOverlapFraction { get; init; } = 0.2;
+
+    /// <summary>Maximum windows per crop. Excessive lines throw before allocating segments. Default 64.</summary>
+    public int MaxLongLineSegments { get; init; } = 64;
 
     /// <summary>
     /// Use bicubic recognition resizing and ceiling-rounded batch width, as in the older recognizer,

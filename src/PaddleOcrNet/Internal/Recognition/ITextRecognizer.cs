@@ -48,7 +48,9 @@ internal interface ITextRecognizer : IDisposable
     /// <param name="options">The recognition options (character filter, batch size, parallelism bound).</param>
     /// <param name="maxConcurrentBatches">How many ONNX runs may execute at once on the shared session (1 = sequential).</param>
     /// <param name="includeCharacters">True to fill <see cref="RecognizedText.Characters"/> and <see cref="RecognizedText.StepWidth"/>.</param>
+    /// <param name="cancellationToken">Cooperative cancellation between windows, packing, native runs and decoded rows. An active native run completes before cancellation is observed.</param>
     /// <returns>One result per input crop, in the same order.</returns>
     IReadOnlyList<RecognizedText> RecognizeDetailed(
-        IReadOnlyList<Image<Rgb24>> crops, RecognitionOptions options, int maxConcurrentBatches, bool includeCharacters);
+        IReadOnlyList<Image<Rgb24>> crops, RecognitionOptions options, int maxConcurrentBatches, bool includeCharacters,
+        CancellationToken cancellationToken = default);
 }

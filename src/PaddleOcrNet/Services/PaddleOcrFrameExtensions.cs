@@ -102,7 +102,7 @@ public static class PaddleOcrFrameExtensions
         Image decoded;
         {
             byte[] bytes = await readBytes(cancellationToken).ConfigureAwait(false);
-            decoded = GuardedImageLoader.LoadAllFrames(bytes, settings);
+            decoded = GuardedImageLoader.LoadAllFrames(bytes, settings, cancellationToken);
         }
 
         using (decoded)

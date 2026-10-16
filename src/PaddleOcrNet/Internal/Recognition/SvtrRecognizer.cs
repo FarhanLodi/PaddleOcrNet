@@ -1,6 +1,7 @@
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using PaddleOcrNet.Models;
+using PaddleOcrNet.Diagnostics;
 using EasyImageSharp;
 using EasyImageSharp.PixelFormats;
 using EasyImageSharp.Processing;
@@ -139,10 +140,16 @@ internal sealed class SvtrRecognizer : ITextRecognizer
 
     /// <inheritdoc />
     public IReadOnlyList<RecognizedText> RecognizeDetailed(
-        IReadOnlyList<Image<Rgb24>> crops, RecognitionOptions options, int maxConcurrentBatches, bool includeCharacters)
+        IReadOnlyList<Image<Rgb24>> crops, RecognitionOptions options, int maxConcurrentBatches, bool includeCharacters,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(crops);
         ArgumentNullException.ThrowIfNull(options);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (options.MaxBatchPixels < 0)
+            throw new ArgumentOutOfRangeException(nameof(options.MaxBatchPixels));
+        if (options.SegmentLongLines)
+            return RecognizeSegmented(crops, options, maxConcurrentBatches, includeCharacters, cancellationToken);
         return RecognizeCore(
             crops,
             options.BatchSize > 0 ? Math.Min(options.BatchSize, _maxBatchSize) : _batchSize,
@@ -152,7 +159,52 @@ internal sealed class SvtrRecognizer : ITextRecognizer
             maxConcurrentBatches,
             BoundedParallel.ResolveDegree(options.MaxDegreeOfParallelism),
             includeCharacters,
-            options.UseLegacyResize);
+            options.UseLegacyResize,
+            options.MaxBatchPixels,
+            cancellationToken,
+            options.ReuseTensorBuffers);
+    }
+
+    private IReadOnlyList<RecognizedText> RecognizeSegmented(
+        IReadOnlyList<Image<Rgb24>> crops, RecognitionOptions options, int maxConcurrentBatches, bool includeCharacters,
+        CancellationToken cancellationToken)
+    {
+        LongLineSegmentation.Validate(options.LongLineOverlapFraction, options.MaxLongLineSegments);
+        var windows = crops.Select(c => LongLineSegmentation.Plan(c.Width, c.Height, _imageHeight,
+            options.LongLineOverlapFraction, options.MaxLongLineSegments)).ToArray();
+        var plainOptions = options with { SegmentLongLines = false };
+        if (windows.All(w => w.Count == 1))
+            return RecognizeDetailed(crops, plainOptions, maxConcurrentBatches, includeCharacters, cancellationToken);
+
+        // Work on one original line at a time: segmentation cannot multiply the entire page's crop memory.
+        var output = new RecognizedText[crops.Count];
+        for (int i = 0; i < crops.Count; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (windows[i].Count == 1)
+            {
+                output[i] = RecognizeDetailed(new[] { crops[i] }, plainOptions, maxConcurrentBatches, includeCharacters, cancellationToken)[0];
+                continue;
+            }
+            var segments = new List<Image<Rgb24>>();
+            try
+            {
+                foreach (var window in windows[i])
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    segments.Add(crops[i].Clone(c => c.Crop(new Rectangle(window.Start, 0, window.Width, crops[i].Height))));
+                }
+                var readings = RecognizeDetailed(segments, plainOptions, maxConcurrentBatches, includeCharacters: true, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                output[i] = LongLineSegmentation.Stitch(windows[i], readings, crops[i].Width, includeCharacters);
+            }
+            finally
+            {
+                foreach (var segment in segments) segment.Dispose();
+            }
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+        return output;
     }
 
     private RecognizedText[] RecognizeCore(
@@ -164,8 +216,12 @@ internal sealed class SvtrRecognizer : ITextRecognizer
         int maxConcurrentBatches,
         int maxDegreeOfParallelism,
         bool includeCharacters,
-        bool useLegacyResize = false)
+        bool useLegacyResize = false,
+        long maxBatchPixels = 0,
+        CancellationToken cancellationToken = default,
+        bool reuseTensorBuffers = false)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         int count = crops.Count;
         var results = new RecognizedText[count];
         if (count == 0) return results;
@@ -182,11 +238,16 @@ internal sealed class SvtrRecognizer : ITextRecognizer
         }
         Array.Sort(ratios, order);
 
-        int batchCount = (count + batchSize - 1) / batchSize;
+        var batches = RecognitionBatchPlanner.Plan(ratios, batchSize, _imageHeight, maxBatchPixels, useLegacyResize);
+        int batchCount = batches.Count;
         int concurrentBatches = Math.Clamp(maxConcurrentBatches, 1, batchCount);
         // Batches running concurrently already spread the crop preprocessing across threads; only a
         // sequential run parallelizes the per-crop resize inside each batch.
         int cropParallelism = concurrentBatches > 1 ? 1 : maxDegreeOfParallelism;
+        using var workspace = reuseTensorBuffers
+            ? new BoundedTensorWorkspace(concurrentBatches, batches.Max(batch => checked(
+                (batch.End - batch.Start) * 3 * _imageHeight * ComputeBatchTensorWidth(_imageHeight, ratios[batch.End - 1], useLegacyResize))))
+            : null;
 
         // The allow/block mask needs the vocab, which needs the model's class count from the first output.
         // The first batch therefore runs alone and fixes both for the rest of the call.
@@ -196,14 +257,16 @@ internal sealed class SvtrRecognizer : ITextRecognizer
         RunBatch(0);
         if (batchCount > 1)
         {
-            BoundedParallel.For(batchCount - 1, concurrentBatches, CancellationToken.None, b => RunBatch(b + 1));
+            BoundedParallel.For(batchCount - 1, concurrentBatches, cancellationToken, b => RunBatch(b + 1));
         }
+        cancellationToken.ThrowIfCancellationRequested();
         return results;
 
         void RunBatch(int batchIndex)
         {
-            int start = batchIndex * batchSize;
-            int end = Math.Min(start + batchSize, count);
+            cancellationToken.ThrowIfCancellationRequested();
+            using var batchStage = PaddleOcrDiagnostics.MeasureStage("recognition_batch");
+            var (start, end) = batches[batchIndex];
             int batchCountInTensor = end - start;
 
             // ratios is sorted ascending, so the batch maximum is its last element.
@@ -213,21 +276,36 @@ internal sealed class SvtrRecognizer : ITextRecognizer
             // min(ceil(H * w/h), imgW). By default the widest crop lands on the floored imgW,
             // matching Python's int(); compatibility mode rounds imgW up instead.
             // Normalized pixels are written straight into each row of the batch buffer.
-            // The remaining (imgW - w) columns stay zero — DenseTensor is zero-initialized.
-            var tensor = new DenseTensor<float>(new[] { batchCountInTensor, 3, _imageHeight, imgW });
+            // Padding stays zero for both new tensors and explicitly cleared reusable storage.
+            using var tensorLease = workspace?.Rent(checked(batchCountInTensor * 3 * _imageHeight * imgW));
+            var tensor = tensorLease is null
+                ? new DenseTensor<float>(new[] { batchCountInTensor, 3, _imageHeight, imgW })
+                : new DenseTensor<float>(tensorLease.Memory, new[] { batchCountInTensor, 3, _imageHeight, imgW });
             Memory<float> buffer = tensor.Buffer;
             var widths = new int[batchCountInTensor];
             int imageStride = 3 * _imageHeight * imgW;
-            BoundedParallel.For(batchCountInTensor, cropParallelism, CancellationToken.None, b =>
+            PaddleOcrDiagnostics.RecognitionTensorBytes.Record((long)batchCountInTensor * imageStride * sizeof(float));
+            using (PaddleOcrDiagnostics.MeasureStage("recognition_pack"))
+            {
+            BoundedParallel.For(batchCountInTensor, cropParallelism, cancellationToken, b =>
             {
                 int w = Math.Max(1, Math.Min((int)Math.Ceiling(_imageHeight * ratios[start + b]), imgW));
                 widths[b] = w;
                 WriteNormalized(crops[order[start + b]], w, imgW, buffer, b * imageStride, useLegacyResize);
             });
+            }
+            if (PaddleOcrDiagnostics.RecognitionPadding.Enabled)
+                PaddleOcrDiagnostics.RecognitionPadding.Record(1d - widths.Sum(w => (long)w) / (double)((long)batchCountInTensor * imgW));
 
             // Run inference and decode each output row, scattering back to the caller's order.
             var inputs = new[] { NamedOnnxValue.CreateFromTensor(_inputName, tensor) };
-            using var outputs = _session.Run(inputs);
+            IDisposableReadOnlyCollection<DisposableNamedOnnxValue> inferenceOutputs;
+            cancellationToken.ThrowIfCancellationRequested();
+            using (PaddleOcrDiagnostics.MeasureStage("recognition_inference"))
+                inferenceOutputs = _session.Run(inputs);
+            using var outputs = inferenceOutputs;
+            cancellationToken.ThrowIfCancellationRequested();
+            using var decodeStage = PaddleOcrDiagnostics.MeasureStage("ctc_decode");
             var output = outputs.First().AsTensor<float>();
 
             // Output shape is [N, T, C]; T and C come from the model (T depends on imgW).
@@ -252,6 +330,7 @@ internal sealed class SvtrRecognizer : ITextRecognizer
 
             for (int b = 0; b < batchCountInTensor; b++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 ReadOnlySpan<float> rowLogits = flat.Slice(b * rowStride, rowStride);
                 int source = order[start + b];
                 if (!includeCharacters)

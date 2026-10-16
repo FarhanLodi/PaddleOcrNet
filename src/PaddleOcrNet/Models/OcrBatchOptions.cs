@@ -7,6 +7,40 @@ namespace PaddleOcrNet.Models;
 public sealed record OcrBatchOptions
 {
     private readonly int _maxConcurrency = 2;
+    private readonly int _completedResultCapacity = 16;
+    private readonly int _orderedAdmissionLimit = 32;
+
+    /// <summary>
+    /// Maximum number of completed results waiting in the completion channel. Default 16.
+    /// Workers wait when this buffer is full, bounding memory even for slow consumers.
+    /// Active workers can each retain one additional result while waiting to publish.
+    /// </summary>
+    public int CompletedResultCapacity
+    {
+        get => _completedResultCapacity;
+        init
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(value, 1);
+            _completedResultCapacity = value;
+        }
+    }
+
+    /// <summary>
+    /// Maximum number of admitted images not yet yielded in ordered mode. Default 32.
+    /// Includes active work, completed results and results waiting for an earlier image.
+    /// Admission advances only when the next result in input order is yielded. A value
+    /// below <see cref="MaxConcurrency"/> also limits effective concurrency. Ignored in unordered mode.
+    /// Bounds are counts, not bytes; memory also depends on individual result sizes.
+    /// </summary>
+    public int OrderedAdmissionLimit
+    {
+        get => _orderedAdmissionLimit;
+        init
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(value, 1);
+            _orderedAdmissionLimit = value;
+        }
+    }
 
     /// <summary>
     /// Maximum number of images processed concurrently. Default 2.

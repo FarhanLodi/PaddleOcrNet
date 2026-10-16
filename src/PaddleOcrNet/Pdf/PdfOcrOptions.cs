@@ -34,6 +34,14 @@ public sealed class PdfOcrOptions
     public PdfTextLayerMode TextLayer { get; set; } = PdfTextLayerMode.Ignore;
 
     /// <summary>
+    /// Opt-in Hybrid scheduling: detect source-page regions and recognize only those not sufficiently
+    /// covered by valid native text. Native readings are not visually verified. Default false retains
+    /// full-page visual OCR. Requires explicit recognition options disabling page transformations and
+    /// preprocessing, including document orientation and pixel-aspect correction.
+    /// </summary>
+    public bool HybridRecognizeUncoveredOnly { get; set; }
+
+    /// <summary>
     /// JPEG quality (1–100) for the page images embedded in a <i>searchable</i> PDF. Lower = smaller
     /// file. Default 75. Ignored when only extracting text.
     /// </summary>
@@ -113,6 +121,8 @@ public sealed class PdfOcrOptions
             throw new ArgumentOutOfRangeException(nameof(Dpi), Dpi, "Dpi must be 0 (auto) or between 36 and 1200.");
         if (!Enum.IsDefined(TextLayer))
             throw new ArgumentOutOfRangeException(nameof(TextLayer), TextLayer, "TextLayer is not a defined PdfTextLayerMode value.");
+        if (HybridRecognizeUncoveredOnly && TextLayer != PdfTextLayerMode.Hybrid)
+            throw new ArgumentException("HybridRecognizeUncoveredOnly requires TextLayer = Hybrid.", nameof(HybridRecognizeUncoveredOnly));
         if (JpegQuality is < 1 or > 100)
             throw new ArgumentOutOfRangeException(nameof(JpegQuality), JpegQuality, "JpegQuality must be between 1 and 100.");
         if (MaxPages < 0)

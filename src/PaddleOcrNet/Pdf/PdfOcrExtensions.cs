@@ -407,6 +407,9 @@ public static class PdfOcrExtensions
         SearchablePdfBuilder? builder,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        if (pdfOptions.TextLayer == PdfTextLayerMode.Hybrid && options?.Grouping == TextGrouping.Paragraph)
+            throw new ArgumentException("Hybrid PDF extraction supports Line or Word grouping; paragraph grouping cannot preserve per-line source evidence.", nameof(options));
+        if (pdfOptions.HybridRecognizeUncoveredOnly) HybridUncoveredRecognition.Validate(options);
         string[]? codes = null;
         await foreach (var page in PdfRasterizer.ReadPagesAsync(pdfBytes, pdfOptions, imagesRequired: builder is not null, cancellationToken).ConfigureAwait(false))
         {
@@ -415,9 +418,11 @@ public static class PdfOcrExtensions
             {
                 OcrResult ocr;
                 PdfPageSource source;
+                IReadOnlyList<PdfLineEvidence> evidence = Array.Empty<PdfLineEvidence>();
+                double nativeCoverage = 0;
                 byte[]? jpeg = null;
 
-                if (page.EmbeddedLines is { } lines)
+                if (page.EmbeddedLines is { } lines && pdfOptions.TextLayer != PdfTextLayerMode.Hybrid)
                 {
                     codes ??= languages.ToCodes();
                     ocr = EmbeddedTextLayer.CreateResult(lines, page.PixelWidth, page.PixelHeight, codes, page.EmbeddedTextDuration);
@@ -436,7 +441,9 @@ public static class PdfOcrExtensions
                     Task<OcrResult> ocrTask;
                     try
                     {
-                        ocrTask = OcrPageAsync(service, image, languages, options, cancellationToken);
+                        ocrTask = pdfOptions.HybridRecognizeUncoveredOnly
+                            ? HybridUncoveredRecognition.RecognizeAsync(service, image, page.EmbeddedLines ?? Array.Empty<OcrLine>(), languages, options!, cancellationToken)
+                            : OcrPageAsync(service, image, languages, options, cancellationToken);
                     }
                     catch (Exception ex)
                     {
@@ -459,7 +466,35 @@ public static class PdfOcrExtensions
                     ocr = await ocrTask.ConfigureAwait(false);
                     if (jpegTask is not null)
                         jpeg = await jpegTask.ConfigureAwait(false);
+                    if ((builder is not null || pdfOptions.TextLayer == PdfTextLayerMode.Hybrid) &&
+                        ocr.Coordinates is { SourceMappingAvailable: false })
+                        throw new InvalidOperationException("PDF fusion and searchable PDF output require coordinates mapped to the source raster. Disable nonlinear unwarping or supply an inverse mapping.");
                     source = PdfPageSource.Ocr;
+
+                    if (pdfOptions.TextLayer == PdfTextLayerMode.Hybrid)
+                    {
+                        var native = page.EmbeddedLines ?? Array.Empty<OcrLine>();
+                        // A caller's region applies to native candidates as well as visual OCR.
+                        if (options?.Region is { } region)
+                        {
+                            var bounds = region.Resolve(page.PixelWidth, page.PixelHeight);
+                            native = native.Where(l => l.BoundingBox.MinX >= bounds.X &&
+                                l.BoundingBox.MinY >= bounds.Y && l.BoundingBox.MaxX <= bounds.X + bounds.Width &&
+                                l.BoundingBox.MaxY <= bounds.Y + bounds.Height).ToArray();
+                        }
+                        nativeCoverage = HybridTextLayer.UnionCoverage(native, page.PixelWidth, page.PixelHeight);
+                        evidence = HybridTextLayer.Fuse(native, ocr.Lines, page.PixelWidth, page.PixelHeight);
+                        var fusedLines = evidence.Select(e => e.Selected).ToArray();
+                        ocr = ocr with
+                        {
+                            Lines = fusedLines,
+                            FullText = PaddleOcrService.BuildFullText(fusedLines, options?.Grouping ?? TextGrouping.Line),
+                            Duration = ocr.Duration + page.EmbeddedTextDuration,
+                        };
+                        bool hasNative = evidence.Any(e => e.Source == PdfPageSource.EmbeddedText);
+                        bool hasVisual = evidence.Any(e => e.Source == PdfPageSource.Ocr);
+                        source = hasNative ? (hasVisual ? PdfPageSource.Mixed : PdfPageSource.EmbeddedText) : PdfPageSource.Ocr;
+                    }
                 }
 
                 builder?.AddPage(jpeg!, page.PixelWidth, page.PixelHeight, page.Dpi, ocr.Lines);
@@ -472,6 +507,10 @@ public static class PdfOcrExtensions
                     PixelHeight = page.PixelHeight,
                     Dpi = page.Dpi,
                     Source = source,
+                    LineEvidence = evidence,
+                    NativeCoverageRatio = nativeCoverage,
+                    NativeTextVisualVerificationSkipped = pdfOptions.HybridRecognizeUncoveredOnly
+                        && evidence.Any(e => e.Source == PdfPageSource.EmbeddedText),
                 };
             }
 

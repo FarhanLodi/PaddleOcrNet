@@ -36,4 +36,5 @@ internal interface IDocPreprocessor : IDisposable
 /// True when <paramref name="Image"/> is a new image the caller must dispose; false when it is the caller's
 /// own input, which must not be disposed on its behalf.
 /// </param>
-internal readonly record struct DocPreprocessResult(Image<Rgb24> Image, int RotationApplied, bool OwnsImage);
+/// <param name="UnwarpApplied">True only when the nonlinear model produced a replacement image.</param>
+internal readonly record struct DocPreprocessResult(Image<Rgb24> Image, int RotationApplied, bool OwnsImage, bool UnwarpApplied = false);

@@ -9,6 +9,10 @@ namespace PaddleOcrNet.Structure;
 /// </summary>
 internal sealed class StructureResultDto
 {
+    /// <summary>Actual geometry history, when supplied by the structure pipeline.</summary>
+    public StructureCoordinateProvenance? Coordinates { get; init; }
+    /// <summary>Unassigned source OCR evidence, preserved even in the compact export.</summary>
+    public IReadOnlyList<PaddleOcrNet.Models.OcrLine> OrphanLines { get; init; } = Array.Empty<PaddleOcrNet.Models.OcrLine>();
     /// <summary>
     /// Width (px) of the source image, or 0 if unknown.
     /// </summary>

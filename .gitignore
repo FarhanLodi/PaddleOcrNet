@@ -50,8 +50,11 @@ sample_ocr.png
 *.part
 
 # Maintainer ONNX export/upload toolchain: kept LOCAL-ONLY, never committed.
-# The whole directory (scripts, downloaded models, venv, caches, logs) is ignored.
-tools/
+# Keep toolchain contents ignored except the release validation runner.
+/tools/*
+!/tools/validation/
+/tools/validation/*
+!/tools/validation/Run-IntegrationGroups.ps1
 
 # Python virtual environment
 .venv/

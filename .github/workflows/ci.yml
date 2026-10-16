@@ -42,11 +42,9 @@ jobs:
           if-no-files-found: ignore
 
   aot-smoke:
-    name: Native AOT publish smoke (informational)
-    runs-on: ubuntu-latest
+    name: Native AOT publish and execute (linux-x64)
+    runs-on: ubuntu-24.04
     needs: build-and-test
-    # Surfaces trim/AOT incompatibilities (the library advertises IsAotCompatible) without blocking PRs.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -54,8 +52,17 @@ jobs:
           dotnet-version: '10.0.x'
       - name: Install Native AOT prerequisites
         run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
-      - name: Publish demo with Native AOT
-        run: dotnet publish test/PaddleOcrNet.Demo/PaddleOcrNet.Demo.csproj -c Release -r linux-x64 -p:PublishAot=true -o ./aot-out
+      - name: Publish source-generated evidence smoke with Native AOT
+        run: dotnet publish test/PaddleOcrNet.AotSmoke/PaddleOcrNet.AotSmoke.csproj -c Release -r linux-x64 -p:PublishAot=true -p:TreatWarningsAsErrors=true -o ./artifacts/aot-linux-x64
+      - name: Execute native binary
+        run: ./artifacts/aot-linux-x64/PaddleOcrNet.AotSmoke
+      - name: Retain native smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aot-linux-x64
+          path: ./artifacts/aot-linux-x64
+          if-no-files-found: warn
 
   pack:
     name: Pack (validate nupkg builds)
@@ -68,6 +75,8 @@ jobs:
           dotnet-version: '10.0.x'
       - name: Pack library
         run: dotnet pack src/PaddleOcrNet/PaddleOcrNet.csproj -c Release -o ./artifacts
+      - name: Pack CUDA companion
+        run: dotnet pack src/PaddleOcrNet.Gpu/PaddleOcrNet.Gpu.csproj -c Release -o ./artifacts
       - name: Upload package artifact
         uses: actions/upload-artifact@v4
         with:

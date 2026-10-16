@@ -1,0 +1,7 @@
+{
+  "images": ["../../test/Assets/paddleocrnet_100_test_dataset/057_receipts_invoices.png"],
+  "language": "English",
+  "maximumCer": 0.0,
+  "maximumGeometryPixels": 1.0,
+  "maximumConfidenceDelta": 0.02
+}

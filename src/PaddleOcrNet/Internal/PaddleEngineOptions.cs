@@ -15,6 +15,9 @@ internal sealed record PaddleEngineOptions
     /// </summary>
     public string? ModelCachePath { get; init; }
 
+    /// <summary>Maximum resident recognizer sessions, including loads; zero retains all packs.</summary>
+    public int MaxResidentRecognizers { get; init; }
+
     /// <summary>
     /// The execution provider to attempt. Defaults to <see cref="OcrExecutionProvider.Auto"/>.
     /// </summary>

@@ -9,6 +9,9 @@ namespace PaddleOcrNet.Models;
 /// </summary>
 public sealed record OcrResult
 {
+    /// <summary>Applied geometry and source-mapping availability; null for results from older/custom producers.</summary>
+    public OcrCoordinateProvenance? Coordinates { get; init; }
+
     /// <summary>
     /// Gets the concatenated text extracted from the image.
     /// </summary>

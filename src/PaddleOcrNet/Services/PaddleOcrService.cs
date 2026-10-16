@@ -168,7 +168,7 @@ public sealed class PaddleOcrService : IPaddleOcrService
             throw new ArgumentException("Image bytes must not be empty.", nameof(imageBytes));
 
         cancellationToken.ThrowIfCancellationRequested();
-        using var image = LoadGuarded(imageBytes.Span);
+        using var image = LoadGuarded(imageBytes.Span, cancellationToken);
         return await RunPipelineAsync(image, languages.ToCodes(), options, cancellationToken).ConfigureAwait(false);
     }
 
@@ -415,7 +415,7 @@ public sealed class PaddleOcrService : IPaddleOcrService
             throw new ArgumentException("Image bytes must not be empty.", nameof(imageBytes));
 
         cancellationToken.ThrowIfCancellationRequested();
-        using var image = LoadGuarded(imageBytes.Span);
+        using var image = LoadGuarded(imageBytes.Span, cancellationToken);
         return await RunStructureAsync(image, options, cancellationToken).ConfigureAwait(false);
     }
 
@@ -499,7 +499,7 @@ public sealed class PaddleOcrService : IPaddleOcrService
                 }
             }
 
-            (IReadOnlyList<OcrLine> Lines, string[] Languages, IReadOnlyList<string> Detected, int Rotation, float DeskewAngle) outcome;
+            (IReadOnlyList<OcrLine> Lines, string[] Languages, IReadOnlyList<string> Detected, int Rotation, float DeskewAngle, bool UnwarpApplied) outcome;
 
             if (options.Preprocessing.DetectOrientation)
             {
@@ -514,7 +514,17 @@ public sealed class PaddleOcrService : IPaddleOcrService
                 ? outcome.Lines
                 : NonSquarePixels.MapToSource(outcome.Lines, (double)image.Width / squared.Width, (double)image.Height / squared.Height);
 
-            return BuildResult(lines, outcome.Languages, sw, activity, image.Width, image.Height, outcome.Detected, options.Grouping, outcome.Rotation, outcome.DeskewAngle);
+            return BuildResult(lines, outcome.Languages, sw, activity, image.Width, image.Height, outcome.Detected, options.Grouping, outcome.Rotation, outcome.DeskewAngle)
+                with { Coordinates = new OcrCoordinateProvenance
+                {
+                    Frame = outcome.UnwarpApplied ? OcrCoordinateFrame.DewarpedPixels : OcrCoordinateFrame.SourcePixels,
+                    SourceMappingAvailable = !outcome.UnwarpApplied,
+                    DocumentRotationDegrees = outcome.Rotation,
+                    DeskewDegrees = outcome.DeskewAngle,
+                    PixelAspectCorrected = squared is not null,
+                    RegionApplied = workingOptions.Region is not null,
+                    NonlinearDewarpApplied = outcome.UnwarpApplied,
+                } };
         }
         finally
         {
@@ -553,6 +563,11 @@ public sealed class PaddleOcrService : IPaddleOcrService
 
         return new OcrResult
         {
+            Coordinates = new OcrCoordinateProvenance
+            {
+                DocumentRotationDegrees = appliedRotation,
+                DeskewDegrees = deskewAngle,
+            },
             FullText = BuildFullText(ordered, grouping),
             Lines = ordered,
             Languages = languages,
@@ -578,7 +593,7 @@ public sealed class PaddleOcrService : IPaddleOcrService
     /// Either way the returned quads are mapped back into the original image's orientation and the
     /// corrective rotation is reported so <see cref="OcrResult.DetectedOrientation"/> can be filled.
     /// </summary>
-    private async Task<(IReadOnlyList<OcrLine>, string[], IReadOnlyList<string>, int, float)> RecognizeBestOrientationAsync(
+    private async Task<(IReadOnlyList<OcrLine>, string[], IReadOnlyList<string>, int, float, bool)> RecognizeBestOrientationAsync(
         Image<Rgb24> image, IEnumerable<string> languages, RecognitionOptions options, CancellationToken ct)
     {
         var langsList = languages.ToArray();
@@ -614,7 +629,7 @@ public sealed class PaddleOcrService : IPaddleOcrService
             Image<Rgb24>? rotated = degrees == 0 ? null : ImagePreprocessor.RotateRightAngle(image, degrees);
             try
             {
-                var (lines, langs, detected, _, deskew) = await CoreAsync(rotated ?? image, langsList, noOrient, ct).ConfigureAwait(false);
+                var (lines, langs, detected, _, deskew, _) = await CoreAsync(rotated ?? image, langsList, noOrient, ct).ConfigureAwait(false);
                 double score = lines.Where(l => !string.IsNullOrWhiteSpace(l.Text)).Sum(l => l.Confidence * l.Text.Length);
                 _logger?.LogInformation("Orientation {Deg}° scored {Score:F1}", degrees, score);
                 if (score > bestScore)
@@ -630,7 +645,7 @@ public sealed class PaddleOcrService : IPaddleOcrService
             }
         }
 
-        if (best is not { } winner) return (Array.Empty<OcrLine>(), langsList, Array.Empty<string>(), 0, 0f);
+        if (best is not { } winner) return (Array.Empty<OcrLine>(), langsList, Array.Empty<string>(), 0, 0f, false);
 
         // Map the winning rotation's quads back into the original image's frame (the winning pass ran on
         // the rotated copy, whose dimensions are swapped for 90/270).
@@ -641,14 +656,14 @@ public sealed class PaddleOcrService : IPaddleOcrService
             int rotatedHeight = bestDegrees is 90 or 270 ? image.Width : image.Height;
             mapped = Internal.Geometry.OrientationMapper.MapLinesToOriginalFrame(mapped, bestDegrees, rotatedWidth, rotatedHeight);
         }
-        return (mapped, winner.Langs, winner.Detected, bestDegrees, winner.Deskew);
+        return (mapped, winner.Langs, winner.Detected, bestDegrees, winner.Deskew, false);
     }
 
     /// <summary>
     /// Preprocess → resolve languages → region crop → recognize. The recognition itself is delegated to
     /// <see cref="PaddleOcrEngine.RecognizeAsync"/> (det → cls → rec), whose body the downstream agent fills.
     /// </summary>
-    private async Task<(IReadOnlyList<OcrLine> Lines, string[] Languages, IReadOnlyList<string> Detected, int Rotation, float DeskewAngle)> CoreAsync(
+    private async Task<(IReadOnlyList<OcrLine> Lines, string[] Languages, IReadOnlyList<string> Detected, int Rotation, float DeskewAngle, bool UnwarpApplied)> CoreAsync(
         Image<Rgb24> image, IEnumerable<string> languages, RecognitionOptions options, CancellationToken ct)
     {
         // Denoise / deskew / binarize into a working image (orientation handled by the caller).
@@ -670,7 +685,7 @@ public sealed class PaddleOcrService : IPaddleOcrService
             // "auto" is a detection trigger, not a recognizer language; allow it to be the only code (it is
             // dropped by the engine's candidate resolution) so callers can pass languages: ["auto"].
             var langs = ResolveLanguages(languages, allowEmpty: IsAutoRequested(languages, options));
-            var (lines, detected, rotation) = await RecognizeWithRegionAsync(working, langs, options, ct).ConfigureAwait(false);
+            var (lines, detected, rotation, unwarpApplied) = await RecognizeWithRegionAsync(working, langs, options, ct).ConfigureAwait(false);
 
             // Deskew OCR'd the rotated, enlarged canvas: map every quad back onto the caller's image.
             if (deskewRotation != 0f)
@@ -678,7 +693,7 @@ public sealed class PaddleOcrService : IPaddleOcrService
                 lines = ImagePreprocessor.MapFromRotatedCanvas(
                     lines, deskewRotation, working.Width, working.Height, image.Width, image.Height);
             }
-            return (lines, langs, detected, rotation, deskewRotation);
+            return (lines, langs, detected, rotation, deskewRotation, unwarpApplied);
         }
         finally
         {
@@ -697,7 +712,7 @@ public sealed class PaddleOcrService : IPaddleOcrService
     /// <summary>
     /// Applies the optional region-of-interest crop and translates boxes back to image coordinates.
     /// </summary>
-    private async Task<(IReadOnlyList<OcrLine> Lines, IReadOnlyList<string> Detected, int Rotation)> RecognizeWithRegionAsync(
+    private async Task<(IReadOnlyList<OcrLine> Lines, IReadOnlyList<string> Detected, int Rotation, bool UnwarpApplied)> RecognizeWithRegionAsync(
         Image<Rgb24> image, string[] langs, RecognitionOptions options, CancellationToken ct)
     {
         if (options.Region is not { } region)
@@ -706,11 +721,11 @@ public sealed class PaddleOcrService : IPaddleOcrService
         }
 
         var (rx, ry, rw, rh) = region.Resolve(image.Width, image.Height);
-        if (rw < 2 || rh < 2) return (Array.Empty<OcrLine>(), Array.Empty<string>(), 0);
+        if (rw < 2 || rh < 2) return (Array.Empty<OcrLine>(), Array.Empty<string>(), 0, false);
 
         using var roi = image.Clone(ctx => ctx.Crop(new Rectangle(rx, ry, rw, rh)));
-        var (roiLines, detected, rotation) = await _engine.RecognizeWithDetectedLanguagesAsync(roi, langs, options, ct).ConfigureAwait(false);
-        return (TranslateLines(roiLines, rx, ry), detected, rotation);
+        var (roiLines, detected, rotation, unwarpApplied) = await _engine.RecognizeWithDetectedLanguagesAsync(roi, langs, options, ct).ConfigureAwait(false);
+        return (TranslateLines(roiLines, rx, ry), detected, rotation, unwarpApplied);
     }
 
     // ---- helpers ----
@@ -946,7 +961,7 @@ public sealed class PaddleOcrService : IPaddleOcrService
     private async Task<Image<Rgb24>> LoadGuarded(string path, CancellationToken ct)
     {
         var bytes = await GuardedImageLoader.ReadAllBytesAsync(path, ct).ConfigureAwait(false);
-        return GuardedImageLoader.LoadFirstFrame(bytes, _loadSettings);
+        return GuardedImageLoader.LoadFirstFrame(bytes, _loadSettings, ct);
     }
 
     private async Task<Image<Rgb24>> LoadGuarded(Stream stream, CancellationToken ct)
@@ -956,17 +971,17 @@ public sealed class PaddleOcrService : IPaddleOcrService
             // Already in memory: decode from the buffer without copying, then consume the stream as a
             // stream-based decode would have.
             int offset = (int)ms.Position;
-            var image = GuardedImageLoader.LoadFirstFrame(segment.AsSpan(offset, (int)ms.Length - offset), _loadSettings);
+            var image = GuardedImageLoader.LoadFirstFrame(segment.AsSpan(offset, (int)ms.Length - offset), _loadSettings, ct);
             ms.Position = ms.Length;
             return image;
         }
 
         var bytes = await GuardedImageLoader.ReadAllBytesAsync(stream, ct).ConfigureAwait(false);
-        return GuardedImageLoader.LoadFirstFrame(bytes, _loadSettings);
+        return GuardedImageLoader.LoadFirstFrame(bytes, _loadSettings, ct);
     }
 
-    private Image<Rgb24> LoadGuarded(ReadOnlySpan<byte> bytes)
-        => GuardedImageLoader.LoadFirstFrame(bytes, _loadSettings);
+    private Image<Rgb24> LoadGuarded(ReadOnlySpan<byte> bytes, CancellationToken ct)
+        => GuardedImageLoader.LoadFirstFrame(bytes, _loadSettings, ct);
 
     /// <summary>
     /// Releases the underlying ONNX sessions. Prefer <see cref="DisposeAsync"/>.

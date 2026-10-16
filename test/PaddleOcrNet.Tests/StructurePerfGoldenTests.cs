@@ -61,11 +61,14 @@ public sealed class StructurePerfGoldenTests
         var selected = Environment.GetEnvironmentVariable("PADDLEOCRNET_GOLDEN_ASSETS") is { Length: > 0 } filter
             ? Assets.Where(a => filter.Split(',', StringSplitOptions.TrimEntries).Contains(a, StringComparer.OrdinalIgnoreCase)).ToArray()
             : Assets;
+        Assert.NotEmpty(selected);
+        bool enforceStable = Environment.GetEnvironmentVariable("PADDLEOCRNET_GOLDEN_REQUIRE_STABLE") is "1" or "true" or "TRUE";
+        var unstableAssets = new List<string>();
 
         foreach (var asset in selected)
         {
             var path = Path.Combine(RepoRoot, "test", "Assets", asset);
-            Skip.IfNot(File.Exists(path), $"{asset} missing.");
+            Assert.True(File.Exists(path), $"Required golden fixture {asset} is missing: {path}");
 
             // Cold run (model loads) produces the golden output; three warm runs are timed and re-checked.
             var first = await service.AnalyzeDocumentAsync(path, options);
@@ -89,9 +92,12 @@ public sealed class StructurePerfGoldenTests
             string line = $"{asset}\tblocks={first.Blocks.Count}\tmedian_ms={times[1]:0}\truns={string.Join('/', times.Select(t => t.ToString("0")))}\tstable={stable}";
             report.Add(line);
             _out.WriteLine(line);
+            if (!stable) unstableAssets.Add(asset);
         }
 
         await File.WriteAllLinesAsync(Path.Combine(outDir, "timings.txt"), report);
         _out.WriteLine($"Golden output written to {outDir}");
+        if (enforceStable)
+            Assert.True(unstableAssets.Count == 0, $"Golden output changed between cold/warm runs: {string.Join(", ", unstableAssets)}");
     }
 }

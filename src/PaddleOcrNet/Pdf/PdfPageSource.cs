@@ -15,4 +15,7 @@ public enum PdfPageSource
     /// confidence of 1.0 and coordinates in the same pixel space the OCR path reports.
     /// </summary>
     EmbeddedText = 1,
+
+    /// <summary>Both native PDF text and visual OCR contribute selected lines.</summary>
+    Mixed = 2,
 }

@@ -21,8 +21,7 @@ internal sealed class OcrBatchRunner
     private readonly RecognitionOptions? _options;
     private readonly OcrBatchOptions _batch;
     private readonly int? _total;
-    private readonly Channel<OcrBatchItem> _channel =
-        Channel.CreateUnbounded<OcrBatchItem>(new UnboundedChannelOptions { SingleReader = true });
+    private readonly Channel<OcrBatchItem> _channel;
 
     private int _completed;
     private int _failed;
@@ -37,6 +36,11 @@ internal sealed class OcrBatchRunner
         _languages = languages;
         _options = options;
         _batch = batch;
+        _channel = Channel.CreateBounded<OcrBatchItem>(new BoundedChannelOptions(batch.CompletedResultCapacity)
+        {
+            SingleReader = true,
+            FullMode = BoundedChannelFullMode.Wait,
+        });
         _total = paths switch
         {
             IReadOnlyCollection<string> c => c.Count,
@@ -52,7 +56,8 @@ internal sealed class OcrBatchRunner
         if (_total is { } total) activity?.SetTag("paddleocr.batch.total", total);
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var pump = PumpAsync(activity, cts);
+        using var admission = _batch.PreserveOrder ? new SemaphoreSlim(_batch.OrderedAdmissionLimit) : null;
+        var pump = PumpAsync(activity, cts, admission);
         var pending = new Dictionary<int, OcrBatchItem>();
         int next = 0;
         try
@@ -69,6 +74,7 @@ internal sealed class OcrBatchRunner
                 while (pending.Remove(next, out var ready))
                 {
                     next++;
+                    admission!.Release();
                     yield return ready;
                 }
             }
@@ -95,7 +101,7 @@ internal sealed class OcrBatchRunner
         }
     }
 
-    private async Task PumpAsync(Activity? activity, CancellationTokenSource cts)
+    private async Task PumpAsync(Activity? activity, CancellationTokenSource cts, SemaphoreSlim? admission)
     {
         var token = cts.Token;
         var running = new List<Task>();
@@ -103,10 +109,17 @@ internal sealed class OcrBatchRunner
         try
         {
             int index = 0;
-            foreach (var path in _paths)
+            using var paths = _paths.GetEnumerator();
+            while (true)
             {
+                // Reserve capacity before advancing a lazy input. In ordered mode this
+                // window cannot advance past a stalled first item, even while we drain
+                // the completion channel into the reorder dictionary.
+                if (admission is not null) await admission.WaitAsync(token).ConfigureAwait(false);
                 await gate.WaitAsync(token).ConfigureAwait(false);
-                running.Add(WorkerAsync(path, index++, gate, activity, cts));
+                token.ThrowIfCancellationRequested();
+                if (!paths.MoveNext()) break;
+                running.Add(WorkerAsync(paths.Current, index++, gate, activity, cts));
                 if (running.Count >= 4 * _batch.MaxConcurrency) running.RemoveAll(t => t.IsCompleted);
             }
         }
@@ -155,7 +168,11 @@ internal sealed class OcrBatchRunner
 
             int completed = Interlocked.Increment(ref _completed);
             _batch.Progress?.Report(new OcrBatchProgress(completed, Volatile.Read(ref _failed), _total, item.Path));
-            _channel.Writer.TryWrite(item);
+            await _channel.Writer.WriteAsync(item, token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            // Cancellation also unblocks workers waiting for completion-buffer space.
         }
         catch (Exception ex)
         {

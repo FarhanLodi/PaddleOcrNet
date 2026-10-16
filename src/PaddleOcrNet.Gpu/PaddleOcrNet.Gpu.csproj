@@ -6,7 +6,8 @@
 		<Nullable>enable</Nullable>
 		<LangVersion>latest</LangVersion>
 		<PackageId>PaddleOcrNet.Gpu</PackageId>
-		<Version>2.3.1</Version>
+		<Version>2.4.0</Version>
+		<PackageReleaseNotes>Companion package for PaddleOcrNet 2.4.0. Retains ONNX Runtime GPU 1.31.0 and transitive native runtime selection. See CHANGELOG.md for release changes; actual CUDA parity requires a provisioned GPU host.</PackageReleaseNotes>
 		<Authors>PaddleOcrNet Contributors</Authors>
 		<Description>CUDA GPU execution provider for PaddleOcrNet. Adds Microsoft.ML.OnnxRuntime.Gpu so detection, classification and recognition run on NVIDIA GPUs, with opt-in TensorRT.</Description>
 		<PackageTags>OCR;PaddleOCR;ONNX;GPU;CUDA;.NET10</PackageTags>
@@ -24,6 +25,7 @@
 	<ItemGroup>
 		<None Include="../../icon.png" Pack="true" PackagePath="\" />
 		<None Include="README.md" Pack="true" PackagePath="\" />
+		<None Include="../../CHANGELOG.md" Pack="true" PackagePath="\" />
 		<!--
 			Imported into the consuming project by NuGet. Ensures the GPU build of onnxruntime.dll is the
 			copy that reaches the output folder, instead of the CPU one PaddleOcrNet's own ONNX Runtime

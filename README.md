@@ -31,6 +31,17 @@ in-process, offline-capable, and trim/AOT-friendly.
 
 ## Highlights
 
+Opt-in advanced APIs now cover bounded adaptive recovery, long-line recognition, calibrated routing,
+mixed-PDF evidence, coordinate provenance and multi-page assembly. See the
+[advanced OCR guide](docs/advanced-ocr-usage.md) for usage, validation commands and current limits.
+
+Version 2.4.0 also adds opt-in [recognizer residency limits](docs/recognizer-residency.md),
+[call-local tensor reuse](docs/recognition-advancements.md#call-local-tensor-reuse) and
+[document relationship verification](docs/relationship-verification.md). Verification preserves raw
+readings and proposes bounded source-region rereads; it never corrects a printed total to make it agree.
+See the [validation matrix](docs/support-validation-matrix.md) for reproducible commands and the distinction
+between tested behavior and unavailable Native AOT/CUDA prerequisites.
+
 - **High-accuracy text OCR** — DB detection + SVTR recognition (PP-OCRv5) handles dense invoices, forms,
   receipts, handwriting, rotated scans, and curved text.
 - **100+ languages** across 12 script families, with one shared detector and per-script recognizer packs.
@@ -44,6 +55,8 @@ in-process, offline-capable, and trim/AOT-friendly.
   Or extract labeled fields **offline** with the heuristic, layout-based KIE extractor — no LLM, no network.
 - **PDF in, searchable PDF out** — rasterize and OCR PDFs, or emit a searchable PDF with an invisible
   text layer.
+- **Office inputs in the same package** — read native DOCX paragraphs/tables, XLSX cells and PPTX slide
+  text, with optional OCR of embedded images and bounded ZIP/XML parsing. See the [Office input guide](docs/office-input.md).
 - **Robust by design** — singleton-safe, thread-safe ONNX sessions; DI + health checks; OpenTelemetry
   metrics; typed exceptions; input/decompression-bomb guards; checksum-verified model downloads.
 - **Deploys anywhere** — pure-managed (no OpenCV), CPU by default, optional CUDA, **Native AOT** and
@@ -131,6 +144,32 @@ await foreach (var item in ocr.ExtractTextFromImagesAsync(Directory.EnumerateFil
     else Console.WriteLine($"{item.Path} failed: {item.Exception!.Message}");
 }
 ```
+
+### DOCX, XLSX and PPTX inputs
+
+Read native content and OCR embedded images without installing another package:
+
+```csharp
+using PaddleOcrNet.Office;
+
+var office = await ocr.ExtractTextFromOfficeAsync("report.docx", new OfficeDocumentOptions
+{
+    RecognizeEmbeddedImages = true, // default; false reads native content without image inference
+    Languages = new[] { OcrLanguage.English }
+});
+Console.WriteLine(office.FullText);
+
+// Standalone native-only reading; no OCR service or model download:
+var workbook = OfficeDocumentReader.Read("workbook.xlsx");
+foreach (var sheet in workbook.Sections)
+    Console.WriteLine($"{sheet.Index}: {sheet.Name}");
+```
+
+Both entry points also accept streams. Results preserve source-part sections and typed blocks;
+embedded-image OCR retains its own `OcrResult`. This reads native package content rather than rendering
+Office pages: Excel values are raw cached values, formulas are not evaluated, and image coordinates
+remain local to the image. External links are never fetched. See the
+[Office input guide](docs/office-input.md) for limits, format coverage and unsupported inputs.
 
 ### PDFs
 
@@ -309,7 +348,7 @@ share across threads. Call `WarmUp(...)` to pre-load models off the request path
 | **Crop padding** | `RecognitionOptions.CropPadding` — white border in pixels added around every detected line before recognition (default `0`). A few pixels help when glyphs sit flush against the detected box. |
 | **Orientation handling** | `UseTextLineOrientation` / `UseDocOrientation` correct upside-down lines and pages (both on by default). The classifiers do misfire on upright text, so a verdict must clear `TextLineOrientationThreshold` (default `0.9`) and is then confirmed by `VerifyOrientationByRecognition` (default `true`), which recognizes the crop both ways and keeps the more confident reading. Set the threshold to `0` and the verification to `false` for raw PaddleX 3.x behaviour. `PaddleOcrServiceOptions.UseTextLineOrientation = false` turns the line classifier off for every call that doesn't set it explicitly. |
 | **Word spaces** | PP-OCRv5 can drop the space between Chinese and Latin text (`结算Pay` for `结算 Pay`) when the model is nearly undecided. Set `SpaceRecoveryThreshold = RecognitionOptions.RecommendedSpaceRecoveryThreshold` (0.15) to put those spaces back on printed documents, tables and forms. Numbers, brackets and punctuation are never split. Default `0` leaves space recovery off. |
-| **Punctuation changed after upgrading from 2.0.4** | Since 2.3.1, opt into `UseLegacyResize = true` on `RecognitionOptions` to use bicubic recognition resizing and ceiling-rounded batch width. This restores the hyphens in both date crops from [#13](https://github.com/FarhanLodi/PaddleOcrNet/issues/13), including with space recovery enabled. Default `false` retains Python-compatible preprocessing. This option retains BGR and the 320–3200 width bounds; it does not reproduce the entire 2.0.4 pipeline. Other characters and spaces can change, so validate your own images. A true en dash can still be misread by the model; this does not guarantee punctuation accuracy. |
+| **Punctuation changed after upgrading from 2.0.4** | Since 2.4.0, opt into `UseLegacyResize = true` on `RecognitionOptions` to use bicubic recognition resizing and ceiling-rounded batch width. This restores the hyphens in both date crops from [#13](https://github.com/FarhanLodi/PaddleOcrNet/issues/13), including with space recovery enabled. Default `false` retains Python-compatible preprocessing. This option retains BGR and the 320–3200 width bounds; it does not reproduce the entire 2.0.4 pipeline. Other characters and spaces can change, so validate your own images. A true en dash can still be misread by the model; this does not guarantee punctuation accuracy. |
 | **Model cache** | `%LOCALAPPDATA%` / `~/.local/share` by default; override via `ModelCachePath` or `PADDLEOCRNET_CACHE`. |
 | **Model host** | Defaults to the public Hugging Face repo; point at a private mirror via `PADDLEOCRNET_MODEL_BASE_URL` or `ModelDownloadOptions.BaseUrlOverride`. |
 | **Local models** | `DetectionModelPath` / `RecognitionModelPath` / `RecognitionDictionaryPath` load your own ONNX/dictionary files with no download at all. See [Local / offline models](#local--offline-models). |
