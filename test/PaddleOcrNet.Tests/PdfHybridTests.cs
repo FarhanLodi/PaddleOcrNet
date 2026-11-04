@@ -1,6 +1,4 @@
 using System.Reflection;
-using Docnet.Core;
-using Docnet.Core.Models;
 using PaddleOcrNet.Models;
 using PaddleOcrNet.Pdf;
 using PaddleOcrNet.Pdf.Internal;
@@ -134,7 +132,7 @@ public class PdfHybridTests
             pdfOptions: new PdfOcrOptions { TextLayer = PdfTextLayerMode.Hybrid });
         var evidence = Assert.Single(result.Pages[0].LineEvidence, e => e.Selected.Text == title.Text);
         Assert.Single(evidence.Alternatives);
-        using var reader = DocLib.Instance.GetDocReader(pdf, new PageDimensions(1.0));
+        using var reader = PdfDocument.Open(pdf, scale: 1.0);
         using var page = reader.GetPageReader(0);
         Assert.Equal(1, page.GetText().Split(title.Text, StringSplitOptions.None).Length - 1);
     }

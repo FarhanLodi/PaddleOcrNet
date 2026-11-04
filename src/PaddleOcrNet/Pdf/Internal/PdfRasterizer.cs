@@ -2,10 +2,6 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading.Channels;
-using Docnet.Core;
-using Docnet.Core.Exceptions;
-using Docnet.Core.Models;
-using Docnet.Core.Readers;
 using EasyImageSharp;
 using EasyImageSharp.PixelFormats;
 using PaddleOcrNet.Models;
@@ -13,7 +9,7 @@ using PaddleOcrNet.Models;
 namespace PaddleOcrNet.Pdf.Internal;
 
 /// <summary>
-/// Rasterizes PDF pages via PDFium (Docnet.Core) and optionally reads their embedded text layer.
+/// Rasterizes PDF pages via PDFium and optionally reads their embedded text layer.
 /// <para>
 /// A single background task owns every PDFium call, which keeps PDFium single-threaded. It renders one page ahead
 /// into a bounded channel while the consumer processes the previous page, so at most a few page bitmaps are alive
@@ -22,15 +18,11 @@ namespace PaddleOcrNet.Pdf.Internal;
 /// </summary>
 internal static class PdfRasterizer
 {
-    // PDFium load-error code for a password-protected document (FPDF_ERR_PASSWORD). Surfaced on
-    // DocnetLoadDocumentException.ErrorCode when the supplied password is missing or wrong.
-    private const uint FpdfErrPassword = 4;
-
     /// <summary>Pages rendered ahead and waiting for the consumer.</summary>
     private const int RenderAheadCapacity = 1;
 
     /// <summary>
-    /// Pixels-per-point of the size probe used for auto DPI. Docnet truncates page sizes to whole pixels, so a large
+    /// Pixels-per-point of the size probe used for auto DPI. Page sizes are truncated to whole pixels, so a large
     /// factor keeps 0.01 pt precision; the probe never renders.
     /// </summary>
     private const double ProbeScale = 100.0;
@@ -44,7 +36,7 @@ internal static class PdfRasterizer
     /// <summary>Upper clamp of auto DPI.</summary>
     internal const int AutoDpiMax = 400;
 
-    // (c * 255 + 255 * 0) >> 8 for a fully opaque pixel, exactly as Docnet's NaiveTransparencyRemover computes it.
+    // Preserve the former transparency-removal formula, including its integer rounding.
     private static readonly byte[] s_opaque = BuildOpaqueTable();
 
     /// <summary>
@@ -72,10 +64,9 @@ internal static class PdfRasterizer
 
         bool autoDpi = options.Dpi == PdfOcrOptions.AutoDpi;
 
-        // The first reader renders at the fixed DPI, or (auto DPI) only probes page sizes. DocLib.Instance is a
-        // process-wide singleton and is never disposed here.
-        IDocReader primary = Open(pdfBytes, options.Password, autoDpi ? ProbeScale : options.Dpi / 72.0);
-        IDocReader? renderReader = autoDpi ? null : primary;
+        // The first reader renders at the fixed DPI, or (auto DPI) only probes page sizes.
+        PdfDocument primary = Open(pdfBytes, options.Password, autoDpi ? ProbeScale : options.Dpi / 72.0);
+        PdfDocument? renderReader = autoDpi ? null : primary;
         int renderReaderDpi = autoDpi ? 0 : options.Dpi;
 
         try
@@ -108,7 +99,7 @@ internal static class PdfRasterizer
                             dpi = ResolveAutoDpi(widthPt, heightPt);
                             if (renderReader is null || renderReaderDpi != dpi)
                             {
-                                // A Docnet reader has one fixed scale; keep only the reader for the current DPI.
+                                // A reader has one fixed scale; keep only the reader for the current DPI.
                                 renderReader?.Dispose();
                                 renderReader = null;
                                 renderReader = Open(pdfBytes, options.Password, dpi / 72.0);
@@ -188,8 +179,7 @@ internal static class PdfRasterizer
 
     /// <summary>
     /// Converts PDFium's BGRA output straight into an <see cref="Rgb24"/> image, flattening alpha onto white with
-    /// the same integer formula as Docnet's <c>NaiveTransparencyRemover</c>, so the pixels are byte-identical to
-    /// the former remove-transparency-then-<c>CloneAs</c> path.
+    /// the same integer formula as the former transparency remover, preserving existing OCR input pixels.
     /// </summary>
     internal static Image<Rgb24> ConvertBgraToRgb24(ReadOnlySpan<byte> bgra, int width, int height)
     {
@@ -229,33 +219,29 @@ internal static class PdfRasterizer
         return table;
     }
 
-    private static IDocReader Open(byte[] pdfBytes, string? password, double scale)
+    private static PdfDocument Open(byte[] pdfBytes, string? password, double scale)
     {
         // Opening can fail on a corrupt, truncated, non-PDF, or encrypted document; surface those as a typed, clear
         // error. A password is always passed (string.Empty when none) so one code path handles both cases.
         try
         {
-            return DocLib.Instance.GetDocReader(pdfBytes, password ?? string.Empty, new PageDimensions(scale));
+            return PdfDocument.Open(pdfBytes, password, scale);
         }
-        catch (DocnetLoadDocumentException ex)
-        {
-            throw new PdfProcessingException(DescribeLoadFailure(ex, password), ex);
-        }
-        catch (Exception ex) when (ex is DocnetException or ArgumentException)
+        catch (ArgumentException ex)
         {
             throw new PdfProcessingException(
                 "The PDF could not be opened. It may be corrupt, not a PDF, or password-protected/encrypted.", ex);
         }
     }
 
-    private static IReadOnlyList<int> SelectPages(IDocReader reader, PdfOcrOptions options)
+    private static IReadOnlyList<int> SelectPages(PdfDocument reader, PdfOcrOptions options)
     {
         int count;
         try
         {
             count = reader.GetPageCount();
         }
-        catch (DocnetException ex)
+        catch (InvalidOperationException ex)
         {
             throw new PdfProcessingException("The PDF page count could not be read; the document may be corrupt.", ex);
         }
@@ -285,28 +271,28 @@ internal static class PdfRasterizer
         return pages;
     }
 
-    private static (double WidthPt, double HeightPt) ReadPageSizePoints(IDocReader probe, int pageNumber)
+    private static (double WidthPt, double HeightPt) ReadPageSizePoints(PdfDocument probe, int pageNumber)
     {
         try
         {
             using var pageReader = probe.GetPageReader(pageNumber - 1);
             return (pageReader.GetPageWidth() / ProbeScale, pageReader.GetPageHeight() / ProbeScale);
         }
-        catch (Exception ex) when (ex is DocnetException or ArgumentException or InvalidOperationException)
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {
             throw new PdfProcessingException($"Page {pageNumber} of the PDF could not be read; the document may be corrupt.", ex);
         }
     }
 
     private static (RenderedPage Page, byte[]? Buffer) RenderPage(
-        IDocReader reader, int pageNumber, int total, int dpi, PdfOcrOptions options, bool imagesRequired, byte[]? buffer)
+        PdfDocument reader, int pageNumber, int total, int dpi, PdfOcrOptions options, bool imagesRequired, byte[]? buffer)
     {
         using var stage = PaddleOcrNet.Diagnostics.PaddleOcrDiagnostics.MeasureStage("pdf_render");
         // Any failure here is a document/PDFium problem, kept apart from the consumer's OCR so genuine OCR errors
         // are never mislabeled as a PDF-rendering error.
         try
         {
-            using var pageReader = reader.GetPageReader(pageNumber - 1); // Docnet/PDFium page indices are 0-based.
+            using var pageReader = reader.GetPageReader(pageNumber - 1); // PDFium page indices are 0-based.
             int width = pageReader.GetPageWidth();
             int height = pageReader.GetPageHeight();
 
@@ -324,7 +310,7 @@ internal static class PdfRasterizer
             if (options.TextLayer != PdfTextLayerMode.Ignore)
             {
                 var sw = Stopwatch.StartNew();
-                embeddedLines = EmbeddedTextLayer.SelectLines(ReadCharacters(pageReader, dpi / 72.0), options.TextLayer, width, height);
+                embeddedLines = EmbeddedTextLayer.SelectLines(pageReader.GetCharacters(), options.TextLayer, width, height);
                 embeddedDuration = sw.Elapsed;
             }
 
@@ -336,7 +322,7 @@ internal static class PdfRasterizer
                 int byteCount = checked(width * height * 4);
                 if (buffer is null || buffer.Length < byteCount)
                     buffer = new byte[byteCount];
-                pageReader.WriteImageToBuffer((RenderFlags)0, buffer);
+                pageReader.WriteImageToBuffer(buffer);
                 image = ConvertBgraToRgb24(buffer.AsSpan(0, byteCount), width, height);
             }
 
@@ -353,50 +339,10 @@ internal static class PdfRasterizer
             };
             return (page, buffer);
         }
-        catch (Exception ex) when (ex is DocnetException or ArgumentException or InvalidOperationException or OverflowException)
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or OverflowException)
         {
             throw new PdfProcessingException($"Page {pageNumber} of the PDF could not be rendered; the document may be corrupt.", ex);
         }
     }
 
-    /// <summary>
-    /// Reads the page's characters. Docnet reports boxes via <c>FPDF_PageToDevice</c> at the reader's scale, i.e.
-    /// already in rendered-page pixels (verified: the same glyph sits at x=163 at 72 DPI and x=453 at 200 DPI);
-    /// only the font size (points) needs converting.
-    /// </summary>
-    private static List<PdfTextChar> ReadCharacters(IPageReader pageReader, double pixelsPerPoint)
-    {
-        var chars = new List<PdfTextChar>();
-        foreach (var c in pageReader.GetCharacters())
-        {
-            var box = c.Box;
-            chars.Add(new PdfTextChar(
-                c.Char,
-                Math.Min(box.Left, box.Right),
-                Math.Min(box.Top, box.Bottom),
-                Math.Max(box.Left, box.Right),
-                Math.Max(box.Top, box.Bottom),
-                c.FontSize > 0 ? c.FontSize * pixelsPerPoint : 0));
-        }
-        return chars;
-    }
-
-    /// <summary>
-    /// Maps a Docnet load failure to a clear, actionable message — distinguishing a password problem (so the
-    /// caller knows to set/fix <see cref="PdfOcrOptions.Password"/>) from generic corruption.
-    /// </summary>
-    private static string DescribeLoadFailure(DocnetLoadDocumentException ex, string? password)
-    {
-        bool passwordProblem = ex.ErrorCode == FpdfErrPassword
-            || ex.Message.Contains("password", StringComparison.OrdinalIgnoreCase);
-
-        if (passwordProblem)
-        {
-            return string.IsNullOrEmpty(password)
-                ? "The PDF is encrypted and requires a password. Set PdfOcrOptions.Password to open it."
-                : "The PDF is encrypted and the supplied PdfOcrOptions.Password is incorrect. Check the password and try again.";
-        }
-
-        return "The PDF could not be opened. It may be corrupt, not a PDF, or password-protected/encrypted.";
-    }
 }

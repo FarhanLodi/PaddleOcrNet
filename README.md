@@ -173,6 +173,9 @@ remain local to the image. External links are never fetched. See the
 
 ### PDFs
 
+PDF support is built in: `bblanchon.PDFium` native packages bundle the platform-native libraries for
+Windows, Linux and macOS. No manual native-library setup is required; the public PDF API is unchanged.
+
 PDF pages are rasterized with PDFium and OCR'd — or, for born-digital pages, read straight from the
 embedded text layer, which is exact and takes milliseconds instead of seconds. A quality gate falls back
 to OCR when a PDF's text layer is broken, and `Auto` also OCRs scanned pages that carry only a stray line
@@ -766,5 +769,7 @@ MIT © PaddleOcrNet contributors. Downloaded models are Apache-2.0 / MIT and att
 
 Every runtime dependency is permissively licensed, with no revenue threshold, commercial tier or licence
 key anywhere in the stack: imaging runs on [EasyImageSharp](https://github.com/FarhanLodi/EasyImageSharp)
-(MIT), inference on ONNX Runtime (MIT), PDF rasterization on Docnet.Core (MIT) and polygon offsetting on
-Clipper2 (BSL-1.0).
+(MIT), inference on ONNX Runtime (MIT), PDF rendering and text extraction on
+[bblanchon.PDFium native packages](https://github.com/bblanchon/pdfium-binaries) (Apache-2.0 package
+license; PDFium's BSD-style and third-party licenses also apply), and polygon offsetting on Clipper2
+(BSL-1.0). See [NOTICE](NOTICE) for PDFium attribution and license sources.

@@ -71,8 +71,8 @@ Match the file you are editing. The codebase has a consistent voice — explanat
   threshold, a magic number, a fallback — say where it came from. Where a constant mirrors upstream
   PaddleOCR, name the upstream source.
 * Don't add a dependency without discussing it in an issue first. Keeping the graph small and
-  permissively licensed is a deliberate goal of this project: every runtime dependency is MIT or
-  BSL-1.0, with no commercial tier or revenue threshold anywhere in the stack.
+  permissively licensed is a deliberate goal of this project: runtime dependencies use MIT,
+  Apache-2.0, BSD-style or BSL-1.0 licenses, with no commercial tier or revenue threshold.
 
 ## The structure engine is shared with EasyOcrSharp by hand
 
