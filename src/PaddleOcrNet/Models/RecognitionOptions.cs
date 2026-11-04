@@ -138,11 +138,19 @@ public sealed record RecognitionOptions
     /// lazily on first use; if it cannot be obtained, the pipeline logs a warning and proceeds without it.
     /// Applies to detection-based OCR only (full-page or region-of-interest); caller-supplied region
     /// polygons (<c>RecognizeRegionsAsync</c>) are never re-oriented. The detected page rotation is
-    /// reported via <see cref="OcrResult.DetectedOrientation"/>, and all returned coordinates are mapped
-    /// back to the <b>original</b> image's orientation (a deliberate deviation from Python, which reports
-    /// them in the rotated frame).
+    /// reported via <see cref="OcrResult.DetectedOrientation"/>. Coordinates default to the original
+    /// image's orientation; <see cref="CoordinateFrame"/> can select the upright orientation instead.
     /// </summary>
     public bool UseDocOrientation { get; init; } = true;
+
+    /// <summary>
+    /// Frame of returned line and word geometry. Defaults to the decoded input's
+    /// <see cref="OcrResultCoordinateFrame.Original"/> frame. Normalized rotates that frame by the
+    /// applied document-orientation correction; it does not enable orientation detection.
+    /// Deskew and pixel-aspect corrections are still mapped back before this rotation.
+    /// Caller-supplied regions are not re-oriented. Nonlinear dewarping remains noninvertible.
+    /// </summary>
+    public OcrResultCoordinateFrame CoordinateFrame { get; init; } = OcrResultCoordinateFrame.Original;
 
     /// <summary>
     /// Run the UVDoc document unwarp (dewarp) model on the page before detection — PaddleX's

@@ -483,6 +483,39 @@ foreach (var line in result.Lines)
 string hocr = result.ToHocr();   // ocrx_word elements carry the real word boxes
 ```
 
+### Result coordinate frames
+
+Line and word polygons and bounding boxes default to `OcrResultCoordinateFrame.Original`: the
+decoded input's coordinates, even when document-orientation detection rotates a scan to read it.
+Select `Normalized` to return those coordinates rotated upright instead:
+
+```csharp
+var result = await ocr.ExtractTextFromImage("scan.png", OcrLanguage.English,
+    RecognitionOptions.Default with
+    {
+        CoordinateFrame = OcrResultCoordinateFrame.Normalized,
+        ReturnWordBoxes = true,
+    });
+Console.WriteLine($"Applied clockwise rotation: {result.AppliedRotation} degrees");
+Console.WriteLine($"Original: {result.OriginalWidth} x {result.OriginalHeight}");
+Console.WriteLine($"Normalized: {result.NormalizedWidth} x {result.NormalizedHeight}");
+```
+
+`AppliedRotation` is the correction, not `DetectedOrientation` (a 90° clockwise scan needs a 270°
+clockwise correction). Width and height swap for 90°/270° corrections. `SourceWidth` and `SourceHeight`
+describe the selected result frame for exporters. Text, confidence and upright reading order are
+unchanged. Choosing a frame does not enable orientation detection: when no document rotation runs,
+the two frames coincide, including input already rotated upright by the caller. Caller-supplied
+recognition regions are never re-oriented.
+
+Deskew and pixel-aspect corrections are mapped back before selecting the orientation frame; a
+region-of-interest result remains relative to the full decoded image. Nonlinear UVDoc dewarping
+still has no source inverse: inspect `Coordinates.NonlinearDewarpApplied` and
+`Coordinates.SourceMappingAvailable` rather than treating dewarped boxes as original positions.
+These options apply to image OCR, not PP-StructureV3 layout coordinates.
+Hybrid PDF fusion and searchable-PDF output require source-raster coordinates; keep `Original`
+for those operations. Native PDF text extraction does not run document-orientation correction.
+
 ### Output formats
 
 `OcrResult` exports to plain text, **JSON**, **hOCR**, **ALTO XML**, and TSV; documents export to

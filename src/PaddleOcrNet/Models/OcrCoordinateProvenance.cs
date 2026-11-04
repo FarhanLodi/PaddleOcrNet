@@ -7,6 +7,8 @@ public enum OcrCoordinateFrame
     SourcePixels,
     /// <summary>Nonlinearly dewarped coordinates, with affine stages mapped back. Not original source positions.</summary>
     DewarpedPixels,
+    /// <summary>Coordinates rotated into the upright orientation, after mapping affine preprocessing back.</summary>
+    NormalizedPixels,
 }
 
 /// <summary>Applied geometry history. UVDoc emits pixels without an inverse field; no inverse is invented.</summary>
@@ -16,7 +18,7 @@ public sealed record OcrCoordinateProvenance
     public OcrCoordinateFrame Frame { get; init; }
     /// <summary>Whether returned coordinates identify original decoded-source positions.</summary>
     public bool SourceMappingAvailable { get; init; } = true;
-    /// <summary>Applied clockwise document rotation, already mapped back in the output.</summary>
+    /// <summary>Applied clockwise document rotation; result CoordinateFrame says whether it was mapped back.</summary>
     public int DocumentRotationDegrees { get; init; }
     /// <summary>Applied deskew rotation, already mapped back in the output.</summary>
     public float DeskewDegrees { get; init; }
