@@ -118,18 +118,27 @@ public class ExtractionZoneTests
         Assert.Same(baseAllowlist, used.Allowlist);
     }
 
-    [Fact]
-    public async Task Empty_zone_yields_empty_result_without_calling_the_service()
+    [Theory]
+    [InlineData(OcrResultCoordinateFrame.Original)]
+    [InlineData(OcrResultCoordinateFrame.Normalized)]
+    public async Task Empty_zone_yields_empty_result_without_calling_the_service(OcrResultCoordinateFrame frame)
     {
         var service = new RecordingOcrService();
         using var image = NewImage();
 
-        var result = await service.RecognizeZonesAsync(image, new[] { new OcrZone("nothing", OcrRegion.Pixels(500, 500, 10, 10)) });
+        var result = await service.RecognizeZonesAsync(image, new[] { new OcrZone("nothing", OcrRegion.Pixels(500, 500, 10, 10)) },
+            options: new RecognitionOptions { CoordinateFrame = frame });
 
         Assert.Equal(string.Empty, result["nothing"].Text);
         Assert.Empty(result["nothing"].Lines);
         Assert.Equal(0, result["nothing"].Confidence);
         Assert.Empty(service.ExtractCalls);
+        var empty = result["nothing"].Result;
+        Assert.Equal(frame, empty.CoordinateFrame);
+        Assert.Equal(200, empty.OriginalWidth);
+        Assert.Equal(100, empty.OriginalHeight);
+        Assert.Equal(200, empty.NormalizedWidth);
+        Assert.Equal(100, empty.NormalizedHeight);
     }
 
     [Fact]

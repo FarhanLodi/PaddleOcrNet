@@ -44,6 +44,24 @@ public sealed class PdfUncoveredRecognitionTests
         Assert.Same(languages, proxy.Languages);
     }
 
+    [Theory]
+    [InlineData(OcrResultCoordinateFrame.Original)]
+    [InlineData(OcrResultCoordinateFrame.Normalized)]
+    public async Task No_uncovered_regions_preserves_frame_and_size_metadata(OcrResultCoordinateFrame frame)
+    {
+        using var image = new Image<Rgb24>(200, 100);
+        var service = DispatchProxy.Create<IPaddleOcrService, SelectiveProxy>();
+        var result = await HybridUncoveredRecognition.RecognizeAsync(service, image,
+            Array.Empty<OcrLine>(), [OcrLanguage.English], SourceOptions with { CoordinateFrame = frame }, default);
+        Assert.Empty(result.Lines);
+        Assert.Equal(frame, result.CoordinateFrame);
+        Assert.Equal(200, result.OriginalWidth);
+        Assert.Equal(100, result.OriginalHeight);
+        Assert.Equal(200, result.NormalizedWidth);
+        Assert.Equal(100, result.NormalizedHeight);
+        Assert.Equal(0, result.AppliedRotation);
+    }
+
     [Fact]
     public async Task Partial_native_coverage_never_suppresses_larger_detected_region()
     {
