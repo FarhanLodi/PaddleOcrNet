@@ -4,6 +4,16 @@ All notable changes to PaddleOcrNet are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `PaddleOcrModels.PrepareAsync` prepares selected model sets in an explicit deployment folder:
+  verified cache copies or downloads, one retry for checksum corruption, atomic folder publication,
+  and verified idempotent reuse. Failed preparation cleans up staging; incomplete existing folders
+  are never overwritten. Use the existing `ModelCachePath` and `Download.Offline` options to load
+  only from the prepared folder without network access.
+
 ## [2.4.0] - 2026-10-16
 
 This minor release adds opt-in OCR routing, recovery and document-processing APIs, upgrades
