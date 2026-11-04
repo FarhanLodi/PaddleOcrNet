@@ -165,14 +165,15 @@ internal static class ModelDownloadManager
         Report(logger, options, asset.FileName, downloaded, total);
     }
 
-    private static async Task VerifyChecksumAsync(ModelAsset asset, string tempPath, ModelDownloadOptions options, CancellationToken ct)
+    internal static async Task VerifyChecksumAsync(
+        ModelAsset asset, string tempPath, ModelDownloadOptions options, CancellationToken ct, bool deleteOnFailure = true)
     {
         if (string.IsNullOrEmpty(asset.Sha256))
         {
             // Fail closed: a downloaded model parsed by native ONNX Runtime must be integrity-verified
             // unless the caller has explicitly opted into unverified assets from a trusted mirror.
             if (options.AllowUnverifiedModels) return;
-            File.Delete(tempPath);
+            if (deleteOnFailure) File.Delete(tempPath);
             throw new ModelChecksumException(
                 $"Downloaded model '{asset.FileName}' has no known SHA256 checksum to verify against. " +
                 "Set ModelDownloadOptions.AllowUnverifiedModels = true to allow unverified models from a trusted source.");
@@ -181,7 +182,7 @@ internal static class ModelDownloadManager
         var actual = await ComputeSha256Async(tempPath, ct).ConfigureAwait(false);
         if (!string.Equals(actual, asset.Sha256, StringComparison.OrdinalIgnoreCase))
         {
-            File.Delete(tempPath);
+            if (deleteOnFailure) File.Delete(tempPath);
             throw new ModelChecksumException(
                 $"Downloaded model '{asset.FileName}' failed SHA256 verification. Expected {asset.Sha256}, got {actual}.");
         }

@@ -12,6 +12,10 @@ public sealed class PaddleOcrServiceOptions
 {
     /// <summary>
     /// Optional model cache directory (defaults to LocalAppData or PADDLEOCRNET_CACHE).
+    /// Set this to a folder prepared with <see cref="Extraction.PaddleOcrModels.PrepareAsync"/> and enable
+    /// <see cref="ModelDownloadOptions.Offline"/> to use only that folder, with no default-cache fallback
+    /// or downloads. Model loading is lazy: a missing file fails when first needed, not at construction.
+    /// Explicit local model path overrides still take precedence.
     /// </summary>
     public string? ModelCachePath { get; set; }
 
