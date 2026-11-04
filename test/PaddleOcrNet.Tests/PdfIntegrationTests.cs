@@ -1,5 +1,3 @@
-using Docnet.Core;
-using Docnet.Core.Models;
 using EasyImageSharp;
 using EasyImageSharp.PixelFormats;
 using PaddleOcrNet.Models;
@@ -123,7 +121,7 @@ public class PdfIntegrationTests
         var lines = Assert.Single(result.Pages).Ocr.Lines.Where(l => !string.IsNullOrWhiteSpace(l.Text)).ToList();
         Assert.NotEmpty(lines);
 
-        using var reader = DocLib.Instance.GetDocReader(searchable, new PageDimensions(1.0));
+        using var reader = PdfDocument.Open(searchable, scale: 1.0);
         using var page = reader.GetPageReader(0);
         string extracted = Strip(page.GetText());
 
@@ -134,10 +132,10 @@ public class PdfIntegrationTests
         var nonLatin1 = lines.SelectMany(l => l.Text).Where(c => c > 0xFF && !char.IsWhiteSpace(c)).Distinct().ToList();
         Assert.All(nonLatin1, c => Assert.Contains(c.ToString(), extracted));
 
-        var glyphs = page.GetCharacters().Where(c => !char.IsWhiteSpace(c.Char) && !char.IsControl(c.Char)).ToList();
+        var glyphs = page.GetCharacters().Where(c => !char.IsWhiteSpace(c.Value) && !char.IsControl(c.Value)).ToList();
         int aligned = glyphs.Count(g =>
         {
-            double cx = (g.Box.Left + g.Box.Right) / 2.0, cy = (g.Box.Top + g.Box.Bottom) / 2.0;
+            double cx = (g.Left + g.Right) / 2.0, cy = (g.Top + g.Bottom) / 2.0;
             return lines.Any(l => cx >= l.BoundingBox.MinX - 3 && cx <= l.BoundingBox.MaxX + 3
                 && cy >= l.BoundingBox.MinY - 0.25 * l.BoundingBox.Height && cy <= l.BoundingBox.MaxY + 0.25 * l.BoundingBox.Height);
         });

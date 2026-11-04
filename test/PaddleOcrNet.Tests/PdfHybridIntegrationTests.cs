@@ -1,5 +1,3 @@
-using Docnet.Core;
-using Docnet.Core.Models;
 using EasyImageSharp;
 using EasyImageSharp.PixelFormats;
 using PaddleOcrNet.Models;
@@ -46,16 +44,16 @@ public class PdfHybridIntegrationTests
         Assert.Contains(page.LineEvidence, e => e.Source == PdfPageSource.Ocr && !string.IsNullOrWhiteSpace(e.Selected.Text));
         Assert.Equal(page.Ocr.Lines.Count, page.Ocr.Lines.Select(l => (l.Text, l.BoundingBox)).Distinct().Count());
 
-        using var reader = DocLib.Instance.GetDocReader(searchable, new PageDimensions(1.0));
+        using var reader = PdfDocument.Open(searchable, scale: 1.0);
         using var rendered = reader.GetPageReader(0);
         Assert.Equal(1, rendered.GetText().Split(conflicting.Text, StringSplitOptions.None).Length - 1);
-        var glyphs = rendered.GetCharacters().Where(c => !char.IsWhiteSpace(c.Char) && !char.IsControl(c.Char)).ToArray();
+        var glyphs = rendered.GetCharacters().Where(c => !char.IsWhiteSpace(c.Value) && !char.IsControl(c.Value)).ToArray();
         Assert.NotEmpty(glyphs);
         double aligned = glyphs.Count(g => page.Ocr.Lines.Any(l =>
-            (g.Box.Left + g.Box.Right) / 2.0 >= l.BoundingBox.MinX - 3 &&
-            (g.Box.Left + g.Box.Right) / 2.0 <= l.BoundingBox.MaxX + 3 &&
-            (g.Box.Top + g.Box.Bottom) / 2.0 >= l.BoundingBox.MinY - l.BoundingBox.Height * 0.25 &&
-            (g.Box.Top + g.Box.Bottom) / 2.0 <= l.BoundingBox.MaxY + l.BoundingBox.Height * 0.25)) / (double)glyphs.Length;
+            (g.Left + g.Right) / 2.0 >= l.BoundingBox.MinX - 3 &&
+            (g.Left + g.Right) / 2.0 <= l.BoundingBox.MaxX + 3 &&
+            (g.Top + g.Bottom) / 2.0 >= l.BoundingBox.MinY - l.BoundingBox.Height * 0.25 &&
+            (g.Top + g.Bottom) / 2.0 <= l.BoundingBox.MaxY + l.BoundingBox.Height * 0.25)) / (double)glyphs.Length;
         Assert.True(aligned >= 0.95, $"Only {aligned:P1} of selectable glyphs align with selected regions.");
     }
 }

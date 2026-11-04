@@ -2,7 +2,7 @@ namespace PaddleOcrNet.Pdf.Internal;
 
 /// <summary>
 /// One character of a PDF page's embedded text layer, in rendered-page pixel coordinates (top-left origin).
-/// Decoupled from Docnet's <c>Character</c> type so the line-building logic can be unit-tested without PDFium.
+/// Independent of native handles so the line-building logic can be unit-tested without PDFium.
 /// </summary>
 /// <param name="Value">The UTF-16 code unit PDFium reported for the character.</param>
 /// <param name="Left">Left edge in pixels.</param>

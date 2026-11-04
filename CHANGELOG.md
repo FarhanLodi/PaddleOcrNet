@@ -4,6 +4,15 @@ All notable changes to PaddleOcrNet are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Bundled PDF support** ([#14](https://github.com/FarhanLodi/PaddleOcrNet/issues/14)): replace
+  Docnet.Core with `bblanchon.PDFium` native packages and internal PDFium bindings, removing the
+  dependency on Docnet's `pdfium.so`. PDF support works out of the box with bundled platform-native
+  libraries, no manual native setup, and no public API changes.
+
 ## [2.4.0] - 2026-10-16
 
 This minor release adds opt-in OCR routing, recovery and document-processing APIs, upgrades
