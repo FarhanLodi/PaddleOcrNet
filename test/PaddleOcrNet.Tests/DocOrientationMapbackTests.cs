@@ -1,3 +1,6 @@
+using System.Text.Json;
+using EasyImageSharp;
+using EasyImageSharp.PixelFormats;
 using PaddleOcrNet.Internal;
 using PaddleOcrNet.Internal.Geometry;
 using PaddleOcrNet.Models;
@@ -7,12 +10,7 @@ using Xunit;
 namespace PaddleOcrNet.Tests;
 
 /// <summary>
-/// Pure-function tests (no models, CI-safe) for the document-orientation coordinate mapback added with
-/// the OCR-path doc preprocessor: <see cref="OrientationMapper"/> (inverse-rotating quads from the
-/// uprighted working frame back into the original image's orientation), the new
-/// <see cref="RecognitionOptions"/> defaults (doc orientation ON / unwarp OFF, the documented
-/// python-parity stance), the extracted <see cref="SortedBoxes"/> python <c>sorted_boxes</c> helper the
-/// parity emitter uses, and the rotation-aware reading-order sort in <see cref="PaddleOcrService"/>.
+/// Coordinate-mapback unit tests and a gated real-model matrix on a synthetic non-square page.
 /// </summary>
 public class DocOrientationMapbackTests
 {
@@ -145,6 +143,137 @@ public class DocOrientationMapbackTests
         Assert.Same(lines, OrientationMapper.MapLinesToOriginalFrame(lines, 0, 10, 10));
     }
 
+    [SkippableTheory]
+    [Trait("Category", "Integration")]
+    [InlineData(0, true)]
+    [InlineData(90, true)]
+    [InlineData(180, true)]
+    [InlineData(270, true)]
+    [InlineData(0, false)]
+    [InlineData(90, false)]
+    [InlineData(180, false)]
+    [InlineData(270, false)]
+    [InlineData(0, true, true)]
+    [InlineData(90, true, true)]
+    [InlineData(180, true, true)]
+    [InlineData(270, true, true)]
+    [InlineData(0, false, true)]
+    [InlineData(90, false, true)]
+    [InlineData(180, false, true)]
+    [InlineData(270, false, true)]
+    public async Task Synthetic_page_returns_text_and_word_and_line_boxes_in_selected_frame(
+        int pageRotation, bool detectOrientation, bool normalized = false)
+    {
+        Skip.IfNot(Environment.GetEnvironmentVariable("PADDLEOCRNET_RUN_INTEGRATION") == "1",
+            "Set PADDLEOCRNET_RUN_INTEGRATION=1 to run model-backed orientation checks.");
+
+        using var upright = Image.Load<Rgb24>(SyntheticPagePath());
+        using var rotated = ImagePreprocessor.RotateRightAngle(upright, pageRotation);
+        // A caller that has already corrected the rotation supplies an upright image, not the scan.
+        using var corrected = ImagePreprocessor.RotateRightAngle(rotated, (360 - pageRotation) % 360);
+        var input = detectOrientation ? rotated : corrected;
+        using var service = new PaddleOcrService();
+        var options = new RecognitionOptions { ReturnWordBoxes = true, UseDocOrientation = false };
+        var baseline = await service.ExtractTextFromImage(upright, OcrLanguage.English, options);
+        AssertSyntheticLayout(baseline);
+
+        var result = await service.ExtractTextFromImage(input, OcrLanguage.English,
+            options with
+            {
+                UseDocOrientation = detectOrientation,
+                CoordinateFrame = normalized ? OcrResultCoordinateFrame.Normalized : OcrResultCoordinateFrame.Original,
+            });
+        int expectedRotation = detectOrientation ? pageRotation : 0;
+        Assert.Equal(expectedRotation, result.DetectedOrientation);
+        Assert.Equal((360 - expectedRotation) % 360, result.AppliedRotation);
+        Assert.Equal(normalized ? OcrResultCoordinateFrame.Normalized : OcrResultCoordinateFrame.Original, result.CoordinateFrame);
+        Assert.Equal(input.Width, result.OriginalWidth);
+        Assert.Equal(input.Height, result.OriginalHeight);
+        Assert.Equal(upright.Width, result.NormalizedWidth);
+        Assert.Equal(upright.Height, result.NormalizedHeight);
+        Assert.Equal(normalized ? upright.Width : input.Width, result.SourceWidth);
+        Assert.Equal(normalized ? upright.Height : input.Height, result.SourceHeight);
+        Assert.Equal(normalized ? OcrCoordinateFrame.NormalizedPixels : OcrCoordinateFrame.SourcePixels,
+            result.Coordinates!.Frame);
+        Assert.Equal(!normalized || expectedRotation == 0, result.Coordinates.SourceMappingAvailable);
+        Assert.Equal(baseline.FullText, result.FullText);
+        Assert.Equal(baseline.Lines.Count, result.Lines.Count);
+        for (int i = 0; i < baseline.Lines.Count; i++)
+        {
+            var expected = baseline.Lines[i];
+            var actual = result.Lines[i];
+            Assert.Equal(expected.Text, actual.Text);
+            AssertRotatedGeometry(expected.BoundingPolygon, actual.BoundingPolygon, actual.BoundingBox, normalized ? 0 : expectedRotation);
+            Assert.Equal(expected.Words.Select(w => w.Text), actual.Words.Select(w => w.Text));
+            Assert.Equal(expected.Words.Count, actual.Words.Count);
+            for (int j = 0; j < expected.Words.Count; j++)
+                AssertRotatedGeometry(expected.Words[j].BoundingPolygon, actual.Words[j].BoundingPolygon,
+                    actual.Words[j].BoundingBox, normalized ? 0 : expectedRotation);
+        }
+    }
+
+    private static string SyntheticPagePath()
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "PaddleOcrNet.sln")))
+            root = root.Parent;
+        return Path.Combine(root?.FullName ?? throw new InvalidOperationException("Repository root not found."),
+            "test", "Assets", "orientation-mapback.png");
+    }
+
+    private static void AssertSyntheticLayout(OcrResult result)
+    {
+        // Generated on a white 1200×800 canvas with Arial 40px, using typographic DrawString.
+        // Detector expansion allows 20px; CTC boundaries allow 30px (less than one glyph at this size).
+        // Rotation comparisons below remain tight at 3px for every polygon vertex and box edge.
+        var layout = new[]
+        {
+            ("Clear morning", 90d, 75d, 341d, 120d, 186d),
+            ("Bright paper", 180d, 190d, 398d, 235d, 284d),
+            ("Simple words", 110d, 330d, 350d, 375d, 232d),
+            ("Final reading", 250d, 510d, 481d, 555d, 337d),
+        };
+        Assert.Equal(layout.Select(l => l.Item1), result.Lines.Select(l => l.Text));
+        for (int i = 0; i < layout.Length; i++)
+        {
+            var (text, x, y, right, bottom, split) = layout[i];
+            var line = result.Lines[i];
+            AssertBoxNear(new OcrBoundingBox(x, y, right, bottom), line.BoundingBox, 20);
+            Assert.Equal(text.Split(' '), line.Words.Select(w => w.Text));
+            AssertBoxNear(new OcrBoundingBox(x, y, split, bottom), line.Words[0].BoundingBox, 30);
+            AssertBoxNear(new OcrBoundingBox(split, y, right, bottom), line.Words[1].BoundingBox, 30);
+        }
+    }
+
+    private static void AssertRotatedGeometry(IReadOnlyList<OcrPoint> upright, IReadOnlyList<OcrPoint> actual,
+        OcrBoundingBox actualBox, int rotation)
+    {
+        // Independent corner-coordinate oracle, deliberately not OrientationMapper.
+        var expected = upright.Select(p => rotation switch
+        {
+            0 => p,
+            90 => new OcrPoint(800 - p.Y, p.X),
+            180 => new OcrPoint(1200 - p.X, 800 - p.Y),
+            270 => new OcrPoint(p.Y, 1200 - p.X),
+            _ => throw new ArgumentOutOfRangeException(nameof(rotation)),
+        }).ToArray();
+        Assert.Equal(expected.Length, actual.Count);
+        for (int i = 0; i < expected.Length; i++)
+        {
+            Assert.InRange(Math.Abs(expected[i].X - actual[i].X), 0, 3);
+            Assert.InRange(Math.Abs(expected[i].Y - actual[i].Y), 0, 3);
+        }
+        AssertBoxNear(OcrBoundingBox.FromPoints(expected), actualBox, 3);
+    }
+
+    private static void AssertBoxNear(OcrBoundingBox expected, OcrBoundingBox actual, double tolerance)
+    {
+        Assert.InRange(Math.Abs(expected.MinX - actual.MinX), 0, tolerance);
+        Assert.InRange(Math.Abs(expected.MinY - actual.MinY), 0, tolerance);
+        Assert.InRange(Math.Abs(expected.MaxX - actual.MaxX), 0, tolerance);
+        Assert.InRange(Math.Abs(expected.MaxY - actual.MaxY), 0, tolerance);
+    }
+
     // ---- RecognitionOptions / OcrResult defaults ------------------------------------------------------
 
     [Fact]
@@ -162,6 +291,59 @@ public class DocOrientationMapbackTests
     public void OcrResult_detected_orientation_defaults_to_zero()
     {
         Assert.Equal(0, OcrResult.Empty.DetectedOrientation);
+    }
+
+    [Fact]
+    public void Coordinate_frame_defaults_preserve_original_results()
+    {
+        Assert.Equal(OcrResultCoordinateFrame.Original, new RecognitionOptions().CoordinateFrame);
+        Assert.Equal(OcrResultCoordinateFrame.Original, RecognitionOptions.Default.CoordinateFrame);
+        Assert.Equal(OcrResultCoordinateFrame.Original, OcrResult.Empty.CoordinateFrame);
+        Assert.Equal(0, OcrResult.Empty.AppliedRotation);
+        Assert.Equal(0, OcrResult.Empty.OriginalWidth);
+        Assert.Equal(0, OcrResult.Empty.OriginalHeight);
+        Assert.Equal(0, OcrResult.Empty.NormalizedWidth);
+        Assert.Equal(0, OcrResult.Empty.NormalizedHeight);
+    }
+
+    [Theory]
+    [InlineData(OcrResultCoordinateFrame.Original)]
+    [InlineData(OcrResultCoordinateFrame.Normalized)]
+    public async Task Empty_caller_regions_report_frame_and_sizes_without_rotating(OcrResultCoordinateFrame frame)
+    {
+        using var image = new Image<Rgb24>(120, 80);
+        using var service = new PaddleOcrService();
+        var result = await service.RecognizeRegionsAsync(image, Array.Empty<IReadOnlyList<OcrPoint>>(),
+            [OcrLanguage.English], new RecognitionOptions { CoordinateFrame = frame });
+        Assert.Empty(result.Lines);
+        Assert.Equal(frame, result.CoordinateFrame);
+        Assert.Equal(0, result.AppliedRotation);
+        Assert.Equal(120, result.OriginalWidth);
+        Assert.Equal(80, result.OriginalHeight);
+        Assert.Equal(120, result.NormalizedWidth);
+        Assert.Equal(80, result.NormalizedHeight);
+    }
+
+    [Fact]
+    public void Generated_json_preserves_coordinate_frame_and_rotation_metadata()
+    {
+        var original = OcrResult.Empty with
+        {
+            CoordinateFrame = OcrResultCoordinateFrame.Normalized,
+            AppliedRotation = 270,
+            OriginalWidth = 800,
+            OriginalHeight = 1200,
+            NormalizedWidth = 1200,
+            NormalizedHeight = 800,
+        };
+        string json = JsonSerializer.Serialize(original, PaddleOcrJsonContext.Default.OcrResult);
+        var roundtrip = JsonSerializer.Deserialize(json, PaddleOcrJsonContext.Default.OcrResult)!;
+        Assert.Equal(original.CoordinateFrame, roundtrip.CoordinateFrame);
+        Assert.Equal(original.AppliedRotation, roundtrip.AppliedRotation);
+        Assert.Equal(original.OriginalWidth, roundtrip.OriginalWidth);
+        Assert.Equal(original.OriginalHeight, roundtrip.OriginalHeight);
+        Assert.Equal(original.NormalizedWidth, roundtrip.NormalizedWidth);
+        Assert.Equal(original.NormalizedHeight, roundtrip.NormalizedHeight);
     }
 
     // ---- SortedBoxes (python sorted_boxes, used by the parity emitter) --------------------------------

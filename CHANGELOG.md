@@ -4,6 +4,16 @@ All notable changes to PaddleOcrNet are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Synthetic non-square page regression matrix for document-orientation map-back at 0°, 90°, 180°
+  and 270°, covering detected orientation and caller-corrected input with line and word geometry.
+- Additive `RecognitionOptions.CoordinateFrame` selects Original (default) or Normalized upright
+  line and word geometry. Results expose the selected frame, applied clockwise document rotation,
+  original size and normalized size; exporter dimensions follow the selected frame.
+
 ## [2.4.0] - 2026-10-16
 
 This minor release adds opt-in OCR routing, recovery and document-processing APIs, upgrades

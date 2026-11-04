@@ -45,7 +45,16 @@ internal static class HybridUncoveredRecognition
                 return OcrResult.Empty with
                 {
                     Languages = languages.ToCodes(), SourceWidth = image.Width, SourceHeight = image.Height,
-                    Duration = stopwatch.Elapsed, Coordinates = new OcrCoordinateProvenance { RegionApplied = options.Region is not null }
+                    CoordinateFrame = options.CoordinateFrame,
+                    OriginalWidth = image.Width, OriginalHeight = image.Height,
+                    NormalizedWidth = image.Width, NormalizedHeight = image.Height,
+                    Duration = stopwatch.Elapsed,
+                    Coordinates = new OcrCoordinateProvenance
+                    {
+                        RegionApplied = options.Region is not null,
+                        Frame = options.CoordinateFrame == OcrResultCoordinateFrame.Normalized
+                            ? OcrCoordinateFrame.NormalizedPixels : OcrCoordinateFrame.SourcePixels,
+                    }
                 };
             var recognized = await service.RecognizeRegionsAsync(image, uncovered, languages, options, cancellationToken).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();

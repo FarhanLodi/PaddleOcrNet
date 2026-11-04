@@ -41,15 +41,33 @@ public sealed record OcrResult
     /// rotated away from upright. 0 when the page was upright or orientation detection did not run
     /// (<see cref="RecognitionOptions.UseDocOrientation"/> off, or the classifier model unavailable).
     /// The pipeline internally rotated the page by <c>(360 − DetectedOrientation) % 360</c>° clockwise
-    /// before reading it; the returned coordinates are mapped back to the original image's orientation.
+    /// before reading it; <see cref="CoordinateFrame"/> identifies the returned geometry's orientation.
     /// </summary>
     public int DetectedOrientation { get; init; }
+
+    /// <summary>Orientation frame selected for line and word geometry. Defaults to Original.</summary>
+    public OcrResultCoordinateFrame CoordinateFrame { get; init; } = OcrResultCoordinateFrame.Original;
+
+    /// <summary>Clockwise document rotation actually applied to upright the input (0, 90, 180 or 270).</summary>
+    public int AppliedRotation { get; init; }
+
+    /// <summary>Decoded input width before document rotation, or 0 when unknown.</summary>
+    public int OriginalWidth { get; init; }
+
+    /// <summary>Decoded input height before document rotation, or 0 when unknown.</summary>
+    public int OriginalHeight { get; init; }
+
+    /// <summary>Width of the decoded input rotated by AppliedRotation, or 0 when unknown.</summary>
+    public int NormalizedWidth { get; init; }
+
+    /// <summary>Height of the decoded input rotated by AppliedRotation, or 0 when unknown.</summary>
+    public int NormalizedHeight { get; init; }
 
     /// <summary>
     /// Gets the clockwise rotation (degrees) that <see cref="PreprocessingOptions.Deskew"/> applied to
     /// straighten the page — the page's own skew was the negation of this. 0 when deskew is off or the skew
-    /// was negligible. Deskew reads the page on a rotated, enlarged canvas; the returned line and word
-    /// coordinates are already mapped back onto the original, unrotated image, so this is informational.
+    /// was negligible. Deskew's enlarged canvas is mapped back before the selected
+    /// <see cref="CoordinateFrame"/> is applied, so this angle is informational.
     /// </summary>
     public float DeskewAngle { get; init; }
 
@@ -74,13 +92,13 @@ public sealed record OcrResult
     public OcrExecutionProvider ExecutionProvider { get; init; } = OcrExecutionProvider.Cpu;
 
     /// <summary>
-    /// Gets the width (px) of the image OCR ran on, or 0 if unknown. Useful for exporters (hOCR/ALTO) and
-    /// for normalizing bounding boxes without having to carry the source image alongside the result.
+    /// Gets the width (px) of the selected result coordinate frame, or 0 if unknown.
+    /// Used by exporters (hOCR/ALTO) and for normalizing bounding boxes.
     /// </summary>
     public int SourceWidth { get; init; }
 
     /// <summary>
-    /// Gets the height (px) of the image OCR ran on, or 0 if unknown.
+    /// Gets the height (px) of the selected result coordinate frame, or 0 if unknown.
     /// </summary>
     public int SourceHeight { get; init; }
 

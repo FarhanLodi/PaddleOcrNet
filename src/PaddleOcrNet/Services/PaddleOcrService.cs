@@ -332,11 +332,13 @@ public sealed class PaddleOcrService : IPaddleOcrService
         var langs = ResolveLanguages(languages.ToCodes(), allowEmpty: false);
         if (polygons.Length == 0)
         {
-            return BuildResult(Array.Empty<OcrLine>(), langs, sw, activity, image.Width, image.Height, grouping: options.Grouping);
+            return BuildResult(Array.Empty<OcrLine>(), langs, sw, activity, image.Width, image.Height,
+                grouping: options.Grouping, coordinateFrame: options.CoordinateFrame);
         }
 
         var lines = await _engine.RecognizeRegionsAsync(image, langs, polygons, options, cancellationToken).ConfigureAwait(false);
-        return BuildResult(lines, langs, sw, activity, image.Width, image.Height, grouping: options.Grouping);
+        return BuildResult(lines, langs, sw, activity, image.Width, image.Height,
+            grouping: options.Grouping, coordinateFrame: options.CoordinateFrame);
     }
 
     /// <summary>
@@ -514,11 +516,15 @@ public sealed class PaddleOcrService : IPaddleOcrService
                 ? outcome.Lines
                 : NonSquarePixels.MapToSource(outcome.Lines, (double)image.Width / squared.Width, (double)image.Height / squared.Height);
 
-            return BuildResult(lines, outcome.Languages, sw, activity, image.Width, image.Height, outcome.Detected, options.Grouping, outcome.Rotation, outcome.DeskewAngle)
+            return BuildResult(lines, outcome.Languages, sw, activity, image.Width, image.Height,
+                outcome.Detected, options.Grouping, outcome.Rotation, outcome.DeskewAngle, options.CoordinateFrame)
                 with { Coordinates = new OcrCoordinateProvenance
                 {
-                    Frame = outcome.UnwarpApplied ? OcrCoordinateFrame.DewarpedPixels : OcrCoordinateFrame.SourcePixels,
-                    SourceMappingAvailable = !outcome.UnwarpApplied,
+                    Frame = outcome.UnwarpApplied ? OcrCoordinateFrame.DewarpedPixels
+                        : options.CoordinateFrame == OcrResultCoordinateFrame.Normalized
+                            ? OcrCoordinateFrame.NormalizedPixels : OcrCoordinateFrame.SourcePixels,
+                    SourceMappingAvailable = !outcome.UnwarpApplied
+                        && (options.CoordinateFrame == OcrResultCoordinateFrame.Original || outcome.Rotation == 0),
                     DocumentRotationDegrees = outcome.Rotation,
                     DeskewDegrees = outcome.DeskewAngle,
                     PixelAspectCorrected = squared is not null,
@@ -539,9 +545,19 @@ public sealed class PaddleOcrService : IPaddleOcrService
     /// sort keys off each line's forward-rotated (uprighted) box — otherwise a 180°-rotated page would
     /// come out with its text order reversed.
     /// </summary>
-    private OcrResult BuildResult(IReadOnlyList<OcrLine> lines, string[] languages, Stopwatch sw, Activity? activity, int sourceWidth = 0, int sourceHeight = 0, IReadOnlyList<string>? detectedLanguages = null, TextGrouping grouping = TextGrouping.Line, int appliedRotation = 0, float deskewAngle = 0f)
+    private OcrResult BuildResult(IReadOnlyList<OcrLine> lines, string[] languages, Stopwatch sw, Activity? activity, int sourceWidth = 0, int sourceHeight = 0, IReadOnlyList<string>? detectedLanguages = null, TextGrouping grouping = TextGrouping.Line, int appliedRotation = 0, float deskewAngle = 0f, OcrResultCoordinateFrame coordinateFrame = OcrResultCoordinateFrame.Original)
     {
         var ordered = SortLinesByReadingOrder(lines, appliedRotation, sourceWidth, sourceHeight);
+        // Intermediate stages compose in the original frame (including ROI, deskew and pixel aspect).
+        // Select the public orientation only after that composition and the upright reading-order sort.
+        int rotation = ((appliedRotation % 360) + 360) % 360;
+        int normalizedWidth = rotation is 90 or 270 ? sourceHeight : sourceWidth;
+        int normalizedHeight = rotation is 90 or 270 ? sourceWidth : sourceHeight;
+        if (coordinateFrame == OcrResultCoordinateFrame.Normalized && rotation != 0)
+        {
+            for (int i = 0; i < ordered.Count; i++)
+                ordered[i] = Internal.Geometry.OrientationMapper.RotateLine(ordered[i], rotation, sourceWidth, sourceHeight);
+        }
         sw.Stop();
         _logger?.LogInformation("OCR completed: {Count} lines in {Ms:F0} ms", ordered.Count, sw.Elapsed.TotalMilliseconds);
 
@@ -567,6 +583,9 @@ public sealed class PaddleOcrService : IPaddleOcrService
             {
                 DocumentRotationDegrees = appliedRotation,
                 DeskewDegrees = deskewAngle,
+                Frame = coordinateFrame == OcrResultCoordinateFrame.Normalized
+                    ? OcrCoordinateFrame.NormalizedPixels : OcrCoordinateFrame.SourcePixels,
+                SourceMappingAvailable = coordinateFrame == OcrResultCoordinateFrame.Original || rotation == 0,
             },
             FullText = BuildFullText(ordered, grouping),
             Lines = ordered,
@@ -579,8 +598,14 @@ public sealed class PaddleOcrService : IPaddleOcrService
             Duration = sw.Elapsed,
             UsedGpu = usedGpu,
             ExecutionProvider = activeProvider,
-            SourceWidth = sourceWidth,
-            SourceHeight = sourceHeight,
+            CoordinateFrame = coordinateFrame,
+            AppliedRotation = rotation,
+            OriginalWidth = sourceWidth,
+            OriginalHeight = sourceHeight,
+            NormalizedWidth = normalizedWidth,
+            NormalizedHeight = normalizedHeight,
+            SourceWidth = coordinateFrame == OcrResultCoordinateFrame.Normalized ? normalizedWidth : sourceWidth,
+            SourceHeight = coordinateFrame == OcrResultCoordinateFrame.Normalized ? normalizedHeight : sourceHeight,
         };
     }
 
