@@ -13,6 +13,8 @@ All notable changes to PaddleOcrNet are documented here. The format is based on
   and verified idempotent reuse. Failed preparation cleans up staging; incomplete existing folders
   are never overwritten. Use the existing `ModelCachePath` and `Download.Offline` options to load
   only from the prepared folder without network access.
+- Synthetic non-square page regression matrix for document-orientation map-back at 0°, 90°, 180°
+  and 270°, covering detected orientation and caller-corrected input with line and word geometry.
 
 ## [2.4.0] - 2026-10-16
 
