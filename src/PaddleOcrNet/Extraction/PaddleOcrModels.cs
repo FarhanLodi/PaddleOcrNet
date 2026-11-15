@@ -97,6 +97,36 @@ public static class PaddleOcrModels
         return DownloadCoreAsync(assets, NormalizeCachePath(serviceOptions.ModelCachePath), serviceOptions.Download, progress, cancellationToken);
     }
 
+    /// <summary>
+    /// Prepares a checksum-verified model set in an explicit folder. Files are copied from the service's
+    /// cache when available, otherwise downloaded. A temporary sibling is renamed only after every file
+    /// is verified; cancellation or failure removes it. An already complete, verified folder is reused.
+    /// </summary>
+    /// <param name="destinationDirectory">The folder to publish. An existing incomplete or corrupt folder is never overwritten; choose a new destination.</param>
+    /// <param name="languages">The recognition languages, resolved as for <see cref="GetModelFileNames"/>.</param>
+    /// <param name="sets">The model sets to prepare.</param>
+    /// <param name="serviceOptions">Optional source cache, model variants and download options. Local model overrides are not copied. Every selected registry file must have a known checksum, even when unverified downloads are allowed.</param>
+    /// <param name="cancellationToken">Cancels copying, downloading, verification or publication.</param>
+    /// <returns>The published folder and files. Cached status includes verified files copied from cache.</returns>
+    /// <exception cref="ArgumentException"><paramref name="destinationDirectory"/> is empty or invalid.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="languages"/> is <c>null</c>.</exception>
+    /// <exception cref="ModelChecksumException">A checksum is unknown, or a download fails verification twice.</exception>
+    /// <exception cref="ModelDownloadException">An existing destination is incomplete or fails verification, or a download fails.</exception>
+    /// <exception cref="OfflineModelMissingException">A required file is missing from the source cache in offline mode.</exception>
+    /// <exception cref="OperationCanceledException">The operation was cancelled before publication.</exception>
+    public static Task<ModelDownloadReport> PrepareAsync(
+        string destinationDirectory,
+        IEnumerable<OcrLanguage> languages,
+        PaddleModelSet sets = PaddleModelSet.Ocr,
+        PaddleOcrServiceOptions? serviceOptions = null,
+        CancellationToken cancellationToken = default)
+    {
+        var assets = ResolveAssets(languages, sets, serviceOptions);
+        return ModelFolderPreparer.PrepareAsync(assets, destinationDirectory,
+            NormalizeCachePath(serviceOptions?.ModelCachePath), serviceOptions?.Download ?? new ModelDownloadOptions(),
+            cancellationToken);
+    }
+
     /// <summary>Resolves the distinct registry assets for the requested languages and sets, in download order.</summary>
     internal static IReadOnlyList<ModelAsset> ResolveAssets(
         IEnumerable<OcrLanguage> languages,

@@ -154,6 +154,11 @@ public class PdfEmbeddedTextLayerTests
         Assert.Equal("first\nsecond", result.FullText);
         Assert.Equal(800, result.SourceWidth);
         Assert.Equal(600, result.SourceHeight);
+        Assert.Equal(800, result.OriginalWidth);
+        Assert.Equal(600, result.OriginalHeight);
+        Assert.Equal(800, result.NormalizedWidth);
+        Assert.Equal(600, result.NormalizedHeight);
+        Assert.Equal(0, result.AppliedRotation);
         Assert.Equal(new[] { "en" }, result.Languages);
     }
 }

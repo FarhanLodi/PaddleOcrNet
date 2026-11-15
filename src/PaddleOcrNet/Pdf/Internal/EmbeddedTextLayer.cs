@@ -158,6 +158,10 @@ internal static class EmbeddedTextLayer
             Duration = duration,
             SourceWidth = pixelWidth,
             SourceHeight = pixelHeight,
+            OriginalWidth = pixelWidth,
+            OriginalHeight = pixelHeight,
+            NormalizedWidth = pixelWidth,
+            NormalizedHeight = pixelHeight,
         };
 
     /// <summary>

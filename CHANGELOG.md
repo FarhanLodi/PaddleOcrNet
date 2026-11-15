@@ -12,6 +12,19 @@ All notable changes to PaddleOcrNet are documented here. The format is based on
   Docnet.Core with `bblanchon.PDFium` native packages and internal PDFium bindings, removing the
   dependency on Docnet's `pdfium.so`. PDF support works out of the box with bundled platform-native
   libraries, no manual native setup, and no public API changes.
+  
+### Added
+
+- `PaddleOcrModels.PrepareAsync` prepares selected model sets in an explicit deployment folder:
+  verified cache copies or downloads, one retry for checksum corruption, atomic folder publication,
+  and verified idempotent reuse. Failed preparation cleans up staging; incomplete existing folders
+  are never overwritten. Use the existing `ModelCachePath` and `Download.Offline` options to load
+  only from the prepared folder without network access.
+- Synthetic non-square page regression matrix for document-orientation map-back at 0°, 90°, 180°
+  and 270°, covering detected orientation and caller-corrected input with line and word geometry.
+- Additive `RecognitionOptions.CoordinateFrame` selects Original (default) or Normalized upright
+  line and word geometry. Results expose the selected frame, applied clockwise document rotation,
+  original size and normalized size; exporter dimensions follow the selected frame.
 
 ## [2.4.0] - 2026-10-16
 

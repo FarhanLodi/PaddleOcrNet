@@ -469,6 +469,50 @@ await using var ocr = new PaddleOcrService(new PaddleOcrServiceOptions
 unaffected — for a fully offline multilingual setup, pre-seed the model cache (or point
 `PADDLEOCRNET_MODEL_BASE_URL` at an internal mirror) and set `Download.Offline = true`.
 
+### Prepared model folders
+
+Use `PaddleOcrModels.PrepareAsync` to deploy a selected model set to an explicit folder:
+
+```csharp
+using PaddleOcrNet.Extraction;
+using PaddleOcrNet.Models;
+using PaddleOcrNet.Services;
+
+var destination = Path.GetFullPath("deployed-models");
+var report = await PaddleOcrModels.PrepareAsync(
+    destination,
+    new[] { OcrLanguage.English, OcrLanguage.German },
+    PaddleModelSet.Ocr | PaddleModelSet.Layout,
+    serviceOptions: new PaddleOcrServiceOptions { ModelCachePath = "download-cache" });
+
+await using var ocr = new PaddleOcrService(new PaddleOcrServiceOptions
+{
+    ModelCachePath = destination,
+    Download = { Offline = true },
+});
+await ocr.WarmUp(new[] { OcrLanguage.English, OcrLanguage.German });
+```
+
+Preparation copies available cache files or downloads missing ones, verifying every selected file
+against the registry's pinned SHA-256. A corrupt cached copy is ignored without changing the source
+cache; a corrupt download is retried once, then throws `ModelChecksumException`. Unknown checksums
+are rejected even with `AllowUnverifiedModels`. Network retries still follow `Download.MaxRetries`.
+`serviceOptions` also selects model variants and mirror/HTTP settings; omitted options use the default cache.
+Explicit local model overrides are excluded, as with `DownloadAsync`; they are not copied.
+
+Files are staged in a temporary sibling and the whole folder is published with one rename only after
+verification. Cancellation or failure cleans up staging without publishing a partial destination.
+An already complete, verified folder is reused without downloads or rewrites. Existing incomplete or
+corrupt destinations are never overwritten: choose a new destination for that deployment. Failures
+throw rather than returning a partially successful report; report paths refer to the published folder.
+
+No new offline option is needed: `ModelCachePath = destination` plus `Download.Offline = true` restricts
+registry model loading to that folder, without consulting the default cache or downloading. Do not set
+local model path overrides if all model files must come from the prepared folder. Loading is lazy;
+`WarmUp` makes missing OCR files fail at startup with `OfflineModelMissingException`, naming the file
+and folder. Prepare every language and optional model set the application will use. Preparation verifies
+integrity; offline service loading does not rehash existing files, so deploy the folder read-only.
+
 ### Word-level boxes
 
 Set `ReturnWordBoxes` to get a box and confidence for every word, placed from the recognizer's own
@@ -485,6 +529,39 @@ foreach (var line in result.Lines)
 
 string hocr = result.ToHocr();   // ocrx_word elements carry the real word boxes
 ```
+
+### Result coordinate frames
+
+Line and word polygons and bounding boxes default to `OcrResultCoordinateFrame.Original`: the
+decoded input's coordinates, even when document-orientation detection rotates a scan to read it.
+Select `Normalized` to return those coordinates rotated upright instead:
+
+```csharp
+var result = await ocr.ExtractTextFromImage("scan.png", OcrLanguage.English,
+    RecognitionOptions.Default with
+    {
+        CoordinateFrame = OcrResultCoordinateFrame.Normalized,
+        ReturnWordBoxes = true,
+    });
+Console.WriteLine($"Applied clockwise rotation: {result.AppliedRotation} degrees");
+Console.WriteLine($"Original: {result.OriginalWidth} x {result.OriginalHeight}");
+Console.WriteLine($"Normalized: {result.NormalizedWidth} x {result.NormalizedHeight}");
+```
+
+`AppliedRotation` is the correction, not `DetectedOrientation` (a 90° clockwise scan needs a 270°
+clockwise correction). Width and height swap for 90°/270° corrections. `SourceWidth` and `SourceHeight`
+describe the selected result frame for exporters. Text, confidence and upright reading order are
+unchanged. Choosing a frame does not enable orientation detection: when no document rotation runs,
+the two frames coincide, including input already rotated upright by the caller. Caller-supplied
+recognition regions are never re-oriented.
+
+Deskew and pixel-aspect corrections are mapped back before selecting the orientation frame; a
+region-of-interest result remains relative to the full decoded image. Nonlinear UVDoc dewarping
+still has no source inverse: inspect `Coordinates.NonlinearDewarpApplied` and
+`Coordinates.SourceMappingAvailable` rather than treating dewarped boxes as original positions.
+These options apply to image OCR, not PP-StructureV3 layout coordinates.
+Hybrid PDF fusion and searchable-PDF output require source-raster coordinates; keep `Original`
+for those operations. Native PDF text extraction does not run document-orientation correction.
 
 ### Output formats
 
