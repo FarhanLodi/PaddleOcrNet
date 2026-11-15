@@ -4,27 +4,44 @@ All notable changes to PaddleOcrNet are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.4.1] - 2026-11-15
+
+This release replaces the PDF engine dependency, adds verified offline model-folder preparation
+and opt-in upright result geometry. Both `PaddleOcrNet` and `PaddleOcrNet.Gpu` use version 2.4.1.
+Recognition, PDF and coordinate defaults are unchanged. Thanks to @dokson for all four contributions
+([#15](https://github.com/FarhanLodi/PaddleOcrNet/pull/15), [#17](https://github.com/FarhanLodi/PaddleOcrNet/pull/17),
+[#18](https://github.com/FarhanLodi/PaddleOcrNet/pull/18), [#20](https://github.com/FarhanLodi/PaddleOcrNet/pull/20)).
+
+### Added
+
+- **`PaddleOcrModels.PrepareAsync`** ([#16](https://github.com/FarhanLodi/PaddleOcrNet/issues/16)): prepares
+  selected model sets in an explicit deployment folder: verified cache copies or downloads, one retry for
+  checksum corruption, atomic folder publication, and verified idempotent reuse. Failed preparation cleans
+  up staging; incomplete existing folders (including an empty pre-created folder) are never overwritten.
+  Use the existing `ModelCachePath` and `Download.Offline` options to load only from the prepared folder
+  without network access.
+- **`RecognitionOptions.CoordinateFrame`** ([#19](https://github.com/FarhanLodi/PaddleOcrNet/issues/19)):
+  selects `Original` (default) or `Normalized` upright line and word geometry. Results expose the
+  selected `CoordinateFrame`, `AppliedRotation`, `OriginalWidth/Height` and `NormalizedWidth/Height`;
+  `SourceWidth/Height` and exporter dimensions follow the selected frame. Searchable-PDF output and
+  Hybrid PDF fusion require source-frame coordinates and reject rotated `Normalized` pages with a clear error.
+- Synthetic non-square page regression matrix for document-orientation map-back at 0°, 90°, 180°
+  and 270°, covering detected orientation and caller-corrected input with line and word geometry.
+
+### Changed
+
+- **PDF engine** ([#14](https://github.com/FarhanLodi/PaddleOcrNet/issues/14)): Docnet.Core 2.6.0 is replaced
+  by `bblanchon.PDFium` 158.0.8125 native packages (Windows x86/x64/arm64, Linux glibc and musl
+  x86/x64/arm/arm64, macOS x64/arm64) behind internal PDFium bindings. The public PDF API is unchanged.
+  The newer PDFium can rasterize some pages with small pixel differences, so PDF OCR output may shift
+  slightly. Docnet.Core is no longer a transitive dependency; applications that used its types through
+  PaddleOcrNet must reference it directly.
 
 ### Fixed
 
-- **Bundled PDF support** ([#14](https://github.com/FarhanLodi/PaddleOcrNet/issues/14)): replace
-  Docnet.Core with `bblanchon.PDFium` native packages and internal PDFium bindings, removing the
-  dependency on Docnet's `pdfium.so`. PDF support works out of the box with bundled platform-native
-  libraries, no manual native setup, and no public API changes.
-  
-### Added
-
-- `PaddleOcrModels.PrepareAsync` prepares selected model sets in an explicit deployment folder:
-  verified cache copies or downloads, one retry for checksum corruption, atomic folder publication,
-  and verified idempotent reuse. Failed preparation cleans up staging; incomplete existing folders
-  are never overwritten. Use the existing `ModelCachePath` and `Download.Offline` options to load
-  only from the prepared folder without network access.
-- Synthetic non-square page regression matrix for document-orientation map-back at 0°, 90°, 180°
-  and 270°, covering detected orientation and caller-corrected input with line and word geometry.
-- Additive `RecognitionOptions.CoordinateFrame` selects Original (default) or Normalized upright
-  line and word geometry. Results expose the selected frame, applied clockwise document rotation,
-  original size and normalized size; exporter dimensions follow the selected frame.
+- On Linux, Docnet's bundled 2023 `pdfium.so` was probed before `libpdfium.so` and shadowed other PDFium
+  consumers in the same process (for example PDFtoImage), causing intermittent rendering failures. The
+  native library is now loaded by its exact platform name.
 
 ## [2.4.0] - 2026-10-16
 

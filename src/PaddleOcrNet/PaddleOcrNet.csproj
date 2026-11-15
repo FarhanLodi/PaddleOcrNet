@@ -8,8 +8,8 @@
 		<IsAotCompatible>true</IsAotCompatible>
 		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 		<PackageId>PaddleOcrNet</PackageId>
-		<Version>2.4.0</Version>
-		<PackageReleaseNotes>EasyImageSharp 1.2.0; DOCX/XLSX/PPTX native input with optional embedded-image OCR; opt-in bounded routing, recovery, long-line recognition, tensor reuse and recognizer residency; Hybrid PDF evidence; document assembly and relationship verification. See CHANGELOG.md for compatibility and validation boundaries.</PackageReleaseNotes>
+		<Version>2.4.1</Version>
+		<PackageReleaseNotes>PDF support now uses bundled bblanchon.PDFium natives instead of Docnet.Core, fixing pdfium.so shadowing on Linux (#14); PaddleOcrModels.PrepareAsync prepares verified offline model folders (#16); opt-in RecognitionOptions.CoordinateFrame returns upright (normalized) geometry with applied rotation and sizes (#19). Defaults unchanged. See CHANGELOG.md.</PackageReleaseNotes>
 		<Authors>PaddleOcrNet Contributors</Authors>
 		<Description>High-accuracy native .NET OCR powered by PaddleOCR's neural models (DB detection, text-line orientation, SVTR/CRNN recognition) running on ONNX Runtime. No Python required.</Description>
 		<PackageTags>OCR;PaddleOCR;ONNX;TextRecognition;DBNet;SVTR;.NET10;AOT</PackageTags>
