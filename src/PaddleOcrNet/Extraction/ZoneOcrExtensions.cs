@@ -129,7 +129,13 @@ public static class ZoneOcrExtensions
         OcrResult result;
         if (width < 2 || height < 2)
         {
-            result = OcrResult.Empty with { SourceWidth = image.Width, SourceHeight = image.Height };
+            result = OcrResult.Empty with
+            {
+                CoordinateFrame = baseOptions.CoordinateFrame,
+                SourceWidth = image.Width, SourceHeight = image.Height,
+                OriginalWidth = image.Width, OriginalHeight = image.Height,
+                NormalizedWidth = image.Width, NormalizedHeight = image.Height,
+            };
         }
         else if (zone.Mode == ZoneMode.SingleLine)
         {

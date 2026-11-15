@@ -68,14 +68,21 @@ internal static class OrientationMapper
         var mapped = new List<OcrLine>(lines.Count);
         foreach (var line in lines)
         {
-            var poly = RotatePolygon(line.BoundingPolygon, inverse, workingWidth, workingHeight);
-            mapped.Add(line with
-            {
-                BoundingPolygon = poly,
-                BoundingBox = OcrBoundingBox.FromPoints(poly),
-                Words = Recognition.WordBoxBuilder.Transform(line.Words, p => RotatePoint(p, inverse, workingWidth, workingHeight)),
-            });
+            mapped.Add(RotateLine(line, inverse, workingWidth, workingHeight));
         }
         return mapped;
+    }
+
+    /// <summary>Rotates all line and word geometry together, preserving text and confidence.</summary>
+    internal static OcrLine RotateLine(OcrLine line, int degreesCw, int sourceWidth, int sourceHeight)
+    {
+        var polygon = RotatePolygon(line.BoundingPolygon, degreesCw, sourceWidth, sourceHeight);
+        return line with
+        {
+            BoundingPolygon = polygon,
+            BoundingBox = OcrBoundingBox.FromPoints(polygon),
+            Words = Recognition.WordBoxBuilder.Transform(line.Words,
+                p => RotatePoint(p, degreesCw, sourceWidth, sourceHeight)),
+        };
     }
 }
