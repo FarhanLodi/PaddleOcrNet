@@ -6,6 +6,13 @@ All notable changes to PaddleOcrNet are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **Bundled PDF support** ([#14](https://github.com/FarhanLodi/PaddleOcrNet/issues/14)): replace
+  Docnet.Core with `bblanchon.PDFium` native packages and internal PDFium bindings, removing the
+  dependency on Docnet's `pdfium.so`. PDF support works out of the box with bundled platform-native
+  libraries, no manual native setup, and no public API changes.
+  
 ### Added
 
 - `PaddleOcrModels.PrepareAsync` prepares selected model sets in an explicit deployment folder:

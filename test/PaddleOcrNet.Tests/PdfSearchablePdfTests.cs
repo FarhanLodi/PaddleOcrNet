@@ -1,7 +1,5 @@
 using System.Globalization;
 using System.Text;
-using Docnet.Core;
-using Docnet.Core.Models;
 using EasyImageSharp;
 using EasyImageSharp.PixelFormats;
 using PaddleOcrNet.Models;
@@ -161,6 +159,39 @@ public class PdfSearchablePdfTests
         }
     }
 
+    [Theory]
+    [InlineData(0.5)]
+    [InlineData(1.25)]
+    [InlineData(2.0)]
+    public void Pdfium_binding_scales_page_dimensions_glyph_coordinates_and_font_size(double scale)
+    {
+        byte[] pdf = BuildPdf(new[] { Line("7", 20, 30, 50, 50) }, 401, 303, 72);
+        using var original = PdfDocument.Open(pdf);
+        using var originalPage = original.GetPageReader(0);
+        using var scaled = PdfDocument.Open(pdf, scale: scale);
+        using var scaledPage = scaled.GetPageReader(0);
+
+        Assert.Equal(1, original.GetPageCount());
+        Assert.Equal(1, scaled.GetPageCount());
+        Assert.Equal(401, originalPage.GetPageWidth());
+        Assert.Equal(303, originalPage.GetPageHeight());
+        Assert.Equal((int)(401 * scale), scaledPage.GetPageWidth());
+        Assert.Equal((int)(303 * scale), scaledPage.GetPageHeight());
+        Assert.Contains("7", originalPage.GetText());
+        Assert.Equal(originalPage.GetText(), scaledPage.GetText());
+
+        var originalGlyph = Assert.Single(originalPage.GetCharacters(), c => c.Value == '7');
+        var scaledGlyph = Assert.Single(scaledPage.GetCharacters(), c => c.Value == '7');
+        Assert.True(originalGlyph.Left > 0 && originalGlyph.Top > 0);
+        Assert.True(originalGlyph.Right > originalGlyph.Left && originalGlyph.Bottom > originalGlyph.Top);
+        Assert.InRange(scaledGlyph.Left, originalGlyph.Left * scale - 1, originalGlyph.Left * scale + 1);
+        Assert.InRange(scaledGlyph.Top, originalGlyph.Top * scale - 1, originalGlyph.Top * scale + 1);
+        Assert.InRange(scaledGlyph.Right, originalGlyph.Right * scale - 1, originalGlyph.Right * scale + 1);
+        Assert.InRange(scaledGlyph.Bottom, originalGlyph.Bottom * scale - 1, originalGlyph.Bottom * scale + 1);
+        Assert.Equal(20.0, originalGlyph.FontSizePx, 6);
+        Assert.Equal(20.0 * scale, scaledGlyph.FontSizePx, 6);
+    }
+
     [Fact]
     public void Pdfium_extracts_accented_currency_cjk_and_emoji_text_at_the_ocr_boxes()
     {
@@ -173,7 +204,7 @@ public class PdfSearchablePdfTests
         };
         byte[] pdf = BuildPdf(lines, 1600, 800, dpi);
 
-        using var reader = DocLib.Instance.GetDocReader(pdf, new PageDimensions(dpi / 72.0));
+        using var reader = PdfDocument.Open(pdf, scale: dpi / 72.0);
         using var page = reader.GetPageReader(0);
         Assert.InRange(page.GetPageWidth(), 1599, 1600);
 
@@ -183,11 +214,11 @@ public class PdfSearchablePdfTests
         Assert.Contains("Smile 😀 ok", text);
 
         // Every extracted glyph box must sit on the OCR box it came from.
-        var glyphs = page.GetCharacters().Where(c => !char.IsWhiteSpace(c.Char) && !char.IsControl(c.Char)).ToList();
+        var glyphs = page.GetCharacters().Where(c => !char.IsWhiteSpace(c.Value) && !char.IsControl(c.Value)).ToList();
         Assert.NotEmpty(glyphs);
         foreach (var g in glyphs)
         {
-            double cx = (g.Box.Left + g.Box.Right) / 2.0, cy = (g.Box.Top + g.Box.Bottom) / 2.0;
+            double cx = (g.Left + g.Right) / 2.0, cy = (g.Top + g.Bottom) / 2.0;
             Assert.Contains(lines, l =>
                 cx >= l.BoundingBox.MinX - 5 && cx <= l.BoundingBox.MaxX + 5 &&
                 cy >= l.BoundingBox.MinY - 0.25 * l.BoundingBox.Height && cy <= l.BoundingBox.MaxY + 0.25 * l.BoundingBox.Height);
@@ -196,9 +227,9 @@ public class PdfSearchablePdfTests
         // Tz scaling: each line's glyphs span (nearly) its whole box width.
         foreach (var line in lines)
         {
-            var inLine = glyphs.Where(g => (g.Box.Top + g.Box.Bottom) / 2.0 >= line.BoundingBox.MinY - 20
-                && (g.Box.Top + g.Box.Bottom) / 2.0 <= line.BoundingBox.MaxY + 20).ToList();
-            double span = inLine.Max(g => g.Box.Right) - inLine.Min(g => g.Box.Left);
+            var inLine = glyphs.Where(g => (g.Top + g.Bottom) / 2.0 >= line.BoundingBox.MinY - 20
+                && (g.Top + g.Bottom) / 2.0 <= line.BoundingBox.MaxY + 20).ToList();
+            double span = inLine.Max(g => g.Right) - inLine.Min(g => g.Left);
             Assert.InRange(span, 0.85 * line.BoundingBox.Width, 1.05 * line.BoundingBox.Width);
         }
     }

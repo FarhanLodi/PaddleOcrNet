@@ -6,6 +6,7 @@
 		<Nullable>enable</Nullable>
 		<LangVersion>latest</LangVersion>
 		<IsAotCompatible>true</IsAotCompatible>
+		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 		<PackageId>PaddleOcrNet</PackageId>
 		<Version>2.4.0</Version>
 		<PackageReleaseNotes>EasyImageSharp 1.2.0; DOCX/XLSX/PPTX native input with optional embedded-image OCR; opt-in bounded routing, recovery, long-line recognition, tensor reuse and recognizer residency; Hybrid PDF evidence; document assembly and relationship verification. See CHANGELOG.md for compatibility and validation boundaries.</PackageReleaseNotes>
@@ -43,8 +44,10 @@
 		<PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.12" />
 		<PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.31.0" />
 		<PackageReference Include="EasyImageSharp" Version="1.2.0" />
-		<!-- PDFium-based PDF rasterization for the built-in PDF input / searchable-PDF output. -->
-		<PackageReference Include="Docnet.Core" Version="2.6.0" />
+		<!-- Bundled PDFium without Docnet's legacy pdfium.so, which shadows libpdfium.so on Linux. -->
+		<PackageReference Include="bblanchon.PDFium.Linux" Version="158.0.8125" />
+		<PackageReference Include="bblanchon.PDFium.Win32" Version="158.0.8125" />
+		<PackageReference Include="bblanchon.PDFium.macOS" Version="158.0.8125" />
 		<!-- Polygon offsetting (unclip) for DB detection post-processing. Namespace: Clipper2Lib. -->
 		<PackageReference Include="Clipper2" Version="2.0.0" />
 	</ItemGroup>

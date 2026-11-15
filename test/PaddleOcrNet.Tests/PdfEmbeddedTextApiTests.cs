@@ -1,7 +1,6 @@
-using Docnet.Core;
-using Docnet.Core.Models;
 using PaddleOcrNet.Models;
 using PaddleOcrNet.Pdf;
+using PaddleOcrNet.Pdf.Internal;
 using PaddleOcrNet.Services;
 using Xunit;
 
@@ -45,7 +44,7 @@ public class PdfEmbeddedTextApiTests
         Assert.Contains("INVOICE NUMBER 778899", page.Ocr.FullText);
         Assert.All(page.Ocr.Lines, l => Assert.Equal(1.0, l.Confidence));
 
-        // Docnet reports the first 'I' of "INVOICE" at x = 716 px at 200 DPI.
+        // PDFium reports the first 'I' of "INVOICE" at x = 716 px at 200 DPI.
         var title = page.Ocr.Lines.First(l => l.Text == "INVOICE");
         Assert.InRange(title.BoundingBox.MinX, 710, 722);
         Assert.InRange(title.BoundingBox.MaxX, title.BoundingBox.MinX + 100, 1653);
@@ -155,7 +154,7 @@ public class PdfEmbeddedTextApiTests
         var result = await service.CreateSearchablePdfAsync(input, new PdfNonSeekableStream(buffer), OcrLanguage.English, pdfOptions: Embedded(dpi: 100));
 
         Assert.Equal(PdfPageSource.EmbeddedText, Assert.Single(result.Pages).Source);
-        using var reader = DocLib.Instance.GetDocReader(buffer.ToArray(), new PageDimensions(1.0));
+        using var reader = PdfDocument.Open(buffer.ToArray(), scale: 1.0);
         Assert.Equal(1, reader.GetPageCount());
         using var page = reader.GetPageReader(0);
         Assert.InRange(page.GetPageWidth(), 594, 596); // A4 width in points survives the 100 DPI round trip
@@ -174,7 +173,7 @@ public class PdfEmbeddedTextApiTests
             await service.CreateSearchablePdfAsync(Pdf("bilingual_welcome.pdf"), output, OcrLanguage.English, pdfOptions: Embedded(dpi: 72));
 
             Assert.Equal(new[] { output }, Directory.GetFiles(dir)); // no temp file left behind
-            using var reader = DocLib.Instance.GetDocReader(await File.ReadAllBytesAsync(output), new PageDimensions(1.0));
+            using var reader = PdfDocument.Open(await File.ReadAllBytesAsync(output), scale: 1.0);
             using var page = reader.GetPageReader(0);
             Assert.Contains("ДОБРО", page.GetText());
         }

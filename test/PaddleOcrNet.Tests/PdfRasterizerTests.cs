@@ -1,4 +1,4 @@
-using Docnet.Core.Converters;
+using System.Text.Json;
 using EasyImageSharp;
 using EasyImageSharp.PixelFormats;
 using PaddleOcrNet.Pdf;
@@ -14,6 +14,44 @@ namespace PaddleOcrNet.Tests;
 public class PdfRasterizerTests
 {
     [Fact]
+    public void Runtime_dependencies_bundle_pdfium_without_docnet_or_shadowing_pdfium_so()
+    {
+        string depsPath = Path.ChangeExtension(typeof(PdfRasterizerTests).Assembly.Location, ".deps.json");
+        using var deps = JsonDocument.Parse(File.ReadAllText(depsPath));
+        var libraries = deps.RootElement.GetProperty("libraries").EnumerateObject().ToArray();
+        Assert.DoesNotContain(libraries, library =>
+            string.Equals(library.Name.Split('/')[0], "Docnet.Core", StringComparison.OrdinalIgnoreCase));
+
+        var nativeAssets = new List<(string Package, string Path)>();
+        foreach (var target in deps.RootElement.GetProperty("targets").EnumerateObject())
+        foreach (var library in target.Value.EnumerateObject())
+        {
+            if (library.Value.TryGetProperty("runtimeTargets", out var runtimeTargets))
+            {
+                foreach (var asset in runtimeTargets.EnumerateObject())
+                {
+                    if (asset.Value.TryGetProperty("assetType", out var type) && type.GetString() == "native")
+                        nativeAssets.Add((library.Name, asset.Name));
+                }
+            }
+
+            // RID-specific builds can resolve runtimeTargets into the native section.
+            if (library.Value.TryGetProperty("native", out var native))
+            {
+                foreach (var asset in native.EnumerateObject())
+                    nativeAssets.Add((library.Name, asset.Name));
+            }
+        }
+
+        static string Basename(string path) => path.Replace('\\', '/').Split('/')[^1];
+        Assert.DoesNotContain(nativeAssets, asset =>
+            string.Equals(Basename(asset.Path), "pdfium.so", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(nativeAssets, asset =>
+            asset.Package.StartsWith("bblanchon.PDFium", StringComparison.OrdinalIgnoreCase)
+            && Basename(asset.Path).ToLowerInvariant() is "libpdfium.so" or "pdfium.dll" or "libpdfium.dylib");
+    }
+
+    [Fact]
     public void Direct_bgra_conversion_matches_transparency_remover_then_clone_as()
     {
         const int width = 257, height = 131;
@@ -27,7 +65,15 @@ public class PdfRasterizerTests
         }
 
         var legacyBytes = (byte[])bgra.Clone();
-        new NaiveTransparencyRemover().Convert(legacyBytes);
+        // Preserve the legacy integer alpha flattening, including its /256 truncation.
+        for (int i = 0; i < legacyBytes.Length; i += 4)
+        {
+            int alpha = legacyBytes[i + 3];
+            int background = 255 * (255 - alpha);
+            for (int channel = 0; channel < 3; channel++)
+                legacyBytes[i + channel] = (byte)((legacyBytes[i + channel] * alpha + background) >> 8);
+            legacyBytes[i + 3] = 255;
+        }
         using var legacyBgra = Image.LoadPixelData<Bgra32>(legacyBytes, width, height);
         using var expected = legacyBgra.CloneAs<Rgb24>();
 

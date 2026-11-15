@@ -27,5 +27,26 @@ derived from. The character dictionaries (ppocr keys) bundled or downloaded for
 recognition are likewise derived from PaddleOCR and are subject to the same
 Apache-2.0 license.
 
+------------------------------------------------------------------------------
+PDFium native libraries
+------------------------------------------------------------------------------
+
+PDF rendering and text extraction use native libraries distributed through the
+bblanchon.PDFium.Win32, bblanchon.PDFium.Linux and bblanchon.PDFium.macOS packages.
+
+    Native packages: Copyright (c) Benoît Blanchon 2017-2025.
+    Package license: Apache License, Version 2.0.
+    https://github.com/bblanchon/pdfium-binaries
+    https://github.com/bblanchon/pdfium-binaries/tree/master/nuget
+
+    PDFium: Copyright 2014 The PDFium Authors.
+    PDFium's BSD-style license and applicable third-party licenses also apply.
+    https://pdfium.googlesource.com/pdfium/+/refs/heads/main/LICENSE
+
+The package license does not replace PDFium's or its third-party components'
+license terms. Preserve applicable license texts and notices when redistributing
+the native libraries. Upstream collects these texts in its binary distributions:
+    https://github.com/bblanchon/pdfium-binaries/blob/master/steps/08-licenses.sh
+
 This NOTICE file is provided for attribution and does not modify the MIT
 License that governs the PaddleOcrNet source code itself.

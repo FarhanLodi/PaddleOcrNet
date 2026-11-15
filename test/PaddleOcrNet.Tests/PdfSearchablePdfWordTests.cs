@@ -1,6 +1,4 @@
 using System.Text;
-using Docnet.Core;
-using Docnet.Core.Models;
 using EasyImageSharp;
 using EasyImageSharp.PixelFormats;
 using PaddleOcrNet.Models;
@@ -126,12 +124,12 @@ public class PdfSearchablePdfWordTests
             pdf = ms.ToArray();
         }
 
-        using var reader = DocLib.Instance.GetDocReader(pdf, new PageDimensions(1.0));
+        using var reader = PdfDocument.Open(pdf, scale: 1.0);
         using var page = reader.GetPageReader(0);
         Assert.Contains("7", page.GetText());
-        var glyph = Assert.Single(page.GetCharacters(), c => c.Char == '7');
-        Assert.InRange(glyph.Box.Bottom - glyph.Box.Top, 55, 61);
-        Assert.InRange(glyph.Box.Right - glyph.Box.Left, 28, 31);
+        var glyph = Assert.Single(page.GetCharacters(), c => c.Value == '7');
+        Assert.InRange(glyph.Bottom - glyph.Top, 55, 61);
+        Assert.InRange(glyph.Right - glyph.Left, 28, 31);
     }
 
     [Fact]
@@ -154,13 +152,13 @@ public class PdfSearchablePdfWordTests
             pdf = ms.ToArray();
         }
 
-        using var reader = DocLib.Instance.GetDocReader(pdf, new PageDimensions(dpi / 72.0));
+        using var reader = PdfDocument.Open(pdf, scale: dpi / 72.0);
         using var page = reader.GetPageReader(0);
         string text = page.GetText();
         Assert.Contains("Hello brave world", text);
         Assert.Contains("你好世界", text);
 
-        var glyphs = page.GetCharacters().Where(c => !char.IsWhiteSpace(c.Char) && !char.IsControl(c.Char)).ToList();
+        var glyphs = page.GetCharacters().Where(c => !char.IsWhiteSpace(c.Value) && !char.IsControl(c.Value)).ToList();
         var words = lines.SelectMany(l => l.Words).ToList();
         Assert.Equal(words.Sum(w => w.Text.Length), glyphs.Count);
 
@@ -169,14 +167,14 @@ public class PdfSearchablePdfWordTests
         {
             var own = glyphs.Skip(index).Take(word.Text.Length).ToList();
             index += word.Text.Length;
-            Assert.Equal(word.Text, new string(own.Select(g => g.Char).ToArray()));
+            Assert.Equal(word.Text, new string(own.Select(g => g.Value).ToArray()));
             foreach (var g in own)
             {
-                double cx = (g.Box.Left + g.Box.Right) / 2.0, cy = (g.Box.Top + g.Box.Bottom) / 2.0;
+                double cx = (g.Left + g.Right) / 2.0, cy = (g.Top + g.Bottom) / 2.0;
                 Assert.InRange(cx, word.BoundingBox.MinX, word.BoundingBox.MaxX);
                 Assert.InRange(cy, word.BoundingBox.MinY - 0.25 * word.BoundingBox.Height, word.BoundingBox.MaxY + 0.25 * word.BoundingBox.Height);
             }
-            double span = own.Max(g => g.Box.Right) - own.Min(g => g.Box.Left);
+            double span = own.Max(g => g.Right) - own.Min(g => g.Left);
             Assert.InRange(span, 0.85 * word.BoundingBox.Width, 1.05 * word.BoundingBox.Width);
         }
     }

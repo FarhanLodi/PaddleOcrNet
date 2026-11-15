@@ -1,5 +1,3 @@
-using Docnet.Core;
-using Docnet.Core.Models;
 using EasyImageSharp;
 using EasyImageSharp.PixelFormats;
 using PaddleOcrNet.Models;
@@ -110,9 +108,9 @@ public class PdfSearchableWordAlignmentTests
     /// </summary>
     private static (double MeanIoU, double Inside, int Words, int MatchedLines) Measure(byte[] pdf, IReadOnlyList<OcrLine> lines)
     {
-        using var reader = DocLib.Instance.GetDocReader(pdf, new PageDimensions(1.0));
+        using var reader = PdfDocument.Open(pdf, scale: 1.0);
         using var page = reader.GetPageReader(0);
-        var glyphs = page.GetCharacters().Where(c => !char.IsWhiteSpace(c.Char) && !char.IsControl(c.Char)).ToList();
+        var glyphs = page.GetCharacters().Where(c => !char.IsWhiteSpace(c.Value) && !char.IsControl(c.Value)).ToList();
 
         int expected = lines.Sum(l => l.Text.Count(c => !char.IsWhiteSpace(c) && !char.IsControl(c)));
         Assert.Equal(expected, glyphs.Count);
@@ -142,7 +140,7 @@ public class PdfSearchableWordAlignmentTests
 
                 foreach (var g in own)
                 {
-                    double cx = (g.Box.Left + g.Box.Right) / 2.0, cy = (g.Box.Top + g.Box.Bottom) / 2.0;
+                    double cx = (g.Left + g.Right) / 2.0, cy = (g.Top + g.Bottom) / 2.0;
                     counted++;
                     if (cx >= box.MinX - 2 && cx <= box.MaxX + 2 && cy >= box.MinY - 0.25 * box.Height && cy <= box.MaxY + 0.25 * box.Height)
                         inside++;
@@ -150,7 +148,7 @@ public class PdfSearchableWordAlignmentTests
 
                 // Glyphless glyphs are drawn from the baseline up to the font size, so compare horizontal extents
                 // against the OCR box's vertical extent.
-                var hull = new OcrBoundingBox(own.Min(g => g.Box.Left), box.MinY, own.Max(g => g.Box.Right), box.MaxY);
+                var hull = new OcrBoundingBox(own.Min(g => g.Left), box.MinY, own.Max(g => g.Right), box.MaxY);
                 ious.Add(IoU(hull, box));
             }
         }
